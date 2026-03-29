@@ -8,6 +8,7 @@ from typing import Callable
 
 from .db import VocabRepository
 from .kana import suggest_hiragana
+from .models import VocabEntry
 from .validators import ValidationError
 
 
@@ -119,16 +120,24 @@ class MainWindow(tk.Tk):
         button_row.grid(row=1, column=0, sticky="ew")
         button_row.columnconfigure(0, weight=1)
 
+        test_button = ttk.Button(
+            button_row,
+            text="Test EN->JP",
+            command=self._open_en_to_jp_test_dialog,
+            style="App.TButton",
+        )
+        test_button.grid(row=0, column=1, padx=(0, 8), sticky="e")
+
         bulk_add_button = ttk.Button(
             button_row,
             text="Bulk add",
             command=self._open_bulk_add_dialog,
             style="App.TButton",
         )
-        bulk_add_button.grid(row=0, column=1, padx=(0, 8), sticky="e")
+        bulk_add_button.grid(row=0, column=2, padx=(0, 8), sticky="e")
 
         add_button = ttk.Button(button_row, text="+", width=4, command=self._open_add_dialog, style="App.TButton")
-        add_button.grid(row=0, column=2, sticky="e")
+        add_button.grid(row=0, column=3, sticky="e")
 
         status_row = ttk.Frame(container, padding=(0, 8, 0, 0))
         status_row.grid(row=2, column=0, sticky="ew")
@@ -142,6 +151,8 @@ class MainWindow(tk.Tk):
         self.bind("<Control-N>", self._handle_add_shortcut)
         self.bind("<Control-Shift-n>", self._handle_bulk_add_shortcut)
         self.bind("<Control-Shift-N>", self._handle_bulk_add_shortcut)
+        self.bind("<Control-t>", self._handle_test_shortcut)
+        self.bind("<Control-T>", self._handle_test_shortcut)
 
         # Keep Enter/Delete scoped to the list so text inputs in dialogs are unaffected.
         self.tree.bind("<Return>", self._handle_edit_shortcut)
@@ -154,6 +165,10 @@ class MainWindow(tk.Tk):
 
     def _handle_bulk_add_shortcut(self, _event: tk.Event) -> str:
         self._open_bulk_add_dialog()
+        return "break"
+
+    def _handle_test_shortcut(self, _event: tk.Event) -> str:
+        self._open_en_to_jp_test_dialog()
         return "break"
 
     def _handle_edit_shortcut(self, _event: tk.Event) -> str:
@@ -262,6 +277,14 @@ class MainWindow(tk.Tk):
         )
         self.wait_window(dialog)
 
+    def _open_en_to_jp_test_dialog(self) -> None:
+        dialog = EnglishToJapaneseTestDialog(
+            self,
+            repository=self.repository,
+            text_font=self.fonts["latin"],
+        )
+        self.wait_window(dialog)
+
     def _open_edit_dialog(self) -> None:
         entry_id = self._selected_entry_id()
         if entry_id is None:
@@ -316,6 +339,286 @@ class MainWindow(tk.Tk):
             messagebox.showerror("Database error", f"Could not delete entries: {exc}", parent=self)
 
         self.refresh_entries()
+
+
+class EnglishToJapaneseTestDialog(tk.Toplevel):
+    def __init__(
+        self,
+        parent: tk.Tk,
+        repository: VocabRepository,
+        text_font: tkfont.Font,
+    ) -> None:
+        super().__init__(parent)
+        self.repository = repository
+        self.text_font = text_font
+
+        self.questions: list[VocabEntry] = []
+        self.current_index = 0
+        self.correct_count = 0
+        self.current_answered = False
+        self.requested_count = 15
+        self.actual_count = 0
+
+        self.count_var = tk.StringVar(value="15")
+        self.start_info_var = tk.StringVar(value="")
+        self.progress_var = tk.StringVar(value="")
+        self.score_var = tk.StringVar(value="")
+        self.prompt_var = tk.StringVar(value="")
+        self.answer_var = tk.StringVar(value="")
+        self.feedback_var = tk.StringVar(value="")
+        self.result_var = tk.StringVar(value="")
+
+        self.title("Test mode: English -> Japanese")
+        self.transient(parent)
+        self.grab_set()
+        self.resizable(False, False)
+
+        self._build_widgets()
+        self._show_start_frame()
+
+        self.bind("<Return>", self._on_return_key)
+        self.bind("<Escape>", lambda _event: self.destroy())
+
+    def _build_widgets(self) -> None:
+        root = ttk.Frame(self, padding=14)
+        root.grid(row=0, column=0, sticky="nsew")
+        root.columnconfigure(0, weight=1)
+
+        self.start_frame = ttk.Frame(root)
+        self.start_frame.grid(row=0, column=0, sticky="nsew")
+        self.start_frame.columnconfigure(0, weight=1)
+
+        ttk.Label(
+            self.start_frame,
+            text="English -> Japanese test",
+            style="App.TLabel",
+        ).grid(row=0, column=0, sticky="w")
+
+        ttk.Label(
+            self.start_frame,
+            text="Questions per test (default 15)",
+            style="App.TLabel",
+        ).grid(row=1, column=0, sticky="w", pady=(10, 4))
+
+        self.count_entry = ttk.Entry(self.start_frame, textvariable=self.count_var, width=10, style="App.TEntry")
+        self.count_entry.grid(row=2, column=0, sticky="w")
+
+        self.available_label = ttk.Label(self.start_frame, text="", style="Status.TLabel")
+        self.available_label.grid(row=3, column=0, sticky="w", pady=(8, 0))
+
+        self.start_info_label = ttk.Label(self.start_frame, textvariable=self.start_info_var, style="Status.TLabel")
+        self.start_info_label.grid(row=4, column=0, sticky="w", pady=(2, 10))
+
+        start_actions = ttk.Frame(self.start_frame)
+        start_actions.grid(row=5, column=0, sticky="e")
+        ttk.Button(start_actions, text="Close", command=self.destroy, style="App.TButton").grid(
+            row=0,
+            column=0,
+            padx=(0, 8),
+        )
+        ttk.Button(start_actions, text="Start", command=self._start_test, style="App.TButton").grid(row=0, column=1)
+
+        self.test_frame = ttk.Frame(root)
+        self.test_frame.grid(row=0, column=0, sticky="nsew")
+        self.test_frame.columnconfigure(0, weight=1)
+
+        header_row = ttk.Frame(self.test_frame)
+        header_row.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        header_row.columnconfigure(0, weight=1)
+        ttk.Label(header_row, textvariable=self.progress_var, style="App.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(header_row, textvariable=self.score_var, style="App.TLabel").grid(row=0, column=1, sticky="e")
+
+        ttk.Label(self.test_frame, text="English meaning", style="App.TLabel").grid(row=1, column=0, sticky="w")
+        self.prompt_label = ttk.Label(
+            self.test_frame,
+            textvariable=self.prompt_var,
+            style="App.TLabel",
+            wraplength=600,
+            font=self.text_font,
+        )
+        self.prompt_label.grid(row=2, column=0, sticky="w", pady=(4, 12))
+
+        ttk.Label(self.test_frame, text="Your Japanese answer", style="App.TLabel").grid(row=3, column=0, sticky="w")
+        self.answer_entry = ttk.Entry(self.test_frame, textvariable=self.answer_var, width=38, style="Japanese.TEntry")
+        self.answer_entry.grid(row=4, column=0, sticky="w", pady=(4, 8))
+
+        self.feedback_label = ttk.Label(self.test_frame, textvariable=self.feedback_var, style="Status.TLabel", wraplength=600)
+        self.feedback_label.grid(row=5, column=0, sticky="w", pady=(0, 10))
+
+        test_actions = ttk.Frame(self.test_frame)
+        test_actions.grid(row=6, column=0, sticky="e")
+        self.submit_button = ttk.Button(test_actions, text="Submit", command=self._submit_answer, style="App.TButton")
+        self.submit_button.grid(row=0, column=0, padx=(0, 8))
+        self.next_button = ttk.Button(test_actions, text="Next", command=self._next_question, style="App.TButton")
+        self.next_button.grid(row=0, column=1)
+
+        self.result_frame = ttk.Frame(root)
+        self.result_frame.grid(row=0, column=0, sticky="nsew")
+        self.result_frame.columnconfigure(0, weight=1)
+
+        ttk.Label(self.result_frame, text="Test complete", style="App.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            self.result_frame,
+            textvariable=self.result_var,
+            style="App.TLabel",
+            wraplength=600,
+        ).grid(row=1, column=0, sticky="w", pady=(8, 12))
+
+        result_actions = ttk.Frame(self.result_frame)
+        result_actions.grid(row=2, column=0, sticky="e")
+        ttk.Button(result_actions, text="Close", command=self.destroy, style="App.TButton").grid(
+            row=0,
+            column=0,
+            padx=(0, 8),
+        )
+        ttk.Button(result_actions, text="Restart", command=self._restart, style="App.TButton").grid(row=0, column=1)
+
+    def _show_start_frame(self) -> None:
+        self.test_frame.grid_remove()
+        self.result_frame.grid_remove()
+        self.start_frame.grid()
+        available = self.repository.count_entries()
+        self.available_label.configure(text=f"Available vocabularies: {available}")
+        self.count_entry.focus_set()
+        self.count_entry.selection_range(0, "end")
+
+    def _show_test_frame(self) -> None:
+        self.start_frame.grid_remove()
+        self.result_frame.grid_remove()
+        self.test_frame.grid()
+
+    def _show_result_frame(self) -> None:
+        self.start_frame.grid_remove()
+        self.test_frame.grid_remove()
+        self.result_frame.grid()
+
+    def _start_test(self) -> None:
+        try:
+            requested = int(self.count_var.get().strip())
+            if requested <= 0:
+                raise ValidationError("Questions per test must be a positive integer.")
+        except ValueError:
+            messagebox.showerror("Validation error", "Questions per test must be a positive integer.", parent=self)
+            return
+        except ValidationError as exc:
+            messagebox.showerror("Validation error", str(exc), parent=self)
+            return
+
+        available = self.repository.count_entries()
+        if available <= 0:
+            messagebox.showerror("No vocabularies", "Add at least one vocabulary before starting a test.", parent=self)
+            return
+
+        request_count = min(requested, available)
+        self.questions = self.repository.get_random_entries(request_count)
+        self.actual_count = len(self.questions)
+        if self.actual_count == 0:
+            messagebox.showerror("No questions", "Could not generate test questions.", parent=self)
+            return
+
+        self.requested_count = requested
+        self.current_index = 0
+        self.correct_count = 0
+
+        if requested > self.actual_count:
+            self.start_info_var.set(f"Requested {requested}; using all {self.actual_count} available vocabularies.")
+        else:
+            self.start_info_var.set("")
+
+        self._show_test_frame()
+        self._load_question()
+
+    def _load_question(self) -> None:
+        if not self.questions:
+            return
+
+        current = self.questions[self.current_index]
+        self.progress_var.set(f"Question {self.current_index + 1}/{self.actual_count}")
+        self.score_var.set(f"Score: {self.correct_count}")
+        self.prompt_var.set(current.english_text)
+        self.answer_var.set("")
+        self.feedback_var.set("")
+        self.current_answered = False
+        self.answer_entry.configure(state="normal")
+        self.submit_button.configure(state="normal")
+        self.next_button.configure(state="disabled")
+        self.answer_entry.focus_set()
+
+    def _submit_answer(self) -> None:
+        if self.current_answered or not self.questions:
+            return
+
+        current = self.questions[self.current_index]
+        submitted = self.answer_var.get().strip()
+        correct_answer = current.japanese_text.strip()
+
+        if submitted == correct_answer:
+            self.correct_count += 1
+            self.feedback_var.set("Correct.")
+        else:
+            self.feedback_var.set(f"Incorrect. Correct answer: {correct_answer}")
+
+        self.score_var.set(f"Score: {self.correct_count}")
+        self.current_answered = True
+        self.answer_entry.configure(state="disabled")
+        self.submit_button.configure(state="disabled")
+        self.next_button.configure(state="normal")
+        self.next_button.focus_set()
+
+    def _next_question(self) -> None:
+        if not self.current_answered:
+            return
+
+        if self.current_index + 1 >= self.actual_count:
+            self._finish_test()
+            return
+
+        self.current_index += 1
+        self._load_question()
+
+    def _finish_test(self) -> None:
+        if self.actual_count <= 0:
+            self.result_var.set("No questions were completed.")
+            self._show_result_frame()
+            return
+
+        accuracy = (self.correct_count / self.actual_count) * 100
+        self.result_var.set(
+            f"Score: {self.correct_count}/{self.actual_count} ({accuracy:.1f}%)."
+        )
+        self._show_result_frame()
+
+    def _restart(self) -> None:
+        self.questions = []
+        self.current_index = 0
+        self.correct_count = 0
+        self.actual_count = 0
+        self.current_answered = False
+        self.progress_var.set("")
+        self.score_var.set("")
+        self.prompt_var.set("")
+        self.answer_var.set("")
+        self.feedback_var.set("")
+        self.result_var.set("")
+        self._show_start_frame()
+
+    def _on_return_key(self, _event: tk.Event) -> str:
+        if self.start_frame.winfo_ismapped():
+            self._start_test()
+            return "break"
+
+        if self.test_frame.winfo_ismapped():
+            if self.current_answered:
+                self._next_question()
+            else:
+                self._submit_answer()
+            return "break"
+
+        if self.result_frame.winfo_ismapped():
+            self._restart()
+            return "break"
+
+        return "break"
 
 
 class BulkAddDialog(tk.Toplevel):
