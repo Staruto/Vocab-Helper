@@ -112,6 +112,7 @@ class MainWindow(tk.Tk):
         self.context_menu = tk.Menu(self, tearoff=0, font=self.fonts["latin"])
         self.context_menu.add_command(label="Edit", command=self._open_edit_dialog)
         self.context_menu.add_command(label="Delete selected", command=self._delete_selected_entry)
+        self.tree.bind("<Button-1>", self._on_tree_left_click, add="+")
         self.tree.bind("<Button-3>", self._show_context_menu)
 
         button_row = ttk.Frame(container, padding=(0, 10, 0, 0))
@@ -194,6 +195,19 @@ class MainWindow(tk.Tk):
             self.context_menu.tk_popup(event.x_root, event.y_root)
         finally:
             self.context_menu.grab_release()
+
+    def _on_tree_left_click(self, event: tk.Event) -> None:
+        item_id = self.tree.identify_row(event.y)
+        if item_id:
+            return
+
+        region = self.tree.identify_region(event.x, event.y)
+        if region in {"heading", "separator"}:
+            return
+
+        if self.tree.selection():
+            self.tree.selection_remove(self.tree.selection())
+        self.tree.focus("")
 
     def _selected_entry_id(self) -> int | None:
         focused_item = self.tree.focus()
