@@ -47,6 +47,42 @@ class VocabRepository:
         finally:
             connection.close()
 
+    def count_entries(self) -> int:
+        connection = sqlite3.connect(self.db_path)
+        try:
+            row = connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM vocab_entries
+                """
+            ).fetchone()
+            if row is None:
+                return 0
+            return int(row[0])
+        finally:
+            connection.close()
+
+    def get_random_entries(self, count: int) -> list[VocabEntry]:
+        requested = max(int(count), 0)
+        if requested == 0:
+            return []
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            connection.row_factory = sqlite3.Row
+            rows: Iterable[sqlite3.Row] = connection.execute(
+                """
+                SELECT id, japanese_text, kana_text, english_text, created_at
+                FROM vocab_entries
+                ORDER BY RANDOM()
+                LIMIT ?
+                """,
+                (requested,),
+            )
+            return [self._map_row(row) for row in rows]
+        finally:
+            connection.close()
+
     def add_entry(self, japanese_text: str, kana_text: str, english_text: str) -> VocabEntry:
         created = self.add_entries([(japanese_text, kana_text, english_text)])
         if not created:
