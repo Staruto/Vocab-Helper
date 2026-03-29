@@ -320,7 +320,7 @@ class BulkAddDialog(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
         self.resizable(True, True)
-        self.minsize(720, 420)
+        self.minsize(860, 420)
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
@@ -328,32 +328,72 @@ class BulkAddDialog(tk.Toplevel):
         frame = ttk.Frame(self, padding=12)
         frame.grid(row=0, column=0, sticky="nsew")
         frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(1, weight=1)
+        frame.rowconfigure(2, weight=1)
 
-        help_text = (
-            "One entry per line: Japanese | English, or Japanese | Kana | English. "
-            "Tabs are also accepted as separators."
-        )
-        ttk.Label(frame, text=help_text, style="App.TLabel", wraplength=680).grid(
+        help_text = "One entry per line, aligned across 3 columns: Japanese, Kana (optional), English."
+        ttk.Label(frame, text=help_text, style="App.TLabel", wraplength=820).grid(
             row=0,
             column=0,
             sticky="w",
             pady=(0, 8),
         )
 
-        text_frame = ttk.Frame(frame)
-        text_frame.grid(row=1, column=0, sticky="nsew")
-        text_frame.columnconfigure(0, weight=1)
-        text_frame.rowconfigure(0, weight=1)
+        labels_row = ttk.Frame(frame)
+        labels_row.grid(row=1, column=0, sticky="ew", pady=(0, 4))
+        labels_row.columnconfigure(0, weight=1)
+        labels_row.columnconfigure(1, weight=1)
+        labels_row.columnconfigure(2, weight=1)
+        labels_row.columnconfigure(3, weight=0)
 
-        self.text = tk.Text(text_frame, width=80, height=14, wrap="none", font=text_font)
-        self.text.grid(row=0, column=0, sticky="nsew")
-        y_scroll = ttk.Scrollbar(text_frame, orient="vertical", command=self.text.yview)
-        y_scroll.grid(row=0, column=1, sticky="ns")
-        self.text.configure(yscrollcommand=y_scroll.set)
+        ttk.Label(labels_row, text="Japanese writing *", style="App.TLabel").grid(
+            row=0,
+            column=0,
+            sticky="w",
+            padx=(0, 8),
+        )
+        ttk.Label(labels_row, text="Kana (optional)", style="App.TLabel").grid(
+            row=0,
+            column=1,
+            sticky="w",
+            padx=(0, 8),
+        )
+        ttk.Label(labels_row, text="English meaning *", style="App.TLabel").grid(
+            row=0,
+            column=2,
+            sticky="w",
+            padx=(0, 8),
+        )
+
+        columns_frame = ttk.Frame(frame)
+        columns_frame.grid(row=2, column=0, sticky="nsew")
+        columns_frame.columnconfigure(0, weight=1)
+        columns_frame.columnconfigure(1, weight=1)
+        columns_frame.columnconfigure(2, weight=1)
+        columns_frame.columnconfigure(3, weight=0)
+        columns_frame.rowconfigure(0, weight=1)
+
+        self.jp_text = tk.Text(columns_frame, width=26, height=14, wrap="none", font=text_font)
+        self.kana_text = tk.Text(columns_frame, width=26, height=14, wrap="none", font=text_font)
+        self.en_text = tk.Text(columns_frame, width=26, height=14, wrap="none", font=text_font)
+
+        self.jp_text.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        self.kana_text.grid(row=0, column=1, sticky="nsew", padx=(0, 8))
+        self.en_text.grid(row=0, column=2, sticky="nsew", padx=(0, 8))
+
+        self.scrollbar = ttk.Scrollbar(columns_frame, orient="vertical", command=self._on_scrollbar)
+        self.scrollbar.grid(row=0, column=3, sticky="ns")
+
+        self.jp_text.configure(yscrollcommand=self._on_text_yscroll)
+        self.kana_text.configure(yscrollcommand=self._on_text_yscroll)
+        self.en_text.configure(yscrollcommand=self._on_text_yscroll)
+
+        for text_widget in (self.jp_text, self.kana_text, self.en_text):
+            text_widget.bind("<MouseWheel>", self._on_mousewheel)
+            text_widget.bind("<Button-4>", self._on_mousewheel_linux_up)
+            text_widget.bind("<Button-5>", self._on_mousewheel_linux_down)
 
         actions = ttk.Frame(frame, padding=(0, 10, 0, 0))
-        actions.grid(row=2, column=0, sticky="e")
+        actions.grid(row=3, column=0, sticky="e")
 
         ttk.Button(actions, text="Cancel", command=self.destroy, style="App.TButton").grid(
             row=0,
@@ -366,32 +406,51 @@ class BulkAddDialog(tk.Toplevel):
         )
 
         self.bind("<Escape>", lambda _event: self.destroy())
-        self.text.focus_set()
+        self.jp_text.focus_set()
 
-    def _parse_entries(self, raw_text: str) -> list[tuple[str, str, str]]:
+    def _on_scrollbar(self, *args: str) -> None:
+        for text_widget in (self.jp_text, self.kana_text, self.en_text):
+            text_widget.yview(*args)
+
+    def _on_text_yscroll(self, first: str, last: str) -> None:
+        self.scrollbar.set(first, last)
+
+    def _on_mousewheel(self, event: tk.Event) -> str:
+        delta = -1 if event.delta > 0 else 1
+        for text_widget in (self.jp_text, self.kana_text, self.en_text):
+            text_widget.yview_scroll(delta, "units")
+        return "break"
+
+    def _on_mousewheel_linux_up(self, _event: tk.Event) -> str:
+        for text_widget in (self.jp_text, self.kana_text, self.en_text):
+            text_widget.yview_scroll(-1, "units")
+        return "break"
+
+    def _on_mousewheel_linux_down(self, _event: tk.Event) -> str:
+        for text_widget in (self.jp_text, self.kana_text, self.en_text):
+            text_widget.yview_scroll(1, "units")
+        return "break"
+
+    def _parse_entries(self, japanese_raw: str, kana_raw: str, english_raw: str) -> list[tuple[str, str, str]]:
+        japanese_lines = japanese_raw.splitlines()
+        kana_lines = kana_raw.splitlines()
+        english_lines = english_raw.splitlines()
+
+        line_count = max(len(japanese_lines), len(kana_lines), len(english_lines))
         parsed_entries: list[tuple[str, str, str]] = []
-        for line_number, raw_line in enumerate(raw_text.splitlines(), start=1):
-            line = raw_line.strip()
-            if not line:
+
+        for index in range(line_count):
+            line_number = index + 1
+            japanese_text = japanese_lines[index].strip() if index < len(japanese_lines) else ""
+            kana_text = kana_lines[index].strip() if index < len(kana_lines) else ""
+            english_text = english_lines[index].strip() if index < len(english_lines) else ""
+
+            if not japanese_text and not kana_text and not english_text:
                 continue
 
-            if "\t" in line:
-                parts = [part.strip() for part in line.split("\t")]
-            elif "|" in line:
-                parts = [part.strip() for part in line.split("|")]
-            else:
+            if not japanese_text or not english_text:
                 raise ValidationError(
-                    f"Line {line_number} must use '|' or tab separators with 2 or 3 fields."
-                )
-
-            if len(parts) == 2:
-                japanese_text, english_text = parts
-                kana_text = ""
-            elif len(parts) == 3:
-                japanese_text, kana_text, english_text = parts
-            else:
-                raise ValidationError(
-                    f"Line {line_number} must be 'Japanese | English' or 'Japanese | Kana | English'."
+                    f"Line {line_number}: Japanese writing and English meaning are required."
                 )
 
             parsed_entries.append((japanese_text, kana_text, english_text))
@@ -403,7 +462,11 @@ class BulkAddDialog(tk.Toplevel):
 
     def _save(self) -> None:
         try:
-            rows = self._parse_entries(self.text.get("1.0", "end"))
+            rows = self._parse_entries(
+                self.jp_text.get("1.0", "end-1c"),
+                self.kana_text.get("1.0", "end-1c"),
+                self.en_text.get("1.0", "end-1c"),
+            )
             created = self.repository.add_entries(rows)
         except ValidationError as exc:
             messagebox.showerror("Validation error", str(exc), parent=self)
