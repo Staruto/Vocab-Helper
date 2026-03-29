@@ -80,6 +80,79 @@ class VocabRepository:
 
         return self._map_row(row)
 
+    def get_entry(self, entry_id: int) -> VocabEntry:
+        connection = sqlite3.connect(self.db_path)
+        row: sqlite3.Row | None = None
+        try:
+            connection.row_factory = sqlite3.Row
+            row = connection.execute(
+                """
+                SELECT id, japanese_text, kana_text, english_text, created_at
+                FROM vocab_entries
+                WHERE id = ?
+                """,
+                (entry_id,),
+            ).fetchone()
+        finally:
+            connection.close()
+
+        if row is None:
+            raise LookupError(f"Vocabulary entry with id {entry_id} was not found.")
+
+        return self._map_row(row)
+
+    def update_entry(self, entry_id: int, japanese_text: str, kana_text: str, english_text: str) -> VocabEntry:
+        japanese, english = validate_vocab_fields(japanese_text, english_text)
+        kana = normalize_optional_text(kana_text)
+
+        connection = sqlite3.connect(self.db_path)
+        row: sqlite3.Row | None = None
+        try:
+            connection.row_factory = sqlite3.Row
+            cursor = connection.execute(
+                """
+                UPDATE vocab_entries
+                SET japanese_text = ?, kana_text = ?, english_text = ?
+                WHERE id = ?
+                """,
+                (japanese, kana, english, entry_id),
+            )
+            if cursor.rowcount == 0:
+                raise LookupError(f"Vocabulary entry with id {entry_id} was not found.")
+
+            row = connection.execute(
+                """
+                SELECT id, japanese_text, kana_text, english_text, created_at
+                FROM vocab_entries
+                WHERE id = ?
+                """,
+                (entry_id,),
+            ).fetchone()
+            connection.commit()
+        finally:
+            connection.close()
+
+        if row is None:
+            raise RuntimeError("Could not load updated entry.")
+
+        return self._map_row(row)
+
+    def delete_entry(self, entry_id: int) -> None:
+        connection = sqlite3.connect(self.db_path)
+        try:
+            cursor = connection.execute(
+                """
+                DELETE FROM vocab_entries
+                WHERE id = ?
+                """,
+                (entry_id,),
+            )
+            if cursor.rowcount == 0:
+                raise LookupError(f"Vocabulary entry with id {entry_id} was not found.")
+            connection.commit()
+        finally:
+            connection.close()
+
     @staticmethod
     def _map_row(row: sqlite3.Row) -> VocabEntry:
         return VocabEntry(

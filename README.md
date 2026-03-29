@@ -2,13 +2,17 @@
 
 Simple JP <-> EN vocabulary memorization helper with a desktop GUI.
 
-## Features in v1
+## Features in v2
 
 - Lists vocabulary in three columns: Japanese writing, kana (hiragana), English meaning
 - Adds new entries through a bottom "+" button
+- Edits and deletes entries from a right-click context menu
 - Requires Japanese writing and English meaning
 - Treats kana as optional
 - Suggests kana offline using pykakasi and lets users edit before save
+- Uses larger UI typography for readability (base size 12)
+- Prefers Yu Gothic for Japanese text when available
+- Shows a global count at the bottom: total number of vocabularies
 - Stores data locally in SQLite
 
 ## Requirements
