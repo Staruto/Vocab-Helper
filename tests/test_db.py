@@ -25,6 +25,35 @@ class VocabRepositoryTests(unittest.TestCase):
         self.assertEqual(rows[0].kana_text, "たべる")
         self.assertEqual(rows[0].english_text, "to eat")
 
+    def test_count_entries_reflects_total_rows(self) -> None:
+        self.assertEqual(self.repository.count_entries(), 0)
+
+        self.repository.add_entry("食べる", "たべる", "to eat")
+        self.repository.add_entry("行く", "いく", "to go")
+
+        self.assertEqual(self.repository.count_entries(), 2)
+
+    def test_get_random_entries_respects_requested_count_bounds(self) -> None:
+        created = self.repository.add_entries(
+            [
+                ("赤", "あか", "red"),
+                ("青", "あお", "blue"),
+                ("白", "しろ", "white"),
+            ]
+        )
+        created_ids = {entry.id for entry in created}
+
+        picked_two = self.repository.get_random_entries(2)
+        self.assertEqual(len(picked_two), 2)
+        self.assertTrue(all(entry.id in created_ids for entry in picked_two))
+
+        picked_many = self.repository.get_random_entries(99)
+        self.assertEqual(len(picked_many), 3)
+        self.assertTrue(all(entry.id in created_ids for entry in picked_many))
+
+        picked_zero = self.repository.get_random_entries(0)
+        self.assertEqual(picked_zero, [])
+
     def test_optional_kana_saved_as_none(self) -> None:
         self.repository.add_entry("行く", "   ", "to go")
 
