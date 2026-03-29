@@ -65,6 +65,7 @@ class MainWindow(tk.Tk):
 
         self._configure_styles()
         self._build_widgets()
+        self._bind_shortcuts()
         self.refresh_entries()
 
     def _configure_styles(self) -> None:
@@ -125,6 +126,27 @@ class MainWindow(tk.Tk):
 
         self.count_label = ttk.Label(status_row, text="Total vocabularies: 0", style="Status.TLabel")
         self.count_label.grid(row=0, column=0, sticky="w")
+
+    def _bind_shortcuts(self) -> None:
+        self.bind("<Control-n>", self._handle_add_shortcut)
+        self.bind("<Control-N>", self._handle_add_shortcut)
+
+        # Keep Enter/Delete scoped to the list so text inputs in dialogs are unaffected.
+        self.tree.bind("<Return>", self._handle_edit_shortcut)
+        self.tree.bind("<KP_Enter>", self._handle_edit_shortcut)
+        self.tree.bind("<Delete>", self._handle_delete_shortcut)
+
+    def _handle_add_shortcut(self, _event: tk.Event) -> str:
+        self._open_add_dialog()
+        return "break"
+
+    def _handle_edit_shortcut(self, _event: tk.Event) -> str:
+        self._open_edit_dialog()
+        return "break"
+
+    def _handle_delete_shortcut(self, _event: tk.Event) -> str:
+        self._delete_selected_entry()
+        return "break"
 
     def refresh_entries(self) -> None:
         for item in self.tree.get_children():
