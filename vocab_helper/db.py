@@ -48,37 +48,54 @@ class VocabRepository:
             connection.close()
 
     def add_entry(self, japanese_text: str, kana_text: str, english_text: str) -> VocabEntry:
-        japanese, english = validate_vocab_fields(japanese_text, english_text)
-        kana = normalize_optional_text(kana_text)
+        created = self.add_entries([(japanese_text, kana_text, english_text)])
+        if not created:
+            raise RuntimeError("Could not load inserted entry.")
+        return created[0]
+
+    def add_entries(self, entries: Iterable[tuple[str, str, str]]) -> list[VocabEntry]:
+        normalized_entries: list[tuple[str, str | None, str]] = []
+        for japanese_text, kana_text, english_text in entries:
+            japanese, english = validate_vocab_fields(japanese_text, english_text)
+            kana = normalize_optional_text(kana_text)
+            normalized_entries.append((japanese, kana, english))
+
+        if not normalized_entries:
+            return []
 
         connection = sqlite3.connect(self.db_path)
         try:
             connection.row_factory = sqlite3.Row
-            cursor = connection.execute(
-                """
-                INSERT INTO vocab_entries (japanese_text, kana_text, english_text)
-                VALUES (?, ?, ?)
-                """,
-                (japanese, kana, english),
-            )
-            new_id = int(cursor.lastrowid)
 
-            row = connection.execute(
-                """
+            inserted_ids: list[int] = []
+            for japanese, kana, english in normalized_entries:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO vocab_entries (japanese_text, kana_text, english_text)
+                    VALUES (?, ?, ?)
+                    """,
+                    (japanese, kana, english),
+                )
+                inserted_ids.append(int(cursor.lastrowid))
+
+            placeholders = ",".join("?" for _ in inserted_ids)
+            rows = connection.execute(
+                f"""
                 SELECT id, japanese_text, kana_text, english_text, created_at
                 FROM vocab_entries
-                WHERE id = ?
+                WHERE id IN ({placeholders})
+                ORDER BY id ASC
                 """,
-                (new_id,),
-            ).fetchone()
+                tuple(inserted_ids),
+            ).fetchall()
             connection.commit()
         finally:
             connection.close()
 
-        if row is None:
-            raise RuntimeError("Could not load inserted entry.")
+        if len(rows) != len(inserted_ids):
+            raise RuntimeError("Could not load one or more inserted entries.")
 
-        return self._map_row(row)
+        return [self._map_row(row) for row in rows]
 
     def get_entry(self, entry_id: int) -> VocabEntry:
         connection = sqlite3.connect(self.db_path)
@@ -138,18 +155,40 @@ class VocabRepository:
         return self._map_row(row)
 
     def delete_entry(self, entry_id: int) -> None:
+        self.delete_entries([entry_id])
+
+    def delete_entries(self, entry_ids: Iterable[int]) -> int:
+        unique_ids = sorted({int(entry_id) for entry_id in entry_ids})
+        if not unique_ids:
+            return 0
+
+        placeholders = ",".join("?" for _ in unique_ids)
         connection = sqlite3.connect(self.db_path)
         try:
-            cursor = connection.execute(
-                """
-                DELETE FROM vocab_entries
-                WHERE id = ?
+            existing_rows = connection.execute(
+                f"""
+                SELECT id
+                FROM vocab_entries
+                WHERE id IN ({placeholders})
                 """,
-                (entry_id,),
+                tuple(unique_ids),
+            ).fetchall()
+            existing_ids = {int(row[0]) for row in existing_rows}
+            missing_ids = [entry_id for entry_id in unique_ids if entry_id not in existing_ids]
+            if missing_ids:
+                missing_text = ", ".join(str(entry_id) for entry_id in missing_ids)
+                raise LookupError(f"Vocabulary entry ids not found: {missing_text}")
+
+            cursor = connection.execute(
+                f"""
+                DELETE FROM vocab_entries
+                WHERE id IN ({placeholders})
+                """,
+                tuple(unique_ids),
             )
-            if cursor.rowcount == 0:
-                raise LookupError(f"Vocabulary entry with id {entry_id} was not found.")
+            deleted_count = int(cursor.rowcount)
             connection.commit()
+            return deleted_count
         finally:
             connection.close()
 

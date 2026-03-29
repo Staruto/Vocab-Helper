@@ -6,8 +6,10 @@ Simple JP <-> EN vocabulary memorization helper with a desktop GUI.
 
 - Lists vocabulary in three columns: Japanese writing, kana (hiragana), English meaning
 - Adds new entries through a bottom "+" button
+- Supports bulk add by pasting multiple lines in a dedicated dialog
 - Edits and deletes entries from a right-click context menu
-- Supports keyboard shortcuts: Ctrl+N (add), Enter (edit selected row), Delete (remove selected row)
+- Supports multi-select delete from the vocabulary list
+- Supports keyboard shortcuts: Ctrl+N (add), Ctrl+Shift+N (bulk add), Enter (edit selected row), Delete (remove selected rows)
 - Requires Japanese writing and English meaning
 - Treats kana as optional
 - Suggests kana offline using pykakasi and lets users edit before save
@@ -41,6 +43,15 @@ python -m vocab_helper
 ```bash
 python -m unittest discover -s tests -p "test_*.py"
 ```
+
+## Bulk add input format
+
+- One entry per line
+- Use either separators: `|` or tab
+- Accepted line patterns:
+- Japanese | English
+- Japanese | Kana | English
+- Blank lines are ignored
 
 ## Data location
 

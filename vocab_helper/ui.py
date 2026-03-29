@@ -94,6 +94,7 @@ class MainWindow(tk.Tk):
             columns=("jp", "kana", "en"),
             show="headings",
             height=15,
+            selectmode="extended",
         )
         self.tree.heading("jp", text="Japanese writing")
         self.tree.heading("kana", text="Kana (hiragana)")
@@ -110,15 +111,23 @@ class MainWindow(tk.Tk):
 
         self.context_menu = tk.Menu(self, tearoff=0, font=self.fonts["latin"])
         self.context_menu.add_command(label="Edit", command=self._open_edit_dialog)
-        self.context_menu.add_command(label="Delete", command=self._delete_selected_entry)
+        self.context_menu.add_command(label="Delete selected", command=self._delete_selected_entry)
         self.tree.bind("<Button-3>", self._show_context_menu)
 
         button_row = ttk.Frame(container, padding=(0, 10, 0, 0))
         button_row.grid(row=1, column=0, sticky="ew")
         button_row.columnconfigure(0, weight=1)
 
+        bulk_add_button = ttk.Button(
+            button_row,
+            text="Bulk add",
+            command=self._open_bulk_add_dialog,
+            style="App.TButton",
+        )
+        bulk_add_button.grid(row=0, column=1, padx=(0, 8), sticky="e")
+
         add_button = ttk.Button(button_row, text="+", width=4, command=self._open_add_dialog, style="App.TButton")
-        add_button.grid(row=0, column=1, sticky="e")
+        add_button.grid(row=0, column=2, sticky="e")
 
         status_row = ttk.Frame(container, padding=(0, 8, 0, 0))
         status_row.grid(row=2, column=0, sticky="ew")
@@ -130,6 +139,8 @@ class MainWindow(tk.Tk):
     def _bind_shortcuts(self) -> None:
         self.bind("<Control-n>", self._handle_add_shortcut)
         self.bind("<Control-N>", self._handle_add_shortcut)
+        self.bind("<Control-Shift-n>", self._handle_bulk_add_shortcut)
+        self.bind("<Control-Shift-N>", self._handle_bulk_add_shortcut)
 
         # Keep Enter/Delete scoped to the list so text inputs in dialogs are unaffected.
         self.tree.bind("<Return>", self._handle_edit_shortcut)
@@ -138,6 +149,10 @@ class MainWindow(tk.Tk):
 
     def _handle_add_shortcut(self, _event: tk.Event) -> str:
         self._open_add_dialog()
+        return "break"
+
+    def _handle_bulk_add_shortcut(self, _event: tk.Event) -> str:
+        self._open_bulk_add_dialog()
         return "break"
 
     def _handle_edit_shortcut(self, _event: tk.Event) -> str:
@@ -170,7 +185,9 @@ class MainWindow(tk.Tk):
         if not item_id:
             return
 
-        self.tree.selection_set(item_id)
+        selected_items = set(self.tree.selection())
+        if item_id not in selected_items:
+            self.tree.selection_set(item_id)
         self.tree.focus(item_id)
 
         try:
@@ -179,10 +196,24 @@ class MainWindow(tk.Tk):
             self.context_menu.grab_release()
 
     def _selected_entry_id(self) -> int | None:
-        selection = self.tree.selection()
-        if not selection:
+        focused_item = self.tree.focus()
+        if focused_item:
+            focused_entry_id = self._tree_entry_ids.get(focused_item)
+            if focused_entry_id is not None:
+                return focused_entry_id
+
+        selected_ids = self._selected_entry_ids()
+        if not selected_ids:
             return None
-        return self._tree_entry_ids.get(selection[0])
+        return selected_ids[0]
+
+    def _selected_entry_ids(self) -> list[int]:
+        selected_ids: list[int] = []
+        for item_id in self.tree.selection():
+            entry_id = self._tree_entry_ids.get(item_id)
+            if entry_id is not None:
+                selected_ids.append(entry_id)
+        return list(dict.fromkeys(selected_ids))
 
     def _selected_japanese_text(self) -> str:
         selection = self.tree.selection()
@@ -205,6 +236,15 @@ class MainWindow(tk.Tk):
             initial_japanese="",
             initial_kana="",
             initial_english="",
+        )
+        self.wait_window(dialog)
+
+    def _open_bulk_add_dialog(self) -> None:
+        dialog = BulkAddDialog(
+            self,
+            repository=self.repository,
+            on_saved=self.refresh_entries,
+            text_font=self.fonts["latin"],
         )
         self.wait_window(dialog)
 
@@ -239,28 +279,142 @@ class MainWindow(tk.Tk):
         self.wait_window(dialog)
 
     def _delete_selected_entry(self) -> None:
-        entry_id = self._selected_entry_id()
-        if entry_id is None:
-            messagebox.showwarning("No selection", "Select an entry to delete.", parent=self)
+        entry_ids = self._selected_entry_ids()
+        if not entry_ids:
+            messagebox.showwarning("No selection", "Select at least one entry to delete.", parent=self)
             return
 
-        selected_text = self._selected_japanese_text()
-        confirmed = messagebox.askyesno(
-            "Delete entry",
-            f"Delete '{selected_text}'? This action cannot be undone.",
-            parent=self,
-        )
+        if len(entry_ids) == 1:
+            selected_text = self._selected_japanese_text()
+            prompt = f"Delete '{selected_text}'? This action cannot be undone."
+        else:
+            prompt = f"Delete {len(entry_ids)} selected entries? This action cannot be undone."
+
+        confirmed = messagebox.askyesno("Delete entries", prompt, parent=self)
         if not confirmed:
             return
 
         try:
-            self.repository.delete_entry(entry_id)
+            self.repository.delete_entries(entry_ids)
         except LookupError as exc:
             messagebox.showerror("Not found", str(exc), parent=self)
         except sqlite3.Error as exc:
-            messagebox.showerror("Database error", f"Could not delete entry: {exc}", parent=self)
+            messagebox.showerror("Database error", f"Could not delete entries: {exc}", parent=self)
 
         self.refresh_entries()
+
+
+class BulkAddDialog(tk.Toplevel):
+    def __init__(
+        self,
+        parent: tk.Tk,
+        repository: VocabRepository,
+        on_saved: Callable[[], None],
+        text_font: tkfont.Font,
+    ) -> None:
+        super().__init__(parent)
+        self.repository = repository
+        self.on_saved = on_saved
+
+        self.title("Bulk add vocabulary")
+        self.transient(parent)
+        self.grab_set()
+        self.resizable(True, True)
+        self.minsize(720, 420)
+
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        frame = ttk.Frame(self, padding=12)
+        frame.grid(row=0, column=0, sticky="nsew")
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(1, weight=1)
+
+        help_text = (
+            "One entry per line: Japanese | English, or Japanese | Kana | English. "
+            "Tabs are also accepted as separators."
+        )
+        ttk.Label(frame, text=help_text, style="App.TLabel", wraplength=680).grid(
+            row=0,
+            column=0,
+            sticky="w",
+            pady=(0, 8),
+        )
+
+        text_frame = ttk.Frame(frame)
+        text_frame.grid(row=1, column=0, sticky="nsew")
+        text_frame.columnconfigure(0, weight=1)
+        text_frame.rowconfigure(0, weight=1)
+
+        self.text = tk.Text(text_frame, width=80, height=14, wrap="none", font=text_font)
+        self.text.grid(row=0, column=0, sticky="nsew")
+        y_scroll = ttk.Scrollbar(text_frame, orient="vertical", command=self.text.yview)
+        y_scroll.grid(row=0, column=1, sticky="ns")
+        self.text.configure(yscrollcommand=y_scroll.set)
+
+        actions = ttk.Frame(frame, padding=(0, 10, 0, 0))
+        actions.grid(row=2, column=0, sticky="e")
+
+        ttk.Button(actions, text="Cancel", command=self.destroy, style="App.TButton").grid(
+            row=0,
+            column=0,
+            padx=(0, 8),
+        )
+        ttk.Button(actions, text="Add entries", command=self._save, style="App.TButton").grid(
+            row=0,
+            column=1,
+        )
+
+        self.bind("<Escape>", lambda _event: self.destroy())
+        self.text.focus_set()
+
+    def _parse_entries(self, raw_text: str) -> list[tuple[str, str, str]]:
+        parsed_entries: list[tuple[str, str, str]] = []
+        for line_number, raw_line in enumerate(raw_text.splitlines(), start=1):
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            if "\t" in line:
+                parts = [part.strip() for part in line.split("\t")]
+            elif "|" in line:
+                parts = [part.strip() for part in line.split("|")]
+            else:
+                raise ValidationError(
+                    f"Line {line_number} must use '|' or tab separators with 2 or 3 fields."
+                )
+
+            if len(parts) == 2:
+                japanese_text, english_text = parts
+                kana_text = ""
+            elif len(parts) == 3:
+                japanese_text, kana_text, english_text = parts
+            else:
+                raise ValidationError(
+                    f"Line {line_number} must be 'Japanese | English' or 'Japanese | Kana | English'."
+                )
+
+            parsed_entries.append((japanese_text, kana_text, english_text))
+
+        if not parsed_entries:
+            raise ValidationError("Add at least one non-empty line.")
+
+        return parsed_entries
+
+    def _save(self) -> None:
+        try:
+            rows = self._parse_entries(self.text.get("1.0", "end"))
+            created = self.repository.add_entries(rows)
+        except ValidationError as exc:
+            messagebox.showerror("Validation error", str(exc), parent=self)
+            return
+        except sqlite3.Error as exc:
+            messagebox.showerror("Database error", f"Could not add entries: {exc}", parent=self)
+            return
+
+        self.on_saved()
+        messagebox.showinfo("Bulk add complete", f"Added {len(created)} entries.", parent=self)
+        self.destroy()
 
 
 class EntryDialog(tk.Toplevel):

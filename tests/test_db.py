@@ -66,6 +66,63 @@ class VocabRepositoryTests(unittest.TestCase):
         self.repository.delete_entry(inserted.id)
         self.assertEqual(self.repository.list_entries(), [])
 
+    def test_add_entries_inserts_multiple_rows(self) -> None:
+        created = self.repository.add_entries(
+            [
+                ("食べる", "たべる", "to eat"),
+                ("行く", "", "to go"),
+                ("飲む", "のむ", "to drink"),
+            ]
+        )
+
+        self.assertEqual(len(created), 3)
+        rows = self.repository.list_entries()
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[0].japanese_text, "食べる")
+        self.assertIsNone(rows[1].kana_text)
+        self.assertEqual(rows[2].english_text, "to drink")
+
+    def test_add_entries_is_atomic_when_any_row_invalid(self) -> None:
+        with self.assertRaises(ValidationError):
+            self.repository.add_entries(
+                [
+                    ("書く", "かく", "to write"),
+                    ("見る", "みる", "   "),
+                ]
+            )
+
+        self.assertEqual(self.repository.list_entries(), [])
+
+    def test_delete_entries_removes_multiple_rows(self) -> None:
+        created = self.repository.add_entries(
+            [
+                ("赤", "あか", "red"),
+                ("青", "あお", "blue"),
+                ("白", "しろ", "white"),
+            ]
+        )
+
+        deleted = self.repository.delete_entries([created[0].id, created[2].id, created[2].id])
+        self.assertEqual(deleted, 2)
+
+        rows = self.repository.list_entries()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].japanese_text, "青")
+
+    def test_delete_entries_raises_for_missing_ids_without_partial_delete(self) -> None:
+        created = self.repository.add_entries(
+            [
+                ("山", "やま", "mountain"),
+                ("川", "かわ", "river"),
+            ]
+        )
+
+        with self.assertRaises(LookupError):
+            self.repository.delete_entries([created[0].id, 999999])
+
+        rows = self.repository.list_entries()
+        self.assertEqual(len(rows), 2)
+
     def test_missing_entry_operations_raise_lookup_error(self) -> None:
         with self.assertRaises(LookupError):
             self.repository.get_entry(9999)
