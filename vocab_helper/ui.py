@@ -29,6 +29,13 @@ LATIN_FONT_CANDIDATES = (
     "DejaVu Sans",
 )
 
+TIER_BG_COLORS = {
+    "gray": "#efefef",
+    "green": "#e7f7ea",
+    "yellow": "#fff5cf",
+    "red": "#fde7e7",
+}
+
 
 def _pick_font_family(root: tk.Misc, candidates: tuple[str, ...]) -> str:
     available = {family.lower(): family for family in tkfont.families(root)}
@@ -56,6 +63,12 @@ class MainWindow(tk.Tk):
         self.repository = repository
         self.fonts = _build_font_set(self)
         self._tree_entry_ids: dict[str, int] = {}
+        self._entry_stats_by_id: dict[int, tuple[int, int, str]] = {}
+
+        self.show_tier_colors_var = tk.BooleanVar(value=False)
+        self.sort_mode_var = tk.StringVar(value="time")
+        self.time_order_var = tk.StringVar(value="newest")
+        self.test_pick_strategy_var = tk.StringVar(value="strict")
 
         self.title("JP <-> EN Vocabulary Helper")
         self.geometry("900x580")
@@ -113,8 +126,16 @@ class MainWindow(tk.Tk):
         self.context_menu = tk.Menu(self, tearoff=0, font=self.fonts["latin"])
         self.context_menu.add_command(label="Edit", command=self._open_edit_dialog)
         self.context_menu.add_command(label="Delete selected", command=self._delete_selected_entry)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="Increase priority", command=self._increase_selected_priority)
+        self.context_menu.add_command(label="Decrease priority", command=self._decrease_selected_priority)
         self.tree.bind("<Button-1>", self._on_tree_left_click, add="+")
         self.tree.bind("<Button-3>", self._show_context_menu)
+
+        self.tree.tag_configure("tier_gray", background=TIER_BG_COLORS["gray"])
+        self.tree.tag_configure("tier_green", background=TIER_BG_COLORS["green"])
+        self.tree.tag_configure("tier_yellow", background=TIER_BG_COLORS["yellow"])
+        self.tree.tag_configure("tier_red", background=TIER_BG_COLORS["red"])
 
         button_row = ttk.Frame(container, padding=(0, 10, 0, 0))
         button_row.grid(row=1, column=0, sticky="ew")
@@ -139,8 +160,54 @@ class MainWindow(tk.Tk):
         add_button = ttk.Button(button_row, text="+", width=4, command=self._open_add_dialog, style="App.TButton")
         add_button.grid(row=0, column=3, sticky="e")
 
+        settings_row = ttk.Frame(container, padding=(0, 8, 0, 0))
+        settings_row.grid(row=2, column=0, sticky="ew")
+        settings_row.columnconfigure(8, weight=1)
+
+        ttk.Checkbutton(
+            settings_row,
+            text="Tier colors",
+            variable=self.show_tier_colors_var,
+            command=self.refresh_entries,
+        ).grid(row=0, column=0, sticky="w", padx=(0, 10))
+
+        ttk.Label(settings_row, text="Sort", style="App.TLabel").grid(row=0, column=1, sticky="w")
+        self.sort_mode_combo = ttk.Combobox(
+            settings_row,
+            values=("time", "stats"),
+            state="readonly",
+            width=8,
+            textvariable=self.sort_mode_var,
+        )
+        self.sort_mode_combo.grid(row=0, column=2, sticky="w", padx=(4, 12))
+        self.sort_mode_combo.bind("<<ComboboxSelected>>", self._on_sort_mode_changed)
+
+        ttk.Label(settings_row, text="Time order", style="App.TLabel").grid(row=0, column=3, sticky="w")
+        self.time_order_combo = ttk.Combobox(
+            settings_row,
+            values=("newest", "oldest"),
+            state="readonly",
+            width=8,
+            textvariable=self.time_order_var,
+        )
+        self.time_order_combo.grid(row=0, column=4, sticky="w", padx=(4, 12))
+        self.time_order_combo.bind("<<ComboboxSelected>>", self._on_sort_settings_changed)
+
+        ttk.Label(settings_row, text="Test pick", style="App.TLabel").grid(row=0, column=5, sticky="w")
+        self.test_pick_combo = ttk.Combobox(
+            settings_row,
+            values=("strict", "weighted"),
+            state="readonly",
+            width=10,
+            textvariable=self.test_pick_strategy_var,
+        )
+        self.test_pick_combo.grid(row=0, column=6, sticky="w", padx=(4, 0))
+        self.test_pick_combo.bind("<<ComboboxSelected>>", self._on_pick_strategy_changed)
+
+        self._update_sort_controls()
+
         status_row = ttk.Frame(container, padding=(0, 8, 0, 0))
-        status_row.grid(row=2, column=0, sticky="ew")
+        status_row.grid(row=3, column=0, sticky="ew")
         status_row.columnconfigure(0, weight=1)
 
         self.count_label = ttk.Label(status_row, text="Total vocabularies: 0", style="Status.TLabel")
@@ -158,6 +225,23 @@ class MainWindow(tk.Tk):
         self.tree.bind("<Return>", self._handle_edit_shortcut)
         self.tree.bind("<KP_Enter>", self._handle_edit_shortcut)
         self.tree.bind("<Delete>", self._handle_delete_shortcut)
+
+    def _on_sort_mode_changed(self, _event: tk.Event) -> None:
+        self._update_sort_controls()
+        self.refresh_entries()
+
+    def _on_sort_settings_changed(self, _event: tk.Event) -> None:
+        self.refresh_entries()
+
+    def _on_pick_strategy_changed(self, _event: tk.Event) -> None:
+        # Strategy is consumed when launching/starting tests.
+        return
+
+    def _update_sort_controls(self) -> None:
+        if self.sort_mode_var.get() == "time":
+            self.time_order_combo.configure(state="readonly")
+        else:
+            self.time_order_combo.configure(state="disabled")
 
     def _handle_add_shortcut(self, _event: tk.Event) -> str:
         self._open_add_dialog()
@@ -184,17 +268,27 @@ class MainWindow(tk.Tk):
             self.tree.delete(item)
 
         self._tree_entry_ids.clear()
-        entries = self.repository.list_entries()
+        self._entry_stats_by_id.clear()
+        entries_with_stats = self.repository.list_entries_with_stats(
+            sort_mode=self.sort_mode_var.get(),
+            time_order=self.time_order_var.get(),
+        )
 
-        for entry in entries:
+        for entry, test_count, error_count, tier in entries_with_stats:
+            tags: tuple[str, ...] = ()
+            if self.show_tier_colors_var.get():
+                tags = (f"tier_{tier}",)
+
             item_id = self.tree.insert(
                 "",
                 "end",
                 values=(entry.japanese_text, entry.kana_text or "", entry.english_text),
+                tags=tags,
             )
             self._tree_entry_ids[item_id] = entry.id
+            self._entry_stats_by_id[entry.id] = (test_count, error_count, tier)
 
-        self.count_label.configure(text=f"Total vocabularies: {len(entries)}")
+        self.count_label.configure(text=f"Total vocabularies: {len(entries_with_stats)}")
 
     def _show_context_menu(self, event: tk.Event) -> None:
         item_id = self.tree.identify_row(event.y)
@@ -282,6 +376,7 @@ class MainWindow(tk.Tk):
             self,
             repository=self.repository,
             text_font=self.fonts["latin"],
+            pick_strategy=self.test_pick_strategy_var.get(),
         )
         self.wait_window(dialog)
 
@@ -339,6 +434,43 @@ class MainWindow(tk.Tk):
             messagebox.showerror("Database error", f"Could not delete entries: {exc}", parent=self)
 
         self.refresh_entries()
+
+    def _increase_selected_priority(self) -> None:
+        self._adjust_selected_priority(increase=True)
+
+    def _decrease_selected_priority(self) -> None:
+        self._adjust_selected_priority(increase=False)
+
+    def _adjust_selected_priority(self, increase: bool) -> None:
+        entry_ids = self._selected_entry_ids()
+        if not entry_ids:
+            messagebox.showwarning("No selection", "Select at least one entry.", parent=self)
+            return
+
+        updated_count = 0
+        gray_skipped = 0
+
+        for entry_id in entry_ids:
+            try:
+                if increase:
+                    self.repository.increase_priority(entry_id)
+                else:
+                    self.repository.decrease_priority(entry_id)
+                updated_count += 1
+            except ValueError:
+                gray_skipped += 1
+            except LookupError as exc:
+                messagebox.showerror("Not found", str(exc), parent=self)
+                continue
+
+        self.refresh_entries()
+
+        if gray_skipped > 0:
+            messagebox.showinfo(
+                "Priority update",
+                f"Updated {updated_count} entries. Skipped {gray_skipped} gray-tier entries.",
+                parent=self,
+            )
 
 
 class EnglishToJapaneseTestDialog(tk.Toplevel):
