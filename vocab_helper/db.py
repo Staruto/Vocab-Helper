@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 import sqlite3
 from pathlib import Path
 from typing import Iterable
@@ -25,6 +26,18 @@ class VocabRepository:
                     kana_text TEXT NULL,
                     english_text TEXT NOT NULL CHECK (trim(english_text) <> ''),
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS vocab_stats (
+                    entry_id INTEGER PRIMARY KEY,
+                    error_count INTEGER NOT NULL DEFAULT 0,
+                    test_count INTEGER NOT NULL DEFAULT 0,
+                    last_tested TEXT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (entry_id) REFERENCES vocab_entries(id) ON DELETE CASCADE
                 )
                 """
             )
@@ -80,6 +93,188 @@ class VocabRepository:
                 (requested,),
             )
             return [self._map_row(row) for row in rows]
+        finally:
+            connection.close()
+
+    def list_entries_with_stats(
+        self,
+        sort_mode: str = "time",
+        time_order: str = "newest",
+    ) -> list[tuple[VocabEntry, int, int, str]]:
+        order_by = "ORDER BY e.id DESC"
+        if sort_mode == "stats":
+            order_by = (
+                "ORDER BY "
+                "CASE "
+                "WHEN COALESCE(s.test_count, 0) = 0 THEN 0 "
+                "WHEN COALESCE(s.error_count, 0) >= 3 THEN 1 "
+                "WHEN COALESCE(s.error_count, 0) >= 1 THEN 2 "
+                "ELSE 3 END ASC, "
+                "COALESCE(s.error_count, 0) DESC, "
+                "e.id DESC"
+            )
+        elif time_order == "oldest":
+            order_by = "ORDER BY e.id ASC"
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            connection.row_factory = sqlite3.Row
+            rows: Iterable[sqlite3.Row] = connection.execute(
+                f"""
+                SELECT
+                    e.id,
+                    e.japanese_text,
+                    e.kana_text,
+                    e.english_text,
+                    e.created_at,
+                    COALESCE(s.error_count, 0) AS error_count,
+                    COALESCE(s.test_count, 0) AS test_count
+                FROM vocab_entries AS e
+                LEFT JOIN vocab_stats AS s
+                    ON s.entry_id = e.id
+                {order_by}
+                """
+            )
+
+            result: list[tuple[VocabEntry, int, int, str]] = []
+            for row in rows:
+                entry = self._map_row(row)
+                error_count = int(row["error_count"])
+                test_count = int(row["test_count"])
+                tier = self._tier_from_counts(test_count, error_count)
+                result.append((entry, test_count, error_count, tier))
+            return result
+        finally:
+            connection.close()
+
+    def get_test_entries_by_preference(self, count: int, strategy: str = "strict") -> list[VocabEntry]:
+        requested = max(int(count), 0)
+        if requested == 0:
+            return []
+
+        entries_with_stats = self.list_entries_with_stats(sort_mode="time", time_order="newest")
+        if not entries_with_stats:
+            return []
+
+        if strategy == "weighted":
+            weighted_pool = list(entries_with_stats)
+            weights_by_tier = {"gray": 4, "red": 3, "yellow": 2, "green": 1}
+            ordered: list[tuple[VocabEntry, int, int, str]] = []
+            while weighted_pool and len(ordered) < requested:
+                weights = [weights_by_tier[item[3]] for item in weighted_pool]
+                selected_index = random.choices(range(len(weighted_pool)), weights=weights, k=1)[0]
+                ordered.append(weighted_pool.pop(selected_index))
+            return [entry for entry, _, _, _ in ordered]
+
+        buckets: dict[str, list[tuple[VocabEntry, int, int, str]]] = {
+            "gray": [],
+            "red": [],
+            "yellow": [],
+            "green": [],
+        }
+        for item in entries_with_stats:
+            buckets[item[3]].append(item)
+
+        ordered_strict: list[tuple[VocabEntry, int, int, str]] = []
+        for tier in ("gray", "red", "yellow", "green"):
+            random.shuffle(buckets[tier])
+            ordered_strict.extend(buckets[tier])
+
+        sliced = ordered_strict[:requested]
+        return [entry for entry, _, _, _ in sliced]
+
+    def record_test_result(self, entry_id: int, is_correct: bool) -> None:
+        connection = sqlite3.connect(self.db_path)
+        try:
+            entry_exists = connection.execute(
+                """
+                SELECT 1
+                FROM vocab_entries
+                WHERE id = ?
+                """,
+                (entry_id,),
+            ).fetchone()
+            if entry_exists is None:
+                raise LookupError(f"Vocabulary entry with id {entry_id} was not found.")
+
+            connection.execute(
+                """
+                INSERT INTO vocab_stats (entry_id, error_count, test_count)
+                VALUES (?, 0, 0)
+                ON CONFLICT(entry_id) DO NOTHING
+                """,
+                (entry_id,),
+            )
+
+            connection.execute(
+                """
+                UPDATE vocab_stats
+                SET
+                    test_count = test_count + 1,
+                    error_count = error_count + ?,
+                    last_tested = CURRENT_TIMESTAMP
+                WHERE entry_id = ?
+                """,
+                (0 if is_correct else 1, entry_id),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def increase_priority(self, entry_id: int) -> str:
+        test_count, error_count = self._get_existing_test_stats(entry_id)
+
+        if error_count == 0:
+            new_error_count = 1
+        elif error_count <= 2:
+            new_error_count = 3
+        else:
+            new_error_count = error_count
+
+        self._set_error_count(entry_id, new_error_count)
+        return self._tier_from_counts(test_count, new_error_count)
+
+    def decrease_priority(self, entry_id: int) -> str:
+        test_count, error_count = self._get_existing_test_stats(entry_id)
+
+        if error_count >= 3:
+            new_error_count = 2
+        elif error_count in (1, 2):
+            new_error_count = 0
+        else:
+            new_error_count = error_count
+
+        self._set_error_count(entry_id, new_error_count)
+        return self._tier_from_counts(test_count, new_error_count)
+
+    def get_entry_stats(self, entry_id: int) -> tuple[int, int, str]:
+        connection = sqlite3.connect(self.db_path)
+        try:
+            entry_exists = connection.execute(
+                """
+                SELECT 1
+                FROM vocab_entries
+                WHERE id = ?
+                """,
+                (entry_id,),
+            ).fetchone()
+            if entry_exists is None:
+                raise LookupError(f"Vocabulary entry with id {entry_id} was not found.")
+
+            row = connection.execute(
+                """
+                SELECT test_count, error_count
+                FROM vocab_stats
+                WHERE entry_id = ?
+                """,
+                (entry_id,),
+            ).fetchone()
+            if row is None:
+                return 0, 0, "gray"
+
+            test_count = int(row[0])
+            error_count = int(row[1])
+            return test_count, error_count, self._tier_from_counts(test_count, error_count)
         finally:
             connection.close()
 
@@ -222,9 +417,69 @@ class VocabRepository:
                 """,
                 tuple(unique_ids),
             )
+            connection.execute(
+                f"""
+                DELETE FROM vocab_stats
+                WHERE entry_id IN ({placeholders})
+                """,
+                tuple(unique_ids),
+            )
             deleted_count = int(cursor.rowcount)
             connection.commit()
             return deleted_count
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _tier_from_counts(test_count: int, error_count: int) -> str:
+        if test_count <= 0:
+            return "gray"
+        if error_count <= 0:
+            return "green"
+        if error_count <= 2:
+            return "yellow"
+        return "red"
+
+    def _get_existing_test_stats(self, entry_id: int) -> tuple[int, int]:
+        connection = sqlite3.connect(self.db_path)
+        try:
+            entry_exists = connection.execute(
+                """
+                SELECT 1
+                FROM vocab_entries
+                WHERE id = ?
+                """,
+                (entry_id,),
+            ).fetchone()
+            if entry_exists is None:
+                raise LookupError(f"Vocabulary entry with id {entry_id} was not found.")
+
+            row = connection.execute(
+                """
+                SELECT test_count, error_count
+                FROM vocab_stats
+                WHERE entry_id = ?
+                """,
+                (entry_id,),
+            ).fetchone()
+            if row is None or int(row[0]) <= 0:
+                raise ValueError("Manual priority change is not supported for gray tier entries.")
+            return int(row[0]), int(row[1])
+        finally:
+            connection.close()
+
+    def _set_error_count(self, entry_id: int, error_count: int) -> None:
+        connection = sqlite3.connect(self.db_path)
+        try:
+            connection.execute(
+                """
+                UPDATE vocab_stats
+                SET error_count = ?
+                WHERE entry_id = ?
+                """,
+                (max(error_count, 0), entry_id),
+            )
+            connection.commit()
         finally:
             connection.close()
 
