@@ -2,7 +2,7 @@
 
 Simple JP <-> EN vocabulary memorization helper with a desktop GUI.
 
-## Features in v2
+## Features
 
 - Lists vocabulary in three columns: Japanese writing, kana (hiragana), English meaning
 - Adds new entries through a bottom "+" button
@@ -11,6 +11,13 @@ Simple JP <-> EN vocabulary memorization helper with a desktop GUI.
 - Supports multi-select delete from the vocabulary list
 - Supports keyboard shortcuts: Ctrl+N (add), Ctrl+Shift+N (bulk add), Ctrl+T (EN->JP test), Enter (edit selected row), Delete (remove selected rows)
 - Includes test mode (English -> Japanese) with immediate per-question judgment
+- Tracks per-entry test stats (test count and error count)
+- Classifies entries into priority tiers: gray, green, yellow, red
+- Supports optional tier color highlighting in the list view
+- Supports list sorting by creation time or by tier-based stats priority
+- Supports creation-time order selection (newest first or oldest first)
+- Supports test pick preference strategy selection: strict or weighted
+- Supports manual priority increase/decrease from the context menu (except gray tier)
 - Requires Japanese writing and English meaning
 - Treats kana as optional
 - Suggests kana offline using pykakasi and lets users edit before save
@@ -57,10 +64,27 @@ python -m unittest discover -s tests -p "test_*.py"
 - Click `Test EN->JP` (or press `Ctrl+T`) to open the test dialog
 - Default questions per test: 15
 - You can set a custom positive integer for questions per test
-- Questions are picked randomly from the database
+- You can choose pick preference strategy:
+	- `strict` (default): pick by tier order gray -> red -> yellow -> green
+	- `weighted`: probabilistic pick favoring higher-priority tiers while still sampling all tiers
 - If requested count is larger than available vocabularies, the test uses all available entries
 - Given an English meaning, type the Japanese writing and submit
 - Judgement rule: exact Japanese-writing match after trimming surrounding spaces
+- Each submitted answer updates stats:
+	- `test_count` always increases by 1
+	- `error_count` increases by 1 only when the answer is incorrect
+
+## Priority tiers
+
+- `gray`: never tested yet (`test_count = 0`)
+- `green`: tested and currently no errors (`test_count > 0` and `error_count = 0`)
+- `yellow`: medium error level (`error_count` is 1 or 2)
+- `red`: high error level (`error_count >= 3`)
+
+Manual priority actions adjust `error_count` thresholds (for non-gray entries):
+
+- Increase priority: green -> yellow, yellow -> red, red stays red
+- Decrease priority: red -> yellow, yellow -> green, green stays green
 
 ## Data location
 

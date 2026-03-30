@@ -479,6 +479,7 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
         parent: tk.Tk,
         repository: VocabRepository,
         text_font: tkfont.Font,
+        pick_strategy: str = "strict",
     ) -> None:
         super().__init__(parent)
         self.repository = repository
@@ -499,6 +500,7 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
         self.answer_var = tk.StringVar(value="")
         self.feedback_var = tk.StringVar(value="")
         self.result_var = tk.StringVar(value="")
+        self.pick_strategy_var = tk.StringVar(value=pick_strategy if pick_strategy in {"strict", "weighted"} else "strict")
 
         self.title("Test mode: English -> Japanese")
         self.transient(parent)
@@ -535,14 +537,29 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
         self.count_entry = ttk.Entry(self.start_frame, textvariable=self.count_var, width=10, style="App.TEntry")
         self.count_entry.grid(row=2, column=0, sticky="w")
 
+        ttk.Label(
+            self.start_frame,
+            text="Pick preference",
+            style="App.TLabel",
+        ).grid(row=3, column=0, sticky="w", pady=(10, 4))
+
+        self.pick_strategy_combo = ttk.Combobox(
+            self.start_frame,
+            values=("strict", "weighted"),
+            state="readonly",
+            width=12,
+            textvariable=self.pick_strategy_var,
+        )
+        self.pick_strategy_combo.grid(row=4, column=0, sticky="w")
+
         self.available_label = ttk.Label(self.start_frame, text="", style="Status.TLabel")
-        self.available_label.grid(row=3, column=0, sticky="w", pady=(8, 0))
+        self.available_label.grid(row=5, column=0, sticky="w", pady=(8, 0))
 
         self.start_info_label = ttk.Label(self.start_frame, textvariable=self.start_info_var, style="Status.TLabel")
-        self.start_info_label.grid(row=4, column=0, sticky="w", pady=(2, 10))
+        self.start_info_label.grid(row=6, column=0, sticky="w", pady=(2, 10))
 
         start_actions = ttk.Frame(self.start_frame)
-        start_actions.grid(row=5, column=0, sticky="e")
+        start_actions.grid(row=7, column=0, sticky="e")
         ttk.Button(start_actions, text="Close", command=self.destroy, style="App.TButton").grid(
             row=0,
             column=0,
@@ -642,7 +659,11 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
             return
 
         request_count = min(requested, available)
-        self.questions = self.repository.get_random_entries(request_count)
+        strategy = self.pick_strategy_var.get().strip().lower()
+        if strategy not in {"strict", "weighted"}:
+            strategy = "strict"
+
+        self.questions = self.repository.get_test_entries_by_preference(request_count, strategy)
         self.actual_count = len(self.questions)
         if self.actual_count == 0:
             messagebox.showerror("No questions", "Could not generate test questions.", parent=self)
@@ -683,8 +704,18 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
         current = self.questions[self.current_index]
         submitted = self.answer_var.get().strip()
         correct_answer = current.japanese_text.strip()
+        is_correct = submitted == correct_answer
 
-        if submitted == correct_answer:
+        try:
+            self.repository.record_test_result(current.id, is_correct)
+        except LookupError as exc:
+            messagebox.showerror("Not found", str(exc), parent=self)
+            return
+        except sqlite3.Error as exc:
+            messagebox.showerror("Database error", f"Could not save test result: {exc}", parent=self)
+            return
+
+        if is_correct:
             self.correct_count += 1
             self.feedback_var.set("Correct.")
         else:
