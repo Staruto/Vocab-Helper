@@ -10,7 +10,10 @@ Simple JP <-> EN vocabulary memorization helper with a desktop GUI.
 - Edits and deletes entries from a right-click context menu
 - Supports multi-select delete from the vocabulary list
 - Supports keyboard shortcuts: Ctrl+N (add), Ctrl+Shift+N (bulk add), Ctrl+T (EN->JP test), Enter (edit selected row), Delete (remove selected rows)
-- Includes test mode (English -> Japanese) with immediate per-question judgment
+- Includes three test modes with immediate per-question judgment:
+	- English -> Japanese (fill-in)
+	- Japanese -> Kana (fill-in)
+	- Japanese -> English (single-choice)
 - Tracks per-entry test stats (test count and error count)
 - Classifies entries into priority tiers: gray, green, yellow, red
 - Supports optional tier color highlighting in the list view
@@ -73,6 +76,31 @@ python -m unittest discover -s tests -p "test_*.py"
 - Each submitted answer updates stats:
 	- `test_count` always increases by 1
 	- `error_count` increases by 1 only when the answer is incorrect
+
+## Test mode (Japanese -> Kana)
+
+- Click `Test JP->Kana` to open the test dialog
+- Uses the same settings and behavior style as EN->JP:
+	- Default questions per test: 15
+	- Positive-integer question count validation
+	- Same pick preference strategy (`strict` or `weighted`)
+	- Same score/result flow
+- Questions only use entries that have kana
+- Prompt is Japanese writing; answer is kana
+- Judgement rule: exact kana match after trimming surrounding spaces
+- Each submitted answer updates stats with the same rule as EN->JP
+
+## Test mode (Japanese -> English)
+
+- Click `Test JP->EN` to open the test dialog
+- Prompt is Japanese writing; answer format is single choice
+- For each question, the app builds options as:
+	- Correct English meaning
+	- Up to 3 random distractor meanings
+- Option fallback behavior:
+	- Shows as many options as available when fewer than 4 distinct options exist
+	- Requires at least 2 options; otherwise the test cannot start
+- Uses the same pick preference strategy (`strict` or `weighted`) and same stats update rule
 
 ## Priority tiers
 
