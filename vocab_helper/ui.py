@@ -65,7 +65,7 @@ class MainWindow(tk.Tk):
         self._tree_entry_ids: dict[str, int] = {}
         self._entry_stats_by_id: dict[int, tuple[int, int, str]] = {}
 
-        self.show_tier_colors_var = tk.BooleanVar(value=False)
+        self.show_tier_colors_var = tk.BooleanVar(value=True)
         self.sort_mode_var = tk.StringVar(value="time")
         self.time_order_var = tk.StringVar(value="newest")
         self.test_pick_strategy_var = tk.StringVar(value="strict")
@@ -395,6 +395,7 @@ class MainWindow(tk.Tk):
             pick_strategy=self.test_pick_strategy_var.get(),
         )
         self.wait_window(dialog)
+        self.refresh_entries()
 
     def _open_jp_to_kana_test_dialog(self) -> None:
         dialog = JapaneseToKanaTestDialog(
@@ -404,6 +405,7 @@ class MainWindow(tk.Tk):
             pick_strategy=self.test_pick_strategy_var.get(),
         )
         self.wait_window(dialog)
+        self.refresh_entries()
 
     def _open_jp_to_en_test_dialog(self) -> None:
         dialog = JapaneseToEnglishChoiceTestDialog(
@@ -413,6 +415,7 @@ class MainWindow(tk.Tk):
             pick_strategy=self.test_pick_strategy_var.get(),
         )
         self.wait_window(dialog)
+        self.refresh_entries()
 
     def _open_edit_dialog(self) -> None:
         entry_id = self._selected_entry_id()
@@ -753,7 +756,16 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
             self.correct_count += 1
             self.feedback_var.set("Correct.")
         else:
-            self.feedback_var.set(f"Incorrect. Correct answer: {correct_answer}")
+            kana_hint = (current.kana_text or "").strip()
+            if not kana_hint:
+                suggested_kana, reliable, _message = suggest_hiragana(correct_answer)
+                if reliable and suggested_kana:
+                    kana_hint = suggested_kana
+
+            if kana_hint:
+                self.feedback_var.set(f"Incorrect. Correct answer: {correct_answer} ({kana_hint})")
+            else:
+                self.feedback_var.set(f"Incorrect. Correct answer: {correct_answer}")
 
         self.score_var.set(f"Score: {self.correct_count}")
         self.current_answered = True
