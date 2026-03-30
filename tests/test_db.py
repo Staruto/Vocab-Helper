@@ -33,6 +33,17 @@ class VocabRepositoryTests(unittest.TestCase):
 
         self.assertEqual(self.repository.count_entries(), 2)
 
+    def test_count_distinct_english_meanings_normalizes_case_and_spaces(self) -> None:
+        self.repository.add_entries(
+            [
+                ("食べる", "たべる", "to eat"),
+                ("食う", "くう", "  TO EAT  "),
+                ("行く", "いく", "to go"),
+            ]
+        )
+
+        self.assertEqual(self.repository.count_distinct_english_meanings(), 2)
+
     def test_get_random_entries_respects_requested_count_bounds(self) -> None:
         created = self.repository.add_entries(
             [
@@ -53,6 +64,51 @@ class VocabRepositoryTests(unittest.TestCase):
 
         picked_zero = self.repository.get_random_entries(0)
         self.assertEqual(picked_zero, [])
+
+    def test_get_english_options_for_entry_returns_distinct_choices_with_correct_answer(self) -> None:
+        created = self.repository.add_entries(
+            [
+                ("食べる", "たべる", "to eat"),
+                ("食う", "くう", " TO EAT "),
+                ("行く", "いく", "to go"),
+                ("飲む", "のむ", "to drink"),
+                ("書く", "かく", "to write"),
+            ]
+        )
+        target = created[0]
+
+        options = self.repository.get_english_options_for_entry(target.id, max_options=4)
+
+        normalized = [option.strip().lower() for option in options]
+        self.assertGreaterEqual(len(options), 2)
+        self.assertLessEqual(len(options), 4)
+        self.assertIn(target.english_text.strip().lower(), normalized)
+        self.assertEqual(len(normalized), len(set(normalized)))
+
+    def test_get_english_options_for_entry_falls_back_when_pool_is_small(self) -> None:
+        created = self.repository.add_entries(
+            [
+                ("食べる", "たべる", "to eat"),
+                ("行く", "いく", "to go"),
+            ]
+        )
+
+        options = self.repository.get_english_options_for_entry(created[0].id, max_options=4)
+        self.assertEqual(len(options), 2)
+        self.assertIn("to eat", options)
+        self.assertIn("to go", options)
+
+    def test_get_english_options_for_entry_returns_single_option_when_no_alternative_exists(self) -> None:
+        created = self.repository.add_entries(
+            [
+                ("食べる", "たべる", "to eat"),
+                ("食う", "くう", "TO EAT"),
+            ]
+        )
+
+        options = self.repository.get_english_options_for_entry(created[0].id, max_options=4)
+        self.assertEqual(len(options), 1)
+        self.assertEqual(options[0].strip().lower(), "to eat")
 
     def test_optional_kana_saved_as_none(self) -> None:
         self.repository.add_entry("行く", "   ", "to go")
@@ -261,6 +317,9 @@ class VocabRepositoryTests(unittest.TestCase):
 
         with self.assertRaises(LookupError):
             self.repository.delete_entry(9999)
+
+        with self.assertRaises(LookupError):
+            self.repository.get_english_options_for_entry(9999, max_options=4)
 
         with self.assertRaises(LookupError):
             self.repository.record_test_result(9999, is_correct=False)
