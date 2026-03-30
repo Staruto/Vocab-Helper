@@ -75,6 +75,25 @@ class VocabRepository:
         finally:
             connection.close()
 
+    def count_distinct_english_meanings(self) -> int:
+        connection = sqlite3.connect(self.db_path)
+        try:
+            row = connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM (
+                    SELECT DISTINCT LOWER(TRIM(english_text)) AS normalized_english
+                    FROM vocab_entries
+                    WHERE TRIM(english_text) <> ''
+                )
+                """
+            ).fetchone()
+            if row is None:
+                return 0
+            return int(row[0])
+        finally:
+            connection.close()
+
     def get_random_entries(self, count: int) -> list[VocabEntry]:
         requested = max(int(count), 0)
         if requested == 0:
@@ -182,6 +201,44 @@ class VocabRepository:
 
         sliced = ordered_strict[:requested]
         return [entry for entry, _, _, _ in sliced]
+
+    def get_english_options_for_entry(self, entry_id: int, max_options: int = 4) -> list[str]:
+        max_count = max(int(max_options), 2)
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            row = connection.execute(
+                """
+                SELECT english_text
+                FROM vocab_entries
+                WHERE id = ?
+                """,
+                (entry_id,),
+            ).fetchone()
+            if row is None:
+                raise LookupError(f"Vocabulary entry with id {entry_id} was not found.")
+
+            correct_english = str(row[0]).strip()
+
+            distractor_rows = connection.execute(
+                """
+                SELECT DISTINCT TRIM(english_text) AS english_text
+                FROM vocab_entries
+                WHERE id <> ?
+                  AND TRIM(english_text) <> ''
+                  AND LOWER(TRIM(english_text)) <> LOWER(TRIM(?))
+                ORDER BY RANDOM()
+                LIMIT ?
+                """,
+                (entry_id, correct_english, max_count - 1),
+            ).fetchall()
+
+            options = [correct_english]
+            options.extend(str(distractor_row[0]) for distractor_row in distractor_rows)
+            random.shuffle(options)
+            return options
+        finally:
+            connection.close()
 
     def record_test_result(self, entry_id: int, is_correct: bool) -> None:
         connection = sqlite3.connect(self.db_path)
