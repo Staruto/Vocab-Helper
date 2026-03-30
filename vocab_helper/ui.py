@@ -149,16 +149,32 @@ class MainWindow(tk.Tk):
         )
         test_button.grid(row=0, column=1, padx=(0, 8), sticky="e")
 
+        test_kana_button = ttk.Button(
+            button_row,
+            text="Test JP->Kana",
+            command=self._open_jp_to_kana_test_dialog,
+            style="App.TButton",
+        )
+        test_kana_button.grid(row=0, column=2, padx=(0, 8), sticky="e")
+
+        test_en_choice_button = ttk.Button(
+            button_row,
+            text="Test JP->EN",
+            command=self._open_jp_to_en_test_dialog,
+            style="App.TButton",
+        )
+        test_en_choice_button.grid(row=0, column=3, padx=(0, 8), sticky="e")
+
         bulk_add_button = ttk.Button(
             button_row,
             text="Bulk add",
             command=self._open_bulk_add_dialog,
             style="App.TButton",
         )
-        bulk_add_button.grid(row=0, column=2, padx=(0, 8), sticky="e")
+        bulk_add_button.grid(row=0, column=4, padx=(0, 8), sticky="e")
 
         add_button = ttk.Button(button_row, text="+", width=4, command=self._open_add_dialog, style="App.TButton")
-        add_button.grid(row=0, column=3, sticky="e")
+        add_button.grid(row=0, column=5, sticky="e")
 
         settings_row = ttk.Frame(container, padding=(0, 8, 0, 0))
         settings_row.grid(row=2, column=0, sticky="ew")
@@ -376,6 +392,24 @@ class MainWindow(tk.Tk):
             self,
             repository=self.repository,
             text_font=self.fonts["latin"],
+            pick_strategy=self.test_pick_strategy_var.get(),
+        )
+        self.wait_window(dialog)
+
+    def _open_jp_to_kana_test_dialog(self) -> None:
+        dialog = JapaneseToKanaTestDialog(
+            self,
+            repository=self.repository,
+            text_font=self.fonts["japanese"],
+            pick_strategy=self.test_pick_strategy_var.get(),
+        )
+        self.wait_window(dialog)
+
+    def _open_jp_to_en_test_dialog(self) -> None:
+        dialog = JapaneseToEnglishChoiceTestDialog(
+            self,
+            repository=self.repository,
+            text_font=self.fonts["japanese"],
             pick_strategy=self.test_pick_strategy_var.get(),
         )
         self.wait_window(dialog)
@@ -775,6 +809,712 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
                 self._next_question()
             else:
                 self._submit_answer()
+            return "break"
+
+        if self.result_frame.winfo_ismapped():
+            self._restart()
+            return "break"
+
+        return "break"
+
+
+class JapaneseToKanaTestDialog(tk.Toplevel):
+    def __init__(
+        self,
+        parent: tk.Tk,
+        repository: VocabRepository,
+        text_font: tkfont.Font,
+        pick_strategy: str = "strict",
+    ) -> None:
+        super().__init__(parent)
+        self.repository = repository
+        self.text_font = text_font
+
+        self.questions: list[VocabEntry] = []
+        self.current_index = 0
+        self.correct_count = 0
+        self.current_answered = False
+        self.requested_count = 15
+        self.actual_count = 0
+
+        self.count_var = tk.StringVar(value="15")
+        self.start_info_var = tk.StringVar(value="")
+        self.progress_var = tk.StringVar(value="")
+        self.score_var = tk.StringVar(value="")
+        self.prompt_var = tk.StringVar(value="")
+        self.answer_var = tk.StringVar(value="")
+        self.feedback_var = tk.StringVar(value="")
+        self.result_var = tk.StringVar(value="")
+        self.pick_strategy_var = tk.StringVar(value=pick_strategy if pick_strategy in {"strict", "weighted"} else "strict")
+
+        self.title("Test mode: Japanese -> Kana")
+        self.transient(parent)
+        self.grab_set()
+        self.resizable(False, False)
+
+        self._build_widgets()
+        self._show_start_frame()
+
+        self.bind("<Return>", self._on_return_key)
+        self.bind("<Escape>", lambda _event: self.destroy())
+
+    def _build_widgets(self) -> None:
+        root = ttk.Frame(self, padding=14)
+        root.grid(row=0, column=0, sticky="nsew")
+        root.columnconfigure(0, weight=1)
+
+        self.start_frame = ttk.Frame(root)
+        self.start_frame.grid(row=0, column=0, sticky="nsew")
+        self.start_frame.columnconfigure(0, weight=1)
+
+        ttk.Label(
+            self.start_frame,
+            text="Japanese -> Kana test",
+            style="App.TLabel",
+        ).grid(row=0, column=0, sticky="w")
+
+        ttk.Label(
+            self.start_frame,
+            text="Questions per test (default 15)",
+            style="App.TLabel",
+        ).grid(row=1, column=0, sticky="w", pady=(10, 4))
+
+        self.count_entry = ttk.Entry(self.start_frame, textvariable=self.count_var, width=10, style="App.TEntry")
+        self.count_entry.grid(row=2, column=0, sticky="w")
+
+        ttk.Label(
+            self.start_frame,
+            text="Pick preference",
+            style="App.TLabel",
+        ).grid(row=3, column=0, sticky="w", pady=(10, 4))
+
+        self.pick_strategy_combo = ttk.Combobox(
+            self.start_frame,
+            values=("strict", "weighted"),
+            state="readonly",
+            width=12,
+            textvariable=self.pick_strategy_var,
+        )
+        self.pick_strategy_combo.grid(row=4, column=0, sticky="w")
+
+        self.available_label = ttk.Label(self.start_frame, text="", style="Status.TLabel")
+        self.available_label.grid(row=5, column=0, sticky="w", pady=(8, 0))
+
+        self.start_info_label = ttk.Label(self.start_frame, textvariable=self.start_info_var, style="Status.TLabel")
+        self.start_info_label.grid(row=6, column=0, sticky="w", pady=(2, 10))
+
+        start_actions = ttk.Frame(self.start_frame)
+        start_actions.grid(row=7, column=0, sticky="e")
+        ttk.Button(start_actions, text="Close", command=self.destroy, style="App.TButton").grid(
+            row=0,
+            column=0,
+            padx=(0, 8),
+        )
+        ttk.Button(start_actions, text="Start", command=self._start_test, style="App.TButton").grid(row=0, column=1)
+
+        self.test_frame = ttk.Frame(root)
+        self.test_frame.grid(row=0, column=0, sticky="nsew")
+        self.test_frame.columnconfigure(0, weight=1)
+
+        header_row = ttk.Frame(self.test_frame)
+        header_row.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        header_row.columnconfigure(0, weight=1)
+        ttk.Label(header_row, textvariable=self.progress_var, style="App.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(header_row, textvariable=self.score_var, style="App.TLabel").grid(row=0, column=1, sticky="e")
+
+        ttk.Label(self.test_frame, text="Japanese writing", style="App.TLabel").grid(row=1, column=0, sticky="w")
+        self.prompt_label = ttk.Label(
+            self.test_frame,
+            textvariable=self.prompt_var,
+            style="App.TLabel",
+            wraplength=600,
+            font=self.text_font,
+        )
+        self.prompt_label.grid(row=2, column=0, sticky="w", pady=(4, 12))
+
+        ttk.Label(self.test_frame, text="Your kana answer", style="App.TLabel").grid(row=3, column=0, sticky="w")
+        self.answer_entry = ttk.Entry(self.test_frame, textvariable=self.answer_var, width=38, style="Japanese.TEntry")
+        self.answer_entry.grid(row=4, column=0, sticky="w", pady=(4, 8))
+
+        self.feedback_label = ttk.Label(self.test_frame, textvariable=self.feedback_var, style="Status.TLabel", wraplength=600)
+        self.feedback_label.grid(row=5, column=0, sticky="w", pady=(0, 10))
+
+        test_actions = ttk.Frame(self.test_frame)
+        test_actions.grid(row=6, column=0, sticky="e")
+        self.submit_button = ttk.Button(test_actions, text="Submit", command=self._submit_answer, style="App.TButton")
+        self.submit_button.grid(row=0, column=0, padx=(0, 8))
+        self.next_button = ttk.Button(test_actions, text="Next", command=self._next_question, style="App.TButton")
+        self.next_button.grid(row=0, column=1)
+
+        self.result_frame = ttk.Frame(root)
+        self.result_frame.grid(row=0, column=0, sticky="nsew")
+        self.result_frame.columnconfigure(0, weight=1)
+
+        ttk.Label(self.result_frame, text="Test complete", style="App.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            self.result_frame,
+            textvariable=self.result_var,
+            style="App.TLabel",
+            wraplength=600,
+        ).grid(row=1, column=0, sticky="w", pady=(8, 12))
+
+        result_actions = ttk.Frame(self.result_frame)
+        result_actions.grid(row=2, column=0, sticky="e")
+        ttk.Button(result_actions, text="Close", command=self.destroy, style="App.TButton").grid(
+            row=0,
+            column=0,
+            padx=(0, 8),
+        )
+        ttk.Button(result_actions, text="Restart", command=self._restart, style="App.TButton").grid(row=0, column=1)
+
+    @staticmethod
+    def _entry_has_kana(entry: VocabEntry) -> bool:
+        return bool((entry.kana_text or "").strip())
+
+    def _build_eligible_questions(self, strategy: str) -> list[VocabEntry]:
+        available = self.repository.count_entries()
+        if available <= 0:
+            return []
+
+        ordered_entries = self.repository.get_test_entries_by_preference(available, strategy)
+        return [entry for entry in ordered_entries if self._entry_has_kana(entry)]
+
+    def _show_start_frame(self) -> None:
+        self.test_frame.grid_remove()
+        self.result_frame.grid_remove()
+        self.start_frame.grid()
+
+        strategy = self.pick_strategy_var.get().strip().lower()
+        if strategy not in {"strict", "weighted"}:
+            strategy = "strict"
+
+        available = len(self._build_eligible_questions(strategy))
+        self.available_label.configure(text=f"Available vocabularies with kana: {available}")
+        self.count_entry.focus_set()
+        self.count_entry.selection_range(0, "end")
+
+    def _show_test_frame(self) -> None:
+        self.start_frame.grid_remove()
+        self.result_frame.grid_remove()
+        self.test_frame.grid()
+
+    def _show_result_frame(self) -> None:
+        self.start_frame.grid_remove()
+        self.test_frame.grid_remove()
+        self.result_frame.grid()
+
+    def _start_test(self) -> None:
+        try:
+            requested = int(self.count_var.get().strip())
+            if requested <= 0:
+                raise ValidationError("Questions per test must be a positive integer.")
+        except ValueError:
+            messagebox.showerror("Validation error", "Questions per test must be a positive integer.", parent=self)
+            return
+        except ValidationError as exc:
+            messagebox.showerror("Validation error", str(exc), parent=self)
+            return
+
+        strategy = self.pick_strategy_var.get().strip().lower()
+        if strategy not in {"strict", "weighted"}:
+            strategy = "strict"
+
+        eligible_questions = self._build_eligible_questions(strategy)
+        if not eligible_questions:
+            messagebox.showerror(
+                "No eligible vocabularies",
+                "Add vocabularies with kana before starting a JP->Kana test.",
+                parent=self,
+            )
+            return
+
+        request_count = min(requested, len(eligible_questions))
+        self.questions = eligible_questions[:request_count]
+        self.actual_count = len(self.questions)
+        if self.actual_count == 0:
+            messagebox.showerror("No questions", "Could not generate test questions.", parent=self)
+            return
+
+        self.requested_count = requested
+        self.current_index = 0
+        self.correct_count = 0
+
+        if requested > self.actual_count:
+            self.start_info_var.set(f"Requested {requested}; using all {self.actual_count} eligible vocabularies.")
+        else:
+            self.start_info_var.set("")
+
+        self._show_test_frame()
+        self._load_question()
+
+    def _load_question(self) -> None:
+        if not self.questions:
+            return
+
+        current = self.questions[self.current_index]
+        self.progress_var.set(f"Question {self.current_index + 1}/{self.actual_count}")
+        self.score_var.set(f"Score: {self.correct_count}")
+        self.prompt_var.set(current.japanese_text)
+        self.answer_var.set("")
+        self.feedback_var.set("")
+        self.current_answered = False
+        self.answer_entry.configure(state="normal")
+        self.submit_button.configure(state="normal")
+        self.next_button.configure(state="disabled")
+        self.answer_entry.focus_set()
+
+    def _submit_answer(self) -> None:
+        if self.current_answered or not self.questions:
+            return
+
+        current = self.questions[self.current_index]
+        submitted = self.answer_var.get().strip()
+        correct_answer = (current.kana_text or "").strip()
+        is_correct = submitted == correct_answer
+
+        try:
+            self.repository.record_test_result(current.id, is_correct)
+        except LookupError as exc:
+            messagebox.showerror("Not found", str(exc), parent=self)
+            return
+        except sqlite3.Error as exc:
+            messagebox.showerror("Database error", f"Could not save test result: {exc}", parent=self)
+            return
+
+        if is_correct:
+            self.correct_count += 1
+            self.feedback_var.set("Correct.")
+        else:
+            self.feedback_var.set(f"Incorrect. Correct answer: {correct_answer}")
+
+        self.score_var.set(f"Score: {self.correct_count}")
+        self.current_answered = True
+        self.answer_entry.configure(state="disabled")
+        self.submit_button.configure(state="disabled")
+        self.next_button.configure(state="normal")
+        self.next_button.focus_set()
+
+    def _next_question(self) -> None:
+        if not self.current_answered:
+            return
+
+        if self.current_index + 1 >= self.actual_count:
+            self._finish_test()
+            return
+
+        self.current_index += 1
+        self._load_question()
+
+    def _finish_test(self) -> None:
+        if self.actual_count <= 0:
+            self.result_var.set("No questions were completed.")
+            self._show_result_frame()
+            return
+
+        accuracy = (self.correct_count / self.actual_count) * 100
+        self.result_var.set(
+            f"Score: {self.correct_count}/{self.actual_count} ({accuracy:.1f}%)."
+        )
+        self._show_result_frame()
+
+    def _restart(self) -> None:
+        self.questions = []
+        self.current_index = 0
+        self.correct_count = 0
+        self.actual_count = 0
+        self.current_answered = False
+        self.progress_var.set("")
+        self.score_var.set("")
+        self.prompt_var.set("")
+        self.answer_var.set("")
+        self.feedback_var.set("")
+        self.result_var.set("")
+        self._show_start_frame()
+
+    def _on_return_key(self, _event: tk.Event) -> str:
+        if self.start_frame.winfo_ismapped():
+            self._start_test()
+            return "break"
+
+        if self.test_frame.winfo_ismapped():
+            if self.current_answered:
+                self._next_question()
+            else:
+                self._submit_answer()
+            return "break"
+
+        if self.result_frame.winfo_ismapped():
+            self._restart()
+            return "break"
+
+        return "break"
+
+
+class JapaneseToEnglishChoiceTestDialog(tk.Toplevel):
+    def __init__(
+        self,
+        parent: tk.Tk,
+        repository: VocabRepository,
+        text_font: tkfont.Font,
+        pick_strategy: str = "strict",
+    ) -> None:
+        super().__init__(parent)
+        self.repository = repository
+        self.text_font = text_font
+
+        self.questions: list[VocabEntry] = []
+        self.options_by_question: list[list[str]] = []
+        self.current_index = 0
+        self.correct_count = 0
+        self.current_answered = False
+        self.requested_count = 15
+        self.actual_count = 0
+
+        self.count_var = tk.StringVar(value="15")
+        self.start_info_var = tk.StringVar(value="")
+        self.progress_var = tk.StringVar(value="")
+        self.score_var = tk.StringVar(value="")
+        self.prompt_var = tk.StringVar(value="")
+        self.feedback_var = tk.StringVar(value="")
+        self.result_var = tk.StringVar(value="")
+        self.pick_strategy_var = tk.StringVar(value=pick_strategy if pick_strategy in {"strict", "weighted"} else "strict")
+
+        self.title("Test mode: Japanese -> English")
+        self.transient(parent)
+        self.grab_set()
+        self.resizable(False, False)
+
+        self._build_widgets()
+        self._show_start_frame()
+
+        self.bind("<Return>", self._on_return_key)
+        self.bind("<Escape>", lambda _event: self.destroy())
+
+    def _build_widgets(self) -> None:
+        root = ttk.Frame(self, padding=14)
+        root.grid(row=0, column=0, sticky="nsew")
+        root.columnconfigure(0, weight=1)
+
+        self.start_frame = ttk.Frame(root)
+        self.start_frame.grid(row=0, column=0, sticky="nsew")
+        self.start_frame.columnconfigure(0, weight=1)
+
+        ttk.Label(
+            self.start_frame,
+            text="Japanese -> English test (single choice)",
+            style="App.TLabel",
+        ).grid(row=0, column=0, sticky="w")
+
+        ttk.Label(
+            self.start_frame,
+            text="Questions per test (default 15)",
+            style="App.TLabel",
+        ).grid(row=1, column=0, sticky="w", pady=(10, 4))
+
+        self.count_entry = ttk.Entry(self.start_frame, textvariable=self.count_var, width=10, style="App.TEntry")
+        self.count_entry.grid(row=2, column=0, sticky="w")
+
+        ttk.Label(
+            self.start_frame,
+            text="Pick preference",
+            style="App.TLabel",
+        ).grid(row=3, column=0, sticky="w", pady=(10, 4))
+
+        self.pick_strategy_combo = ttk.Combobox(
+            self.start_frame,
+            values=("strict", "weighted"),
+            state="readonly",
+            width=12,
+            textvariable=self.pick_strategy_var,
+        )
+        self.pick_strategy_combo.grid(row=4, column=0, sticky="w")
+
+        self.available_label = ttk.Label(self.start_frame, text="", style="Status.TLabel")
+        self.available_label.grid(row=5, column=0, sticky="w", pady=(8, 0))
+
+        self.start_info_label = ttk.Label(self.start_frame, textvariable=self.start_info_var, style="Status.TLabel")
+        self.start_info_label.grid(row=6, column=0, sticky="w", pady=(2, 10))
+
+        start_actions = ttk.Frame(self.start_frame)
+        start_actions.grid(row=7, column=0, sticky="e")
+        ttk.Button(start_actions, text="Close", command=self.destroy, style="App.TButton").grid(
+            row=0,
+            column=0,
+            padx=(0, 8),
+        )
+        ttk.Button(start_actions, text="Start", command=self._start_test, style="App.TButton").grid(row=0, column=1)
+
+        self.test_frame = ttk.Frame(root)
+        self.test_frame.grid(row=0, column=0, sticky="nsew")
+        self.test_frame.columnconfigure(0, weight=1)
+
+        header_row = ttk.Frame(self.test_frame)
+        header_row.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        header_row.columnconfigure(0, weight=1)
+        ttk.Label(header_row, textvariable=self.progress_var, style="App.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(header_row, textvariable=self.score_var, style="App.TLabel").grid(row=0, column=1, sticky="e")
+
+        ttk.Label(self.test_frame, text="Japanese writing", style="App.TLabel").grid(row=1, column=0, sticky="w")
+        self.prompt_label = ttk.Label(
+            self.test_frame,
+            textvariable=self.prompt_var,
+            style="App.TLabel",
+            wraplength=600,
+            font=self.text_font,
+        )
+        self.prompt_label.grid(row=2, column=0, sticky="w", pady=(4, 12))
+
+        ttk.Label(self.test_frame, text="Choose the correct English meaning", style="App.TLabel").grid(
+            row=3,
+            column=0,
+            sticky="w",
+        )
+
+        options_frame = ttk.Frame(self.test_frame)
+        options_frame.grid(row=4, column=0, sticky="ew", pady=(6, 8))
+        options_frame.columnconfigure(0, weight=1)
+
+        self.option_buttons: list[ttk.Button] = []
+        for index in range(4):
+            button = ttk.Button(options_frame, text="", style="App.TButton")
+            button.grid(row=index, column=0, sticky="ew", pady=(0, 6))
+            self.option_buttons.append(button)
+
+        self.feedback_label = ttk.Label(self.test_frame, textvariable=self.feedback_var, style="Status.TLabel", wraplength=600)
+        self.feedback_label.grid(row=5, column=0, sticky="w", pady=(0, 10))
+
+        test_actions = ttk.Frame(self.test_frame)
+        test_actions.grid(row=6, column=0, sticky="e")
+        ttk.Button(test_actions, text="Close", command=self.destroy, style="App.TButton").grid(
+            row=0,
+            column=0,
+            padx=(0, 8),
+        )
+        self.next_button = ttk.Button(test_actions, text="Next", command=self._next_question, style="App.TButton")
+        self.next_button.grid(row=0, column=1)
+
+        self.result_frame = ttk.Frame(root)
+        self.result_frame.grid(row=0, column=0, sticky="nsew")
+        self.result_frame.columnconfigure(0, weight=1)
+
+        ttk.Label(self.result_frame, text="Test complete", style="App.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            self.result_frame,
+            textvariable=self.result_var,
+            style="App.TLabel",
+            wraplength=600,
+        ).grid(row=1, column=0, sticky="w", pady=(8, 12))
+
+        result_actions = ttk.Frame(self.result_frame)
+        result_actions.grid(row=2, column=0, sticky="e")
+        ttk.Button(result_actions, text="Close", command=self.destroy, style="App.TButton").grid(
+            row=0,
+            column=0,
+            padx=(0, 8),
+        )
+        ttk.Button(result_actions, text="Restart", command=self._restart, style="App.TButton").grid(row=0, column=1)
+
+    def _build_eligible_questions(self, strategy: str) -> tuple[list[VocabEntry], list[list[str]]]:
+        available = self.repository.count_entries()
+        if available <= 0:
+            return [], []
+
+        ordered_entries = self.repository.get_test_entries_by_preference(available, strategy)
+
+        eligible_questions: list[VocabEntry] = []
+        eligible_options: list[list[str]] = []
+        for entry in ordered_entries:
+            try:
+                options = self.repository.get_english_options_for_entry(entry.id, max_options=4)
+            except LookupError:
+                continue
+
+            if len(options) < 2:
+                continue
+
+            eligible_questions.append(entry)
+            eligible_options.append(options)
+
+        return eligible_questions, eligible_options
+
+    def _show_start_frame(self) -> None:
+        self.test_frame.grid_remove()
+        self.result_frame.grid_remove()
+        self.start_frame.grid()
+
+        strategy = self.pick_strategy_var.get().strip().lower()
+        if strategy not in {"strict", "weighted"}:
+            strategy = "strict"
+
+        available_questions, _ = self._build_eligible_questions(strategy)
+        self.available_label.configure(
+            text=f"Available vocabularies with at least 2 choices: {len(available_questions)}"
+        )
+
+        self.count_entry.focus_set()
+        self.count_entry.selection_range(0, "end")
+
+    def _show_test_frame(self) -> None:
+        self.start_frame.grid_remove()
+        self.result_frame.grid_remove()
+        self.test_frame.grid()
+
+    def _show_result_frame(self) -> None:
+        self.start_frame.grid_remove()
+        self.test_frame.grid_remove()
+        self.result_frame.grid()
+
+    def _start_test(self) -> None:
+        try:
+            requested = int(self.count_var.get().strip())
+            if requested <= 0:
+                raise ValidationError("Questions per test must be a positive integer.")
+        except ValueError:
+            messagebox.showerror("Validation error", "Questions per test must be a positive integer.", parent=self)
+            return
+        except ValidationError as exc:
+            messagebox.showerror("Validation error", str(exc), parent=self)
+            return
+
+        strategy = self.pick_strategy_var.get().strip().lower()
+        if strategy not in {"strict", "weighted"}:
+            strategy = "strict"
+
+        eligible_questions, eligible_options = self._build_eligible_questions(strategy)
+        if not eligible_questions:
+            messagebox.showerror(
+                "No eligible vocabularies",
+                "Add at least two vocabularies with different English meanings before starting JP->EN test.",
+                parent=self,
+            )
+            return
+
+        request_count = min(requested, len(eligible_questions))
+        self.questions = eligible_questions[:request_count]
+        self.options_by_question = eligible_options[:request_count]
+        self.actual_count = len(self.questions)
+
+        if self.actual_count == 0:
+            messagebox.showerror("No questions", "Could not generate test questions.", parent=self)
+            return
+
+        self.requested_count = requested
+        self.current_index = 0
+        self.correct_count = 0
+
+        if requested > self.actual_count:
+            self.start_info_var.set(f"Requested {requested}; using all {self.actual_count} eligible vocabularies.")
+        else:
+            self.start_info_var.set("")
+
+        self._show_test_frame()
+        self._load_question()
+
+    def _load_question(self) -> None:
+        if not self.questions:
+            return
+
+        current = self.questions[self.current_index]
+        options = self.options_by_question[self.current_index]
+
+        self.progress_var.set(f"Question {self.current_index + 1}/{self.actual_count}")
+        self.score_var.set(f"Score: {self.correct_count}")
+        self.prompt_var.set(current.japanese_text)
+        self.feedback_var.set("")
+        self.current_answered = False
+
+        for index, button in enumerate(self.option_buttons):
+            if index < len(options):
+                option_text = options[index]
+                button.configure(
+                    text=option_text,
+                    command=lambda selected=option_text: self._submit_choice(selected),
+                    state="normal",
+                )
+                button.grid()
+            else:
+                button.grid_remove()
+
+        self.next_button.configure(state="disabled")
+
+    def _submit_choice(self, selected_option: str) -> None:
+        if self.current_answered or not self.questions:
+            return
+
+        current = self.questions[self.current_index]
+        correct_answer = current.english_text.strip()
+        is_correct = selected_option.strip() == correct_answer
+
+        try:
+            self.repository.record_test_result(current.id, is_correct)
+        except LookupError as exc:
+            messagebox.showerror("Not found", str(exc), parent=self)
+            return
+        except sqlite3.Error as exc:
+            messagebox.showerror("Database error", f"Could not save test result: {exc}", parent=self)
+            return
+
+        if is_correct:
+            self.correct_count += 1
+            self.feedback_var.set("Correct.")
+        else:
+            self.feedback_var.set(f"Incorrect. Correct answer: {correct_answer}")
+
+        self.score_var.set(f"Score: {self.correct_count}")
+        self.current_answered = True
+
+        for button in self.option_buttons:
+            if button.winfo_ismapped():
+                button.configure(state="disabled")
+
+        self.next_button.configure(state="normal")
+        self.next_button.focus_set()
+
+    def _next_question(self) -> None:
+        if not self.current_answered:
+            return
+
+        if self.current_index + 1 >= self.actual_count:
+            self._finish_test()
+            return
+
+        self.current_index += 1
+        self._load_question()
+
+    def _finish_test(self) -> None:
+        if self.actual_count <= 0:
+            self.result_var.set("No questions were completed.")
+            self._show_result_frame()
+            return
+
+        accuracy = (self.correct_count / self.actual_count) * 100
+        self.result_var.set(
+            f"Score: {self.correct_count}/{self.actual_count} ({accuracy:.1f}%)."
+        )
+        self._show_result_frame()
+
+    def _restart(self) -> None:
+        self.questions = []
+        self.options_by_question = []
+        self.current_index = 0
+        self.correct_count = 0
+        self.actual_count = 0
+        self.current_answered = False
+        self.progress_var.set("")
+        self.score_var.set("")
+        self.prompt_var.set("")
+        self.feedback_var.set("")
+        self.result_var.set("")
+        self._show_start_frame()
+
+    def _on_return_key(self, _event: tk.Event) -> str:
+        if self.start_frame.winfo_ismapped():
+            self._start_test()
+            return "break"
+
+        if self.test_frame.winfo_ismapped():
+            if self.current_answered:
+                self._next_question()
             return "break"
 
         if self.result_frame.winfo_ismapped():
