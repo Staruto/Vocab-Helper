@@ -16,11 +16,12 @@ Simple JP <-> EN vocabulary memorization helper with a desktop GUI.
 	- Japanese -> English (single-choice)
 - Tracks per-entry test stats (test count and error count)
 - Classifies entries into priority tiers: gray, green, yellow, red
-- Supports optional tier color highlighting in the list view
+- Supports tier color highlighting in the list view (enabled by default, toggleable)
 - Supports list sorting by creation time or by tier-based stats priority
 - Supports creation-time order selection (newest first or oldest first)
 - Supports test pick preference strategy selection: strict or weighted
 - Supports manual priority increase/decrease from the context menu (except gray tier)
+- Refreshes the main list immediately after closing a test dialog
 - Requires Japanese writing and English meaning
 - Treats kana as optional
 - Suggests kana offline using pykakasi and lets users edit before save
@@ -73,6 +74,7 @@ python -m unittest discover -s tests -p "test_*.py"
 - If requested count is larger than available vocabularies, the test uses all available entries
 - Given an English meaning, type the Japanese writing and submit
 - Judgement rule: exact Japanese-writing match after trimming surrounding spaces
+- For incorrect answers, feedback shows the correct Japanese writing and kana when available
 - Each submitted answer updates stats:
 	- `test_count` always increases by 1
 	- `error_count` increases by 1 only when the answer is incorrect
