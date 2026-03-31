@@ -116,6 +116,10 @@ python -m unittest discover -s tests -p "test_*.py"
 - Each submitted answer updates stats:
 	- `test_count` always increases by 1
 	- `error_count` increases by 1 only when the answer is incorrect
+	- On correct answers, there is a chance to decrease `error_count` by 1
+	- Recovery decrease rules:
+		- At most one `error_count` decrease per vocabulary per day
+		- If that vocabulary has any wrong answer on that day, no decrease is allowed for the rest of that day
 
 ## Test mode (Japanese -> Kana)
 
@@ -132,6 +136,7 @@ python -m unittest discover -s tests -p "test_*.py"
 - After the initial cycle, any incorrectly answered vocabularies are retried until each is answered correctly
 - Final score/success-rate remains based on the initial cycle only (`initial correct / initial count`)
 - Each submitted answer updates stats with the same rule as EN->JP
+	- Includes the same chance-based `error_count` recovery rule and daily restrictions as EN->JP
 
 ## Test mode (Japanese -> English)
 
@@ -144,6 +149,7 @@ python -m unittest discover -s tests -p "test_*.py"
 	- Shows as many options as available when fewer than 4 distinct options exist
 	- Requires at least 2 options; otherwise the test cannot start
 - Uses the same pick preference strategy (`strict` or `weighted`) and same stats update rule
+- Includes the same chance-based `error_count` recovery rule and daily restrictions as EN->JP
 - For incorrect answers, a `View details` button appears to jump directly to that vocabulary detail page
 - After the initial cycle, any incorrectly answered vocabularies are retried until each is answered correctly
 - Final score/success-rate remains based on the initial cycle only (`initial correct / initial count`)
