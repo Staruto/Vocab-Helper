@@ -60,6 +60,55 @@ class VocabRepositoryTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_initialize_backfills_part_of_speech_into_tags(self) -> None:
+        legacy_db_path = Path(self.temp_dir.name) / "legacy_pos_vocab.db"
+
+        connection = sqlite3.connect(legacy_db_path)
+        try:
+            connection.execute(
+                """
+                CREATE TABLE vocab_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    japanese_text TEXT NOT NULL,
+                    kana_text TEXT NULL,
+                    english_text TEXT NOT NULL,
+                    part_of_speech TEXT NULL,
+                    details_markdown TEXT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE vocab_stats (
+                    entry_id INTEGER PRIMARY KEY,
+                    error_count INTEGER NOT NULL DEFAULT 0,
+                    test_count INTEGER NOT NULL DEFAULT 0,
+                    last_tested TEXT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO vocab_entries (japanese_text, kana_text, english_text, part_of_speech)
+                VALUES ('書く', 'かく', 'to write', 'verb')
+                """
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        legacy_repository = VocabRepository(legacy_db_path)
+        legacy_repository.initialize()
+
+        entry = legacy_repository.list_entries()[0]
+        tags = legacy_repository.get_entry_tags(entry.id, target_language_code="JP")
+        self.assertIn(
+            ("part_of_speech", "verb"),
+            {(type_name, tag_name) for _tag_id, _type_id, type_name, tag_name in tags},
+        )
+
         legacy_repository = VocabRepository(legacy_db_path)
         legacy_repository.initialize()
 
@@ -102,6 +151,162 @@ class VocabRepositoryTests(unittest.TestCase):
 
         with self.assertRaises(ValidationError):
             self.repository.set_language_settings("JP", "JP")
+
+    def test_predefined_tag_types_and_tags_are_seeded_for_target_language(self) -> None:
+        tag_types = self.repository.list_tag_types(target_language_code="JP")
+        tag_type_names = {name for _tag_type_id, name, _is_predefined in tag_types}
+        self.assertIn("part_of_speech", tag_type_names)
+        self.assertIn("difficulty", tag_type_names)
+
+        tags = self.repository.list_tags(target_language_code="JP")
+        by_type: dict[str, set[str]] = {}
+        for _tag_id, _type_id, type_name, tag_name, _type_predefined, _tag_predefined in tags:
+            by_type.setdefault(type_name, set()).add(tag_name)
+
+        self.assertTrue(set(VocabRepository.PREDEFINED_PART_OF_SPEECH_TAGS).issubset(by_type.get("part_of_speech", set())))
+        self.assertTrue(set(VocabRepository.PREDEFINED_DIFFICULTY_TAGS).issubset(by_type.get("difficulty", set())))
+
+    def test_custom_tag_type_and_tag_crud(self) -> None:
+        custom_type_id = self.repository.add_tag_type("topic")
+        all_types = self.repository.list_tag_types()
+        self.assertIn(custom_type_id, [tag_type_id for tag_type_id, _name, _is_predefined in all_types])
+
+        grammar_tag_id = self.repository.add_tag(custom_type_id, "grammar")
+        reading_tag_id = self.repository.add_tag(custom_type_id, "reading")
+        tags = self.repository.list_tags(tag_type_id=custom_type_id)
+        self.assertEqual(
+            {tag_id for tag_id, _type_id, _type_name, _tag_name, _type_predefined, _tag_predefined in tags},
+            {grammar_tag_id, reading_tag_id},
+        )
+
+        self.repository.delete_tag(reading_tag_id)
+        tags_after_delete = self.repository.list_tags(tag_type_id=custom_type_id)
+        self.assertEqual(len(tags_after_delete), 1)
+        self.assertEqual(tags_after_delete[0][0], grammar_tag_id)
+
+        self.repository.delete_tag_type(custom_type_id)
+        remaining_type_ids = [tag_type_id for tag_type_id, _name, _is_predefined in self.repository.list_tag_types()]
+        self.assertNotIn(custom_type_id, remaining_type_ids)
+
+    def test_predefined_tag_type_and_tag_cannot_be_deleted(self) -> None:
+        tag_types = self.repository.list_tag_types()
+        part_of_speech_type_id = next(tag_type_id for tag_type_id, name, _is_predefined in tag_types if name == "part_of_speech")
+
+        with self.assertRaises(ValueError):
+            self.repository.delete_tag_type(part_of_speech_type_id)
+
+        part_of_speech_tags = self.repository.list_tags(tag_type_id=part_of_speech_type_id)
+        noun_tag_id = next(tag_id for tag_id, _type_id, _type_name, tag_name, _type_predefined, _tag_predefined in part_of_speech_tags if tag_name == "noun")
+        with self.assertRaises(ValueError):
+            self.repository.delete_tag(noun_tag_id)
+
+    def test_set_and_get_entry_tags(self) -> None:
+        entry = self.repository.add_entry("語る", "かたる", "to tell")
+        topic_type_id = self.repository.add_tag_type("topic")
+        story_tag_id = self.repository.add_tag(topic_type_id, "story")
+        media_tag_id = self.repository.add_tag(topic_type_id, "media")
+
+        self.repository.set_entry_tags(entry.id, [story_tag_id, media_tag_id])
+        entry_tags = self.repository.get_entry_tags(entry.id, include_part_of_speech=False)
+        self.assertEqual({tag_id for tag_id, _type_id, _type_name, _tag_name in entry_tags}, {story_tag_id, media_tag_id})
+
+        self.repository.set_entry_tags(entry.id, [story_tag_id])
+        entry_tags_after_replace = self.repository.get_entry_tags(entry.id, include_part_of_speech=False)
+        self.assertEqual({tag_id for tag_id, _type_id, _type_name, _tag_name in entry_tags_after_replace}, {story_tag_id})
+
+    def test_list_entries_with_stats_filters_by_all_selected_tags(self) -> None:
+        created = self.repository.add_entries(
+            [
+                ("読む", "よむ", "to read", "verb"),
+                ("書く", "かく", "to write", "verb"),
+                ("青", "あお", "blue", "noun"),
+            ]
+        )
+        first_id, second_id, third_id = [entry.id for entry in created]
+
+        topic_type_id = self.repository.add_tag_type("topic")
+        exam_tag_id = self.repository.add_tag(topic_type_id, "exam")
+        daily_tag_id = self.repository.add_tag(topic_type_id, "daily")
+
+        self.repository.set_entry_tags(first_id, [exam_tag_id, daily_tag_id])
+        self.repository.set_entry_tags(second_id, [exam_tag_id])
+        self.repository.set_entry_tags(third_id, [daily_tag_id])
+
+        filtered_rows = self.repository.list_entries_with_stats(
+            sort_mode="time",
+            time_order="oldest",
+            filter_tag_ids=[exam_tag_id, daily_tag_id],
+            filter_match_mode="all",
+            target_language_code="JP",
+        )
+        filtered_ids = [entry.id for entry, _test_count, _error_count, _tier in filtered_rows]
+        self.assertEqual(filtered_ids, [first_id])
+
+    def test_list_entries_with_stats_supports_tag_sort_mode(self) -> None:
+        created = self.repository.add_entries(
+            [
+                ("読む", "よむ", "to read", "verb"),
+                ("書く", "かく", "to write", "verb"),
+                ("青", "あお", "blue", "noun"),
+            ]
+        )
+        first_id, second_id, third_id = [entry.id for entry in created]
+
+        topic_type_id = self.repository.add_tag_type("topic")
+        alpha_tag_id = self.repository.add_tag(topic_type_id, "alpha")
+        beta_tag_id = self.repository.add_tag(topic_type_id, "beta")
+
+        self.repository.set_entry_tags(first_id, [alpha_tag_id])
+        self.repository.set_entry_tags(second_id, [beta_tag_id])
+
+        rows = self.repository.list_entries_with_stats(
+            sort_mode="tags",
+            time_order="newest",
+            target_language_code="JP",
+        )
+        sorted_ids = [entry.id for entry, _test_count, _error_count, _tier in rows]
+        self.assertEqual(sorted_ids, [third_id, first_id, second_id])
+
+    def test_part_of_speech_field_syncs_to_part_of_speech_tags(self) -> None:
+        entry = self.repository.add_entry("考える", "かんがえる", "to think", "verb")
+        part_of_speech_tags = self.repository.get_entry_tags(entry.id)
+        self.assertIn(
+            ("part_of_speech", "verb"),
+            {(type_name, tag_name) for _tag_id, _type_id, type_name, tag_name in part_of_speech_tags},
+        )
+
+        self.repository.update_entry(entry.id, "考える", "かんがえる", "to think", "noun")
+        updated_tags = self.repository.get_entry_tags(entry.id)
+        self.assertIn(
+            ("part_of_speech", "noun"),
+            {(type_name, tag_name) for _tag_id, _type_id, type_name, tag_name in updated_tags},
+        )
+        self.assertNotIn(
+            ("part_of_speech", "verb"),
+            {(type_name, tag_name) for _tag_id, _type_id, type_name, tag_name in updated_tags},
+        )
+
+        self.repository.update_entry(entry.id, "考える", "かんがえる", "to think", "")
+        cleared_tags = self.repository.get_entry_tags(entry.id)
+        self.assertNotIn(
+            "part_of_speech",
+            {type_name for _tag_id, _type_id, type_name, _tag_name in cleared_tags},
+        )
+
+    def test_tag_types_are_scoped_by_target_language(self) -> None:
+        jp_types = {name for _id, name, _is_predefined in self.repository.list_tag_types("JP")}
+        self.assertIn("difficulty", jp_types)
+
+        self.repository.set_language_settings("EN", "JP")
+        en_types = {name for _id, name, _is_predefined in self.repository.list_tag_types("EN")}
+        self.assertIn("difficulty", en_types)
+
+        self.repository.add_tag_type("news", target_language_code="EN")
+        en_types_after_add = {name for _id, name, _is_predefined in self.repository.list_tag_types("EN")}
+        jp_types_after_add = {name for _id, name, _is_predefined in self.repository.list_tag_types("JP")}
+
+        self.assertIn("news", en_types_after_add)
+        self.assertNotIn("news", jp_types_after_add)
 
     def test_count_distinct_english_meanings_normalizes_case_and_spaces(self) -> None:
         self.repository.add_entries(

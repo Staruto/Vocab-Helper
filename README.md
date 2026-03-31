@@ -23,11 +23,16 @@ Simple JP <-> EN vocabulary memorization helper with a desktop GUI.
 - Classifies entries into priority tiers: gray, green, yellow, red
 - Supports tier color highlighting in the list view (enabled by default, toggleable)
 - Supports list sorting by creation time or by tier-based stats priority
+- Supports list sorting by tags for the current target-language tag scope
 - Supports creation-time order selection (newest first or oldest first)
 - Supports test pick preference strategy selection: strict or weighted
 - Supports manual priority increase/decrease from the context menu (except gray tier)
 - Refreshes the main list immediately after closing a test dialog
 - Supports optional part of speech metadata for each vocabulary
+- Supports typed tags for vocabularies (user-defined types and tags)
+- Includes predefined tag types: `part_of_speech` and `difficulty` (`N5`, `N4`, `N3`, `N2`, `N1`)
+- Supports per-target-language tag scopes (each target language keeps its own tag catalog)
+- Supports tag filtering in Home with ALL-match semantics across selected tags
 - Supports editable markdown details for each vocabulary with in-app display mode
 - Tracks latest practice date per vocabulary
 - Shows a GitHub-style contributions grid for daily practice activity (last 180 days)
@@ -80,15 +85,33 @@ python -m unittest discover -s tests -p "test_*.py"
 	- Assistant language: `EN`
 - Target and assistant languages must be different
 - List column headers and entry/detail forms update to match current language settings
+- Tag catalogs are scoped by target language
+
+## Tags and filtering
+
+- Click `Tags` in the Home settings row to open Tag Manager
+- Tag Manager supports:
+	- Creating/deleting custom tag types
+	- Creating/deleting tags under each type
+	- Protecting predefined types/tags from deletion
+- Predefined types:
+	- `part_of_speech`: noun, verb, adjective, adverb, expression, particle, auxiliary, other
+	- `difficulty`: N5, N4, N3, N2, N1
+- Entry Add/Edit and Detail pages support selecting multiple tags
+- `Part of speech` field stays available and synchronizes to `part_of_speech` tags automatically
+- Use `Filter tags` in Home to select filter tags
+- Filter behavior is `ALL`: a vocabulary must contain every selected tag to be shown
+- `Clear filter` removes all active tag filtering
 
 ## Entry metadata and detail page
 
 - Add/Edit dialogs support optional `Part of speech`
+- Add/Edit dialogs support optional multi-tag assignment
 - Open detail page by:
 	- Double-clicking a vocabulary row, or
 	- Right-click row -> `View details`
 - Detail page includes:
-	- Editable top fields (target text, kana, assistant meaning, part of speech)
+	- Editable top fields (target text, kana, assistant meaning, part of speech, tags)
 	- Stats summary (tests, errors, tier, created time)
 	- Latest practice date
 	- Markdown details section with `Edit markdown` and display mode

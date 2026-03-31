@@ -18,6 +18,17 @@ from .validators import (
 
 class VocabRepository:
     ERROR_COUNT_RECOVERY_CHANCE = 0.35
+    PREDEFINED_PART_OF_SPEECH_TAGS = (
+        "noun",
+        "verb",
+        "adjective",
+        "adverb",
+        "expression",
+        "particle",
+        "auxiliary",
+        "other",
+    )
+    PREDEFINED_DIFFICULTY_TAGS = ("N5", "N4", "N3", "N2", "N1")
 
     def __init__(self, db_path: Path | str) -> None:
         self.db_path = Path(db_path)
@@ -82,6 +93,46 @@ class VocabRepository:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS tag_types (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    target_language_code TEXT NOT NULL,
+                    name TEXT NOT NULL COLLATE NOCASE,
+                    is_predefined INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (target_language_code, name)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS tags (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tag_type_id INTEGER NOT NULL,
+                    name TEXT NOT NULL COLLATE NOCASE,
+                    is_predefined INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (tag_type_id, name),
+                    FOREIGN KEY (tag_type_id) REFERENCES tag_types(id) ON DELETE CASCADE
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS entry_tags (
+                    entry_id INTEGER NOT NULL,
+                    tag_id INTEGER NOT NULL,
+                    added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (entry_id, tag_id),
+                    FOREIGN KEY (entry_id) REFERENCES vocab_entries(id) ON DELETE CASCADE,
+                    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+                )
+                """
+            )
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_entry_tags_entry_id ON entry_tags(entry_id)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_entry_tags_tag_id ON entry_tags(tag_id)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_tags_tag_type_id ON tags(tag_type_id)")
 
             # Backward-compatible migrations for existing databases.
             self._ensure_column(connection, "vocab_entries", "part_of_speech", "TEXT NULL")
@@ -101,6 +152,10 @@ class VocabRepository:
                 ON CONFLICT(key) DO NOTHING
                 """
             )
+
+            target_language_code = self._read_target_language_from_connection(connection)
+            self._ensure_predefined_tags(connection, target_language_code)
+            self._migrate_legacy_part_of_speech_tags(connection, target_language_code)
             connection.commit()
         finally:
             connection.close()
@@ -112,6 +167,235 @@ class VocabRepository:
         if column_name in existing_columns:
             return
         connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
+
+    @staticmethod
+    def _read_target_language_from_connection(connection: sqlite3.Connection) -> str:
+        row = connection.execute(
+            """
+            SELECT value
+            FROM app_settings
+            WHERE key = 'target_language'
+            """
+        ).fetchone()
+        if row is None or row[0] is None:
+            return "JP"
+        try:
+            return validate_language_code(str(row[0]), "Target language")
+        except ValidationError:
+            return "JP"
+
+    @staticmethod
+    def _normalize_tag_name(value: str, label: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValidationError(f"{label} cannot be empty.")
+        return normalized
+
+    def _resolve_target_language_code(self, target_language_code: str | None) -> str:
+        if target_language_code is None:
+            current_target, _assistant = self.get_language_settings()
+            return current_target
+        return validate_language_code(target_language_code, "Target language")
+
+    def _get_tag_type_id_by_name(
+        self,
+        connection: sqlite3.Connection,
+        target_language_code: str,
+        type_name: str,
+    ) -> int | None:
+        row = connection.execute(
+            """
+            SELECT id
+            FROM tag_types
+            WHERE target_language_code = ?
+              AND name = ?
+            """,
+            (target_language_code, type_name),
+        ).fetchone()
+        if row is None:
+            return None
+        return int(row[0])
+
+    def _get_or_create_tag_type(
+        self,
+        connection: sqlite3.Connection,
+        target_language_code: str,
+        type_name: str,
+        is_predefined: bool,
+    ) -> int:
+        normalized_name = self._normalize_tag_name(type_name, "Tag type")
+        existing = connection.execute(
+            """
+            SELECT id, is_predefined
+            FROM tag_types
+            WHERE target_language_code = ?
+              AND name = ?
+            """,
+            (target_language_code, normalized_name),
+        ).fetchone()
+        if existing is not None:
+            tag_type_id = int(existing[0])
+            if is_predefined and int(existing[1]) == 0:
+                connection.execute(
+                    """
+                    UPDATE tag_types
+                    SET is_predefined = 1
+                    WHERE id = ?
+                    """,
+                    (tag_type_id,),
+                )
+            return tag_type_id
+
+        cursor = connection.execute(
+            """
+            INSERT INTO tag_types (target_language_code, name, is_predefined)
+            VALUES (?, ?, ?)
+            """,
+            (target_language_code, normalized_name, 1 if is_predefined else 0),
+        )
+        return int(cursor.lastrowid)
+
+    def _get_or_create_tag(
+        self,
+        connection: sqlite3.Connection,
+        tag_type_id: int,
+        tag_name: str,
+        is_predefined: bool,
+    ) -> int:
+        normalized_name = self._normalize_tag_name(tag_name, "Tag")
+        existing = connection.execute(
+            """
+            SELECT id, is_predefined
+            FROM tags
+            WHERE tag_type_id = ?
+              AND name = ?
+            """,
+            (tag_type_id, normalized_name),
+        ).fetchone()
+        if existing is not None:
+            tag_id = int(existing[0])
+            if is_predefined and int(existing[1]) == 0:
+                connection.execute(
+                    """
+                    UPDATE tags
+                    SET is_predefined = 1
+                    WHERE id = ?
+                    """,
+                    (tag_id,),
+                )
+            return tag_id
+
+        cursor = connection.execute(
+            """
+            INSERT INTO tags (tag_type_id, name, is_predefined)
+            VALUES (?, ?, ?)
+            """,
+            (tag_type_id, normalized_name, 1 if is_predefined else 0),
+        )
+        return int(cursor.lastrowid)
+
+    def _ensure_predefined_tags(self, connection: sqlite3.Connection, target_language_code: str) -> None:
+        part_of_speech_type_id = self._get_or_create_tag_type(
+            connection,
+            target_language_code,
+            "part_of_speech",
+            is_predefined=True,
+        )
+        for tag_name in self.PREDEFINED_PART_OF_SPEECH_TAGS:
+            self._get_or_create_tag(connection, part_of_speech_type_id, tag_name, is_predefined=True)
+
+        difficulty_type_id = self._get_or_create_tag_type(
+            connection,
+            target_language_code,
+            "difficulty",
+            is_predefined=True,
+        )
+        for tag_name in self.PREDEFINED_DIFFICULTY_TAGS:
+            self._get_or_create_tag(connection, difficulty_type_id, tag_name, is_predefined=True)
+
+    def _migrate_legacy_part_of_speech_tags(self, connection: sqlite3.Connection, target_language_code: str) -> None:
+        part_of_speech_type_id = self._get_tag_type_id_by_name(connection, target_language_code, "part_of_speech")
+        if part_of_speech_type_id is None:
+            return
+
+        rows = connection.execute(
+            """
+            SELECT id, part_of_speech
+            FROM vocab_entries
+            WHERE TRIM(COALESCE(part_of_speech, '')) <> ''
+            """
+        ).fetchall()
+
+        predefined_set = {value.lower() for value in self.PREDEFINED_PART_OF_SPEECH_TAGS}
+        for row in rows:
+            entry_id = int(row[0])
+            normalized_part_of_speech = normalize_optional_text(str(row[1]))
+            if normalized_part_of_speech is None:
+                continue
+
+            is_predefined = normalized_part_of_speech.lower() in predefined_set
+            tag_id = self._get_or_create_tag(
+                connection,
+                part_of_speech_type_id,
+                normalized_part_of_speech,
+                is_predefined=is_predefined,
+            )
+            connection.execute(
+                """
+                INSERT INTO entry_tags (entry_id, tag_id)
+                VALUES (?, ?)
+                ON CONFLICT(entry_id, tag_id) DO NOTHING
+                """,
+                (entry_id, tag_id),
+            )
+
+    def _sync_entry_part_of_speech_tag(
+        self,
+        connection: sqlite3.Connection,
+        entry_id: int,
+        part_of_speech: str | None,
+        target_language_code: str,
+    ) -> None:
+        part_of_speech_type_id = self._get_or_create_tag_type(
+            connection,
+            target_language_code,
+            "part_of_speech",
+            is_predefined=True,
+        )
+
+        connection.execute(
+            """
+            DELETE FROM entry_tags
+            WHERE entry_id = ?
+              AND tag_id IN (
+                  SELECT t.id
+                  FROM tags AS t
+                  WHERE t.tag_type_id = ?
+              )
+            """,
+            (entry_id, part_of_speech_type_id),
+        )
+
+        normalized_part_of_speech = normalize_optional_text(part_of_speech or "")
+        if normalized_part_of_speech is None:
+            return
+
+        predefined_set = {value.lower() for value in self.PREDEFINED_PART_OF_SPEECH_TAGS}
+        is_predefined = normalized_part_of_speech.lower() in predefined_set
+        tag_id = self._get_or_create_tag(
+            connection,
+            part_of_speech_type_id,
+            normalized_part_of_speech,
+            is_predefined=is_predefined,
+        )
+        connection.execute(
+            """
+            INSERT INTO entry_tags (entry_id, tag_id)
+            VALUES (?, ?)
+            ON CONFLICT(entry_id, tag_id) DO NOTHING
+            """,
+            (entry_id, tag_id),
+        )
 
     def get_setting(self, key: str, default: str | None = None) -> str | None:
         connection = sqlite3.connect(self.db_path)
@@ -188,6 +472,8 @@ class VocabRepository:
                 """,
                 (assistant,),
             )
+            self._ensure_predefined_tags(connection, target)
+            self._migrate_legacy_part_of_speech_tags(connection, target)
             connection.commit()
         finally:
             connection.close()
@@ -268,8 +554,13 @@ class VocabRepository:
         self,
         sort_mode: str = "time",
         time_order: str = "newest",
+        filter_tag_ids: Iterable[int] | None = None,
+        filter_match_mode: str = "all",
+        target_language_code: str | None = None,
     ) -> list[tuple[VocabEntry, int, int, str]]:
+        resolved_target_language_code = self._resolve_target_language_code(target_language_code)
         order_by = "ORDER BY e.id DESC"
+        order_params: list[object] = []
         if sort_mode == "stats":
             order_by = (
                 "ORDER BY "
@@ -281,8 +572,58 @@ class VocabRepository:
                 "COALESCE(s.error_count, 0) DESC, "
                 "e.id DESC"
             )
+        elif sort_mode == "tags":
+            order_by = (
+                "ORDER BY COALESCE(("
+                "SELECT GROUP_CONCAT(tt.name || ':' || t.name, '|') "
+                "FROM entry_tags AS et "
+                "INNER JOIN tags AS t ON t.id = et.tag_id "
+                "INNER JOIN tag_types AS tt ON tt.id = t.tag_type_id "
+                "WHERE et.entry_id = e.id "
+                "AND tt.target_language_code = ?"
+                "), '') ASC, "
+                "e.id DESC"
+            )
+            order_params.append(resolved_target_language_code)
         elif time_order == "oldest":
             order_by = "ORDER BY e.id ASC"
+
+        unique_filter_tag_ids = sorted({int(tag_id) for tag_id in (filter_tag_ids or [])})
+        normalized_match_mode = filter_match_mode.lower().strip()
+        if normalized_match_mode not in {"all", "any"}:
+            normalized_match_mode = "all"
+
+        where_clause = ""
+        params: list[object] = []
+        if unique_filter_tag_ids:
+            placeholders = ",".join("?" for _ in unique_filter_tag_ids)
+            params.extend([resolved_target_language_code, *unique_filter_tag_ids])
+
+            if normalized_match_mode == "all":
+                where_clause = (
+                    "WHERE e.id IN ("
+                    "SELECT et.entry_id "
+                    "FROM entry_tags AS et "
+                    "INNER JOIN tags AS t ON t.id = et.tag_id "
+                    "INNER JOIN tag_types AS tt ON tt.id = t.tag_type_id "
+                    "WHERE tt.target_language_code = ? "
+                    f"AND et.tag_id IN ({placeholders}) "
+                    "GROUP BY et.entry_id "
+                    "HAVING COUNT(DISTINCT et.tag_id) = ?"
+                    ")"
+                )
+                params.append(len(unique_filter_tag_ids))
+            else:
+                where_clause = (
+                    "WHERE e.id IN ("
+                    "SELECT et.entry_id "
+                    "FROM entry_tags AS et "
+                    "INNER JOIN tags AS t ON t.id = et.tag_id "
+                    "INNER JOIN tag_types AS tt ON tt.id = t.tag_type_id "
+                    "WHERE tt.target_language_code = ? "
+                    f"AND et.tag_id IN ({placeholders})"
+                    ")"
+                )
 
         connection = sqlite3.connect(self.db_path)
         try:
@@ -302,8 +643,10 @@ class VocabRepository:
                 FROM vocab_entries AS e
                 LEFT JOIN vocab_stats AS s
                     ON s.entry_id = e.id
+                {where_clause}
                 {order_by}
-                """
+                """,
+                tuple(params + order_params),
             )
 
             result: list[tuple[VocabEntry, int, int, str]] = []
@@ -314,6 +657,289 @@ class VocabRepository:
                 tier = self._tier_from_counts(test_count, error_count)
                 result.append((entry, test_count, error_count, tier))
             return result
+        finally:
+            connection.close()
+
+    def list_tag_types(self, target_language_code: str | None = None) -> list[tuple[int, str, bool]]:
+        resolved_target_language_code = self._resolve_target_language_code(target_language_code)
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            rows = connection.execute(
+                """
+                SELECT id, name, is_predefined
+                FROM tag_types
+                WHERE target_language_code = ?
+                ORDER BY is_predefined DESC, name ASC
+                """,
+                (resolved_target_language_code,),
+            ).fetchall()
+            return [(int(row[0]), str(row[1]), bool(row[2])) for row in rows]
+        finally:
+            connection.close()
+
+    def add_tag_type(self, name: str, target_language_code: str | None = None) -> int:
+        resolved_target_language_code = self._resolve_target_language_code(target_language_code)
+        normalized_name = self._normalize_tag_name(name, "Tag type")
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            cursor = connection.execute(
+                """
+                INSERT INTO tag_types (target_language_code, name, is_predefined)
+                VALUES (?, ?, 0)
+                """,
+                (resolved_target_language_code, normalized_name),
+            )
+            connection.commit()
+            return int(cursor.lastrowid)
+        except sqlite3.IntegrityError as exc:
+            raise ValidationError(f"Tag type '{normalized_name}' already exists.") from exc
+        finally:
+            connection.close()
+
+    def delete_tag_type(self, tag_type_id: int) -> None:
+        connection = sqlite3.connect(self.db_path)
+        try:
+            row = connection.execute(
+                """
+                SELECT is_predefined
+                FROM tag_types
+                WHERE id = ?
+                """,
+                (tag_type_id,),
+            ).fetchone()
+            if row is None:
+                raise LookupError(f"Tag type with id {tag_type_id} was not found.")
+            if int(row[0]) == 1:
+                raise ValueError("Predefined tag types cannot be deleted.")
+
+            connection.execute(
+                """
+                DELETE FROM tag_types
+                WHERE id = ?
+                """,
+                (tag_type_id,),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def list_tags(
+        self,
+        target_language_code: str | None = None,
+        tag_type_id: int | None = None,
+        include_part_of_speech: bool = True,
+    ) -> list[tuple[int, int, str, str, bool, bool]]:
+        resolved_target_language_code = self._resolve_target_language_code(target_language_code)
+
+        where_clauses = ["tt.target_language_code = ?"]
+        params: list[object] = [resolved_target_language_code]
+
+        if tag_type_id is not None:
+            where_clauses.append("tt.id = ?")
+            params.append(int(tag_type_id))
+        if not include_part_of_speech:
+            where_clauses.append("LOWER(tt.name) <> 'part_of_speech'")
+
+        where_sql = " AND ".join(where_clauses)
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            rows = connection.execute(
+                f"""
+                SELECT
+                    t.id,
+                    tt.id,
+                    tt.name,
+                    t.name,
+                    tt.is_predefined,
+                    t.is_predefined
+                FROM tags AS t
+                INNER JOIN tag_types AS tt
+                    ON tt.id = t.tag_type_id
+                WHERE {where_sql}
+                ORDER BY tt.name ASC, t.name ASC
+                """,
+                tuple(params),
+            ).fetchall()
+            return [
+                (int(row[0]), int(row[1]), str(row[2]), str(row[3]), bool(row[4]), bool(row[5]))
+                for row in rows
+            ]
+        finally:
+            connection.close()
+
+    def add_tag(self, tag_type_id: int, name: str) -> int:
+        normalized_name = self._normalize_tag_name(name, "Tag")
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            type_row = connection.execute(
+                """
+                SELECT id
+                FROM tag_types
+                WHERE id = ?
+                """,
+                (tag_type_id,),
+            ).fetchone()
+            if type_row is None:
+                raise LookupError(f"Tag type with id {tag_type_id} was not found.")
+
+            cursor = connection.execute(
+                """
+                INSERT INTO tags (tag_type_id, name, is_predefined)
+                VALUES (?, ?, 0)
+                """,
+                (tag_type_id, normalized_name),
+            )
+            connection.commit()
+            return int(cursor.lastrowid)
+        except sqlite3.IntegrityError as exc:
+            raise ValidationError(f"Tag '{normalized_name}' already exists in this type.") from exc
+        finally:
+            connection.close()
+
+    def delete_tag(self, tag_id: int) -> None:
+        connection = sqlite3.connect(self.db_path)
+        try:
+            row = connection.execute(
+                """
+                SELECT is_predefined
+                FROM tags
+                WHERE id = ?
+                """,
+                (tag_id,),
+            ).fetchone()
+            if row is None:
+                raise LookupError(f"Tag with id {tag_id} was not found.")
+            if int(row[0]) == 1:
+                raise ValueError("Predefined tags cannot be deleted.")
+
+            connection.execute(
+                """
+                DELETE FROM tags
+                WHERE id = ?
+                """,
+                (tag_id,),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def get_entry_tags(
+        self,
+        entry_id: int,
+        target_language_code: str | None = None,
+        include_part_of_speech: bool = True,
+    ) -> list[tuple[int, int, str, str]]:
+        resolved_target_language_code = self._resolve_target_language_code(target_language_code)
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            entry_exists = connection.execute(
+                """
+                SELECT 1
+                FROM vocab_entries
+                WHERE id = ?
+                """,
+                (entry_id,),
+            ).fetchone()
+            if entry_exists is None:
+                raise LookupError(f"Vocabulary entry with id {entry_id} was not found.")
+
+            where_clauses = ["tt.target_language_code = ?", "et.entry_id = ?"]
+            params: list[object] = [resolved_target_language_code, entry_id]
+            if not include_part_of_speech:
+                where_clauses.append("LOWER(tt.name) <> 'part_of_speech'")
+
+            where_sql = " AND ".join(where_clauses)
+            rows = connection.execute(
+                f"""
+                SELECT t.id, tt.id, tt.name, t.name
+                FROM entry_tags AS et
+                INNER JOIN tags AS t
+                    ON t.id = et.tag_id
+                INNER JOIN tag_types AS tt
+                    ON tt.id = t.tag_type_id
+                WHERE {where_sql}
+                ORDER BY tt.name ASC, t.name ASC
+                """,
+                tuple(params),
+            ).fetchall()
+            return [(int(row[0]), int(row[1]), str(row[2]), str(row[3])) for row in rows]
+        finally:
+            connection.close()
+
+    def set_entry_tags(
+        self,
+        entry_id: int,
+        tag_ids: Iterable[int],
+        target_language_code: str | None = None,
+        include_part_of_speech: bool = False,
+    ) -> None:
+        resolved_target_language_code = self._resolve_target_language_code(target_language_code)
+        unique_tag_ids = sorted({int(tag_id) for tag_id in tag_ids})
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            entry_exists = connection.execute(
+                """
+                SELECT 1
+                FROM vocab_entries
+                WHERE id = ?
+                """,
+                (entry_id,),
+            ).fetchone()
+            if entry_exists is None:
+                raise LookupError(f"Vocabulary entry with id {entry_id} was not found.")
+
+            valid_tag_ids: set[int] = set()
+            if unique_tag_ids:
+                placeholders = ",".join("?" for _ in unique_tag_ids)
+                rows = connection.execute(
+                    f"""
+                    SELECT t.id
+                    FROM tags AS t
+                    INNER JOIN tag_types AS tt
+                        ON tt.id = t.tag_type_id
+                    WHERE tt.target_language_code = ?
+                      AND t.id IN ({placeholders})
+                      {'AND LOWER(tt.name) <> \'part_of_speech\'' if not include_part_of_speech else ''}
+                    """,
+                    (resolved_target_language_code, *unique_tag_ids),
+                ).fetchall()
+                valid_tag_ids = {int(row[0]) for row in rows}
+                if len(valid_tag_ids) != len(unique_tag_ids):
+                    raise ValidationError("One or more selected tags are invalid for the current target language.")
+
+            connection.execute(
+                f"""
+                DELETE FROM entry_tags
+                WHERE entry_id = ?
+                  AND tag_id IN (
+                      SELECT t.id
+                      FROM tags AS t
+                      INNER JOIN tag_types AS tt
+                          ON tt.id = t.tag_type_id
+                      WHERE tt.target_language_code = ?
+                      {'AND LOWER(tt.name) <> \'part_of_speech\'' if not include_part_of_speech else ''}
+                  )
+                """,
+                (entry_id, resolved_target_language_code),
+            )
+
+            for tag_id in sorted(valid_tag_ids):
+                connection.execute(
+                    """
+                    INSERT INTO entry_tags (entry_id, tag_id)
+                    VALUES (?, ?)
+                    ON CONFLICT(entry_id, tag_id) DO NOTHING
+                    """,
+                    (entry_id, tag_id),
+                )
+
+            connection.commit()
         finally:
             connection.close()
 
@@ -698,6 +1324,8 @@ class VocabRepository:
         connection = sqlite3.connect(self.db_path)
         try:
             connection.row_factory = sqlite3.Row
+            target_language_code = self._read_target_language_from_connection(connection)
+            self._ensure_predefined_tags(connection, target_language_code)
 
             inserted_ids: list[int] = []
             for japanese, kana, english, part_of_speech, details_markdown in normalized_entries:
@@ -709,6 +1337,18 @@ class VocabRepository:
                     (japanese, kana, english, part_of_speech, details_markdown),
                 )
                 inserted_ids.append(int(cursor.lastrowid))
+
+            for inserted_id, (_japanese, _kana, _english, part_of_speech, _details_markdown) in zip(
+                inserted_ids,
+                normalized_entries,
+                strict=True,
+            ):
+                self._sync_entry_part_of_speech_tag(
+                    connection,
+                    inserted_id,
+                    part_of_speech,
+                    target_language_code,
+                )
 
             placeholders = ",".join("?" for _ in inserted_ids)
             rows = connection.execute(
@@ -766,6 +1406,9 @@ class VocabRepository:
         row: sqlite3.Row | None = None
         try:
             connection.row_factory = sqlite3.Row
+            target_language_code = self._read_target_language_from_connection(connection)
+            self._ensure_predefined_tags(connection, target_language_code)
+
             cursor = connection.execute(
                 """
                 UPDATE vocab_entries
@@ -776,6 +1419,13 @@ class VocabRepository:
             )
             if cursor.rowcount == 0:
                 raise LookupError(f"Vocabulary entry with id {entry_id} was not found.")
+
+            self._sync_entry_part_of_speech_tag(
+                connection,
+                entry_id,
+                normalized_part_of_speech,
+                target_language_code,
+            )
 
             row = connection.execute(
                 """
@@ -862,6 +1512,13 @@ class VocabRepository:
             connection.execute(
                 f"""
                 DELETE FROM practice_daily_error_recovery
+                WHERE entry_id IN ({placeholders})
+                """,
+                tuple(unique_ids),
+            )
+            connection.execute(
+                f"""
+                DELETE FROM entry_tags
                 WHERE entry_id IN ({placeholders})
                 """,
                 tuple(unique_ids),

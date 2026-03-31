@@ -4,7 +4,7 @@ from datetime import date, timedelta
 import sqlite3
 import tkinter as tk
 import tkinter.font as tkfont
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 from typing import Callable
 
 from .db import VocabRepository
@@ -195,6 +195,8 @@ class MainWindow(tk.Tk):
         self.sort_mode_var = tk.StringVar(value="time")
         self.time_order_var = tk.StringVar(value="newest")
         self.test_pick_strategy_var = tk.StringVar(value="strict")
+        self.active_filter_tag_ids: list[int] = []
+        self.tag_filter_summary_var = tk.StringVar(value="Tag filter: All")
 
         self.title("JP <-> EN Vocabulary Helper")
         self.geometry("900x580")
@@ -342,7 +344,7 @@ class MainWindow(tk.Tk):
 
         settings_row = ttk.Frame(home_page, padding=(0, 8, 0, 0))
         settings_row.grid(row=2, column=0, sticky="ew")
-        settings_row.columnconfigure(8, weight=1)
+        settings_row.columnconfigure(9, weight=1)
 
         ttk.Checkbutton(
             settings_row,
@@ -354,7 +356,7 @@ class MainWindow(tk.Tk):
         ttk.Label(settings_row, text="Sort", style="App.TLabel").grid(row=0, column=1, sticky="w")
         self.sort_mode_combo = ttk.Combobox(
             settings_row,
-            values=("time", "stats"),
+            values=("time", "stats", "tags"),
             state="readonly",
             width=8,
             textvariable=self.sort_mode_var,
@@ -391,11 +393,42 @@ class MainWindow(tk.Tk):
             style="App.TButton",
         ).grid(row=0, column=7, sticky="w", padx=(10, 0))
 
+        ttk.Button(
+            settings_row,
+            text="Tags",
+            command=self._open_tag_manager_dialog,
+            style="App.TButton",
+        ).grid(row=0, column=8, sticky="w", padx=(8, 0))
+
+        filter_row = ttk.Frame(home_page, padding=(0, 6, 0, 0))
+        filter_row.grid(row=3, column=0, sticky="ew")
+        filter_row.columnconfigure(2, weight=1)
+
+        ttk.Button(
+            filter_row,
+            text="Filter tags",
+            command=self._open_tag_filter_dialog,
+            style="App.TButton",
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Button(
+            filter_row,
+            text="Clear filter",
+            command=self._clear_tag_filter,
+            style="App.TButton",
+        ).grid(row=0, column=1, sticky="w", padx=(8, 0))
+        ttk.Label(filter_row, textvariable=self.tag_filter_summary_var, style="Status.TLabel").grid(
+            row=0,
+            column=2,
+            sticky="w",
+            padx=(12, 0),
+        )
+
         self._update_sort_controls()
         self._refresh_language_labels()
+        self._refresh_tag_filter_summary()
 
         status_row = ttk.Frame(home_page, padding=(0, 8, 0, 0))
-        status_row.grid(row=3, column=0, sticky="ew")
+        status_row.grid(row=4, column=0, sticky="ew")
         status_row.columnconfigure(0, weight=1)
 
         self.count_label = ttk.Label(status_row, text="Total vocabularies: 0", style="Status.TLabel")
@@ -487,6 +520,9 @@ class MainWindow(tk.Tk):
         entries_with_stats = self.repository.list_entries_with_stats(
             sort_mode=self.sort_mode_var.get(),
             time_order=self.time_order_var.get(),
+            filter_tag_ids=self.active_filter_tag_ids,
+            filter_match_mode="all",
+            target_language_code=self.target_language_code,
         )
 
         for entry, test_count, error_count, tier in entries_with_stats:
@@ -503,8 +539,73 @@ class MainWindow(tk.Tk):
             self._tree_entry_ids[item_id] = entry.id
             self._entry_stats_by_id[entry.id] = (test_count, error_count, tier)
 
-        self.count_label.configure(text=f"Total vocabularies: {len(entries_with_stats)}")
+        if self.active_filter_tag_ids:
+            total_count = self.repository.count_entries()
+            self.count_label.configure(text=f"Visible vocabularies: {len(entries_with_stats)} / {total_count}")
+        else:
+            self.count_label.configure(text=f"Total vocabularies: {len(entries_with_stats)}")
         self._refresh_activity_grid()
+
+    def _refresh_tag_filter_summary(self) -> None:
+        try:
+            available_tags = self.repository.list_tags(target_language_code=self.target_language_code)
+        except sqlite3.Error:
+            self.tag_filter_summary_var.set("Tag filter: unavailable")
+            return
+
+        label_by_id = {
+            tag_id: f"{type_name}:{tag_name}"
+            for tag_id, _type_id, type_name, tag_name, _type_predefined, _tag_predefined in available_tags
+        }
+        self.active_filter_tag_ids = [tag_id for tag_id in self.active_filter_tag_ids if tag_id in label_by_id]
+        if not self.active_filter_tag_ids:
+            self.tag_filter_summary_var.set("Tag filter: All")
+            return
+
+        selected_labels = [label_by_id[tag_id] for tag_id in self.active_filter_tag_ids]
+        preview = ", ".join(selected_labels[:3])
+        if len(selected_labels) > 3:
+            preview += f", +{len(selected_labels) - 3} more"
+        self.tag_filter_summary_var.set(f"Tag filter (ALL): {preview}")
+
+    def _open_tag_manager_dialog(self) -> None:
+        dialog = TagManagerDialog(
+            self,
+            repository=self.repository,
+            target_language_code=self.target_language_code,
+            text_font=self.fonts["latin"],
+        )
+        self.wait_window(dialog)
+
+        if dialog.changed:
+            self._refresh_tag_filter_summary()
+            self.refresh_entries()
+
+    def _open_tag_filter_dialog(self) -> None:
+        dialog = TagSelectionDialog(
+            self,
+            repository=self.repository,
+            target_language_code=self.target_language_code,
+            selected_tag_ids=self.active_filter_tag_ids,
+            include_part_of_speech=True,
+            title="Filter by tags",
+            text_font=self.fonts["latin"],
+        )
+        self.wait_window(dialog)
+        if dialog.result is None:
+            return
+
+        self.active_filter_tag_ids = list(dialog.result)
+        self._refresh_tag_filter_summary()
+        self.refresh_entries()
+
+    def _clear_tag_filter(self) -> None:
+        if not self.active_filter_tag_ids:
+            return
+
+        self.active_filter_tag_ids = []
+        self._refresh_tag_filter_summary()
+        self.refresh_entries()
 
     @staticmethod
     def _activity_level(count: int) -> int:
@@ -686,18 +787,36 @@ class MainWindow(tk.Tk):
         return str(values[0])
 
     def _open_add_dialog(self) -> None:
+        def save_with_tags(
+            japanese: str,
+            kana: str,
+            english: str,
+            part_of_speech: str,
+            tag_ids: list[int],
+        ) -> None:
+            entry = self.repository.add_entry(japanese, kana, english, part_of_speech)
+            self.repository.set_entry_tags(
+                entry.id,
+                tag_ids,
+                target_language_code=self.target_language_code,
+                include_part_of_speech=False,
+            )
+
         dialog = EntryDialog(
             self,
+            repository=self.repository,
             title="Add vocabulary",
             save_button_text="Save",
-            save_handler=self.repository.add_entry,
+            save_handler=save_with_tags,
             on_saved=self.refresh_entries,
             initial_japanese="",
             initial_kana="",
             initial_english="",
             initial_part_of_speech="",
+            initial_tag_ids=[],
             target_label=self._target_field_label(),
             assistant_label=self._assistant_field_label(),
+            target_language_code=self.target_language_code,
             enable_kana_suggest=self.target_language_code == "JP",
         )
         self.wait_window(dialog)
@@ -754,24 +873,49 @@ class MainWindow(tk.Tk):
             self.refresh_entries()
             return
 
-        dialog = EntryDialog(
-            self,
-            title="Edit vocabulary",
-            save_button_text="Save changes",
-            save_handler=lambda japanese, kana, english, part_of_speech: self.repository.update_entry(
+        entry_tags = self.repository.get_entry_tags(
+            entry_id,
+            target_language_code=self.target_language_code,
+            include_part_of_speech=False,
+        )
+        initial_tag_ids = [tag_id for tag_id, _type_id, _type_name, _tag_name in entry_tags]
+
+        def save_with_tags(
+            japanese: str,
+            kana: str,
+            english: str,
+            part_of_speech: str,
+            tag_ids: list[int],
+        ) -> None:
+            self.repository.update_entry(
                 entry_id,
                 japanese,
                 kana,
                 english,
                 part_of_speech,
-            ),
+            )
+            self.repository.set_entry_tags(
+                entry_id,
+                tag_ids,
+                target_language_code=self.target_language_code,
+                include_part_of_speech=False,
+            )
+
+        dialog = EntryDialog(
+            self,
+            repository=self.repository,
+            title="Edit vocabulary",
+            save_button_text="Save changes",
+            save_handler=save_with_tags,
             on_saved=self.refresh_entries,
             initial_japanese=entry.japanese_text,
             initial_kana=entry.kana_text or "",
             initial_english=entry.english_text,
             initial_part_of_speech=entry.part_of_speech or "",
+            initial_tag_ids=initial_tag_ids,
             target_label=self._target_field_label(),
             assistant_label=self._assistant_field_label(),
+            target_language_code=self.target_language_code,
             enable_kana_suggest=self.target_language_code == "JP",
         )
         self.wait_window(dialog)
@@ -789,6 +933,7 @@ class MainWindow(tk.Tk):
             text_fonts=self.fonts,
             target_label=self._target_field_label(),
             assistant_label=self._assistant_field_label(),
+            target_language_code=self.target_language_code,
             enable_kana_suggest=self.target_language_code == "JP",
             on_saved=self.refresh_entries,
         )
@@ -817,7 +962,9 @@ class MainWindow(tk.Tk):
 
         self.target_language_code = target
         self.assistant_language_code = assistant
+        self.active_filter_tag_ids = []
         self._refresh_language_labels()
+        self._refresh_tag_filter_summary()
         self.refresh_entries()
 
     def _delete_selected_entry(self) -> None:
@@ -2354,28 +2501,345 @@ class BulkAddDialog(tk.Toplevel):
         self.destroy()
 
 
+class TagSelectionDialog(tk.Toplevel):
+    def __init__(
+        self,
+        parent: tk.Misc,
+        repository: VocabRepository,
+        target_language_code: str,
+        selected_tag_ids: list[int],
+        include_part_of_speech: bool,
+        title: str,
+        text_font: tkfont.Font,
+    ) -> None:
+        super().__init__(parent)
+        self.repository = repository
+        self.target_language_code = target_language_code
+        self.include_part_of_speech = include_part_of_speech
+        self.result: list[int] | None = None
+        self._tag_id_by_index: dict[int, int] = {}
+
+        self.title(title)
+        self.transient(parent)
+        self.grab_set()
+        self.geometry("520x460")
+        self.minsize(420, 320)
+
+        frame = ttk.Frame(self, padding=12)
+        frame.grid(row=0, column=0, sticky="nsew")
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(1, weight=1)
+
+        ttk.Label(
+            frame,
+            text=f"Select tags ({LANGUAGE_NAMES.get(self.target_language_code, self.target_language_code)})",
+            style="App.TLabel",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 6))
+
+        list_frame = ttk.Frame(frame)
+        list_frame.grid(row=1, column=0, sticky="nsew")
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
+
+        self.tag_listbox = tk.Listbox(
+            list_frame,
+            selectmode="extended",
+            exportselection=False,
+            font=text_font,
+        )
+        self.tag_listbox.grid(row=0, column=0, sticky="nsew")
+        list_scroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.tag_listbox.yview)
+        list_scroll.grid(row=0, column=1, sticky="ns")
+        self.tag_listbox.configure(yscrollcommand=list_scroll.set)
+
+        actions = ttk.Frame(frame, padding=(0, 10, 0, 0))
+        actions.grid(row=2, column=0, sticky="e")
+        ttk.Button(actions, text="Clear", command=self._clear_selection, style="App.TButton").grid(
+            row=0,
+            column=0,
+            padx=(0, 8),
+        )
+        ttk.Button(actions, text="Cancel", command=self.destroy, style="App.TButton").grid(
+            row=0,
+            column=1,
+            padx=(0, 8),
+        )
+        ttk.Button(actions, text="Apply", command=self._apply, style="App.TButton").grid(row=0, column=2)
+
+        self._load_tags(selected_tag_ids)
+
+        self.bind("<Escape>", lambda _event: self.destroy())
+        self.bind("<Return>", lambda _event: self._apply())
+
+    def _load_tags(self, selected_tag_ids: list[int]) -> None:
+        try:
+            tags = self.repository.list_tags(
+                target_language_code=self.target_language_code,
+                include_part_of_speech=self.include_part_of_speech,
+            )
+        except sqlite3.Error as exc:
+            messagebox.showerror("Database error", f"Could not load tags: {exc}", parent=self)
+            self.destroy()
+            return
+
+        self.tag_listbox.delete(0, "end")
+        self._tag_id_by_index.clear()
+
+        for index, (tag_id, _type_id, type_name, tag_name, _type_predefined, _tag_predefined) in enumerate(tags):
+            self.tag_listbox.insert("end", f"{type_name}: {tag_name}")
+            self._tag_id_by_index[index] = tag_id
+
+        selected_tag_id_set = set(selected_tag_ids)
+        for index, tag_id in self._tag_id_by_index.items():
+            if tag_id in selected_tag_id_set:
+                self.tag_listbox.selection_set(index)
+
+    def _clear_selection(self) -> None:
+        self.tag_listbox.selection_clear(0, "end")
+
+    def _apply(self) -> None:
+        selected_indices = list(self.tag_listbox.curselection())
+        self.result = [self._tag_id_by_index[index] for index in selected_indices if index in self._tag_id_by_index]
+        self.destroy()
+
+
+class TagManagerDialog(tk.Toplevel):
+    def __init__(
+        self,
+        parent: tk.Misc,
+        repository: VocabRepository,
+        target_language_code: str,
+        text_font: tkfont.Font,
+    ) -> None:
+        super().__init__(parent)
+        self.repository = repository
+        self.target_language_code = target_language_code
+        self.text_font = text_font
+        self.changed = False
+
+        self._type_rows: list[tuple[int, str, bool]] = []
+        self._tag_rows: list[tuple[int, int, str, str, bool, bool]] = []
+
+        self.title(f"Tag manager ({LANGUAGE_NAMES.get(target_language_code, target_language_code)})")
+        self.transient(parent)
+        self.grab_set()
+        self.geometry("860x520")
+        self.minsize(700, 420)
+
+        frame = ttk.Frame(self, padding=12)
+        frame.grid(row=0, column=0, sticky="nsew")
+        frame.columnconfigure(0, weight=1)
+        frame.columnconfigure(1, weight=1)
+        frame.rowconfigure(1, weight=1)
+
+        ttk.Label(frame, text="Tag types", style="App.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 6))
+        ttk.Label(frame, text="Tags", style="App.TLabel").grid(row=0, column=1, sticky="w", pady=(0, 6), padx=(12, 0))
+
+        type_frame = ttk.Frame(frame)
+        type_frame.grid(row=1, column=0, sticky="nsew")
+        type_frame.columnconfigure(0, weight=1)
+        type_frame.rowconfigure(0, weight=1)
+
+        self.type_listbox = tk.Listbox(type_frame, exportselection=False, font=self.text_font)
+        self.type_listbox.grid(row=0, column=0, sticky="nsew")
+        type_scroll = ttk.Scrollbar(type_frame, orient="vertical", command=self.type_listbox.yview)
+        type_scroll.grid(row=0, column=1, sticky="ns")
+        self.type_listbox.configure(yscrollcommand=type_scroll.set)
+        self.type_listbox.bind("<<ListboxSelect>>", self._on_type_selected)
+
+        tag_frame = ttk.Frame(frame)
+        tag_frame.grid(row=1, column=1, sticky="nsew", padx=(12, 0))
+        tag_frame.columnconfigure(0, weight=1)
+        tag_frame.rowconfigure(0, weight=1)
+
+        self.tag_listbox = tk.Listbox(tag_frame, exportselection=False, font=self.text_font)
+        self.tag_listbox.grid(row=0, column=0, sticky="nsew")
+        tag_scroll = ttk.Scrollbar(tag_frame, orient="vertical", command=self.tag_listbox.yview)
+        tag_scroll.grid(row=0, column=1, sticky="ns")
+        self.tag_listbox.configure(yscrollcommand=tag_scroll.set)
+
+        actions = ttk.Frame(frame, padding=(0, 10, 0, 0))
+        actions.grid(row=2, column=0, columnspan=2, sticky="ew")
+
+        ttk.Button(actions, text="Add type", command=self._add_type, style="App.TButton").grid(row=0, column=0, padx=(0, 8))
+        ttk.Button(actions, text="Delete type", command=self._delete_type, style="App.TButton").grid(row=0, column=1, padx=(0, 16))
+        ttk.Button(actions, text="Add tag", command=self._add_tag, style="App.TButton").grid(row=0, column=2, padx=(0, 8))
+        ttk.Button(actions, text="Delete tag", command=self._delete_tag, style="App.TButton").grid(row=0, column=3, padx=(0, 16))
+        ttk.Button(actions, text="Close", command=self.destroy, style="App.TButton").grid(row=0, column=4)
+
+        self._refresh_type_list(select_first=True)
+
+        self.bind("<Escape>", lambda _event: self.destroy())
+
+    def _selected_type(self) -> tuple[int, str, bool] | None:
+        selection = self.type_listbox.curselection()
+        if not selection:
+            return None
+        index = selection[0]
+        if index >= len(self._type_rows):
+            return None
+        return self._type_rows[index]
+
+    def _selected_tag(self) -> tuple[int, int, str, str, bool, bool] | None:
+        selection = self.tag_listbox.curselection()
+        if not selection:
+            return None
+        index = selection[0]
+        if index >= len(self._tag_rows):
+            return None
+        return self._tag_rows[index]
+
+    def _refresh_type_list(self, select_first: bool = False) -> None:
+        self._type_rows = self.repository.list_tag_types(target_language_code=self.target_language_code)
+        self.type_listbox.delete(0, "end")
+        for _type_id, type_name, is_predefined in self._type_rows:
+            suffix = " (predefined)" if is_predefined else ""
+            self.type_listbox.insert("end", f"{type_name}{suffix}")
+
+        if self._type_rows:
+            if select_first:
+                self.type_listbox.selection_set(0)
+            elif not self.type_listbox.curselection():
+                self.type_listbox.selection_set(0)
+        self._refresh_tag_list()
+
+    def _refresh_tag_list(self) -> None:
+        selected_type = self._selected_type()
+        self.tag_listbox.delete(0, "end")
+        self._tag_rows = []
+        if selected_type is None:
+            return
+
+        type_id, _type_name, _is_predefined = selected_type
+        self._tag_rows = self.repository.list_tags(target_language_code=self.target_language_code, tag_type_id=type_id)
+        for _tag_id, _type_id, _type_name, tag_name, _type_predefined, tag_predefined in self._tag_rows:
+            suffix = " (predefined)" if tag_predefined else ""
+            self.tag_listbox.insert("end", f"{tag_name}{suffix}")
+
+    def _on_type_selected(self, _event: tk.Event) -> None:
+        self._refresh_tag_list()
+
+    def _add_type(self) -> None:
+        entered = simpledialog.askstring("Add tag type", "Type name:", parent=self)
+        if entered is None:
+            return
+        try:
+            self.repository.add_tag_type(entered, target_language_code=self.target_language_code)
+            self.changed = True
+        except ValidationError as exc:
+            messagebox.showerror("Validation error", str(exc), parent=self)
+            return
+        except sqlite3.Error as exc:
+            messagebox.showerror("Database error", f"Could not add tag type: {exc}", parent=self)
+            return
+
+        self._refresh_type_list()
+
+    def _delete_type(self) -> None:
+        selected_type = self._selected_type()
+        if selected_type is None:
+            messagebox.showwarning("No selection", "Select a type to delete.", parent=self)
+            return
+
+        type_id, type_name, _is_predefined = selected_type
+        if not messagebox.askyesno("Delete type", f"Delete type '{type_name}' and all of its tags?", parent=self):
+            return
+
+        try:
+            self.repository.delete_tag_type(type_id)
+            self.changed = True
+        except ValueError as exc:
+            messagebox.showerror("Not allowed", str(exc), parent=self)
+            return
+        except LookupError as exc:
+            messagebox.showerror("Not found", str(exc), parent=self)
+            return
+        except sqlite3.Error as exc:
+            messagebox.showerror("Database error", f"Could not delete type: {exc}", parent=self)
+            return
+
+        self._refresh_type_list(select_first=True)
+
+    def _add_tag(self) -> None:
+        selected_type = self._selected_type()
+        if selected_type is None:
+            messagebox.showwarning("No selection", "Select a type first.", parent=self)
+            return
+
+        type_id, type_name, _is_predefined = selected_type
+        entered = simpledialog.askstring("Add tag", f"Tag name for '{type_name}':", parent=self)
+        if entered is None:
+            return
+
+        try:
+            self.repository.add_tag(type_id, entered)
+            self.changed = True
+        except ValidationError as exc:
+            messagebox.showerror("Validation error", str(exc), parent=self)
+            return
+        except LookupError as exc:
+            messagebox.showerror("Not found", str(exc), parent=self)
+            return
+        except sqlite3.Error as exc:
+            messagebox.showerror("Database error", f"Could not add tag: {exc}", parent=self)
+            return
+
+        self._refresh_tag_list()
+
+    def _delete_tag(self) -> None:
+        selected_tag = self._selected_tag()
+        if selected_tag is None:
+            messagebox.showwarning("No selection", "Select a tag to delete.", parent=self)
+            return
+
+        tag_id, _type_id, _type_name, tag_name, _type_predefined, _tag_predefined = selected_tag
+        if not messagebox.askyesno("Delete tag", f"Delete tag '{tag_name}'?", parent=self):
+            return
+
+        try:
+            self.repository.delete_tag(tag_id)
+            self.changed = True
+        except ValueError as exc:
+            messagebox.showerror("Not allowed", str(exc), parent=self)
+            return
+        except LookupError as exc:
+            messagebox.showerror("Not found", str(exc), parent=self)
+            return
+        except sqlite3.Error as exc:
+            messagebox.showerror("Database error", f"Could not delete tag: {exc}", parent=self)
+            return
+
+        self._refresh_tag_list()
+
+
 class EntryDialog(tk.Toplevel):
     def __init__(
         self,
         parent: tk.Tk,
+        repository: VocabRepository,
         title: str,
         save_button_text: str,
-        save_handler: Callable[[str, str, str, str], object],
+        save_handler: Callable[[str, str, str, str, list[int]], object],
         on_saved: Callable[[], None],
         initial_japanese: str,
         initial_kana: str,
         initial_english: str,
         initial_part_of_speech: str,
+        initial_tag_ids: list[int],
         target_label: str,
         assistant_label: str,
+        target_language_code: str,
         enable_kana_suggest: bool,
     ) -> None:
         super().__init__(parent)
+        self.repository = repository
         self.save_handler = save_handler
         self.on_saved = on_saved
         self.target_label = target_label
         self.assistant_label = assistant_label
+        self.target_language_code = target_language_code
         self.enable_kana_suggest = enable_kana_suggest
+        self.selected_tag_ids = list(initial_tag_ids)
 
         self._auto_suggest_job: str | None = None
         self._updating_kana = False
@@ -2385,6 +2849,7 @@ class EntryDialog(tk.Toplevel):
         self.kana_var = tk.StringVar(value=initial_kana)
         self.english_var = tk.StringVar(value=initial_english)
         self.part_of_speech_var = tk.StringVar(value=initial_part_of_speech)
+        self.tags_summary_var = tk.StringVar(value="")
         default_status = "Kana is optional. You can edit any suggestion."
         if not self.enable_kana_suggest:
             default_status = "Kana is optional. Automatic kana suggestion is only available when target language is Japanese."
@@ -2404,6 +2869,7 @@ class EntryDialog(tk.Toplevel):
         self.bind("<Escape>", lambda _event: self.destroy())
 
         self.japanese_entry.focus_set()
+        self._refresh_tag_summary()
 
     def _build_widgets(self, save_button_text: str) -> None:
         frame = ttk.Frame(self, padding=14)
@@ -2436,11 +2902,27 @@ class EntryDialog(tk.Toplevel):
         )
         self.part_of_speech_combo.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(0, 8))
 
+        ttk.Label(frame, text="Tags (optional)", style="App.TLabel").grid(row=8, column=0, sticky="w")
+        tag_actions = ttk.Frame(frame)
+        tag_actions.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        tag_actions.columnconfigure(1, weight=1)
+        ttk.Button(tag_actions, text="Select tags", command=self._open_tag_selector, style="App.TButton").grid(
+            row=0,
+            column=0,
+            sticky="w",
+        )
+        ttk.Label(tag_actions, textvariable=self.tags_summary_var, style="Status.TLabel").grid(
+            row=0,
+            column=1,
+            sticky="w",
+            padx=(8, 0),
+        )
+
         status_label = ttk.Label(frame, textvariable=self.status_var, style="Status.TLabel", wraplength=460)
-        status_label.grid(row=8, column=0, columnspan=2, sticky="w", pady=(2, 12))
+        status_label.grid(row=10, column=0, columnspan=2, sticky="w", pady=(2, 12))
 
         actions = ttk.Frame(frame)
-        actions.grid(row=9, column=0, columnspan=2, sticky="e")
+        actions.grid(row=11, column=0, columnspan=2, sticky="e")
 
         cancel_button = ttk.Button(actions, text="Cancel", command=self.destroy, style="App.TButton")
         save_button = ttk.Button(actions, text=save_button_text, command=self._save, style="App.TButton")
@@ -2487,6 +2969,51 @@ class EntryDialog(tk.Toplevel):
         if force_message or not self.kana_var.get().strip():
             self.status_var.set(message)
 
+    def _open_tag_selector(self) -> None:
+        dialog = TagSelectionDialog(
+            self,
+            repository=self.repository,
+            target_language_code=self.target_language_code,
+            selected_tag_ids=self.selected_tag_ids,
+            include_part_of_speech=False,
+            title="Select tags",
+            text_font=tkfont.nametofont("TkDefaultFont"),
+        )
+        self.wait_window(dialog)
+        if dialog.result is None:
+            return
+
+        self.selected_tag_ids = list(dialog.result)
+        self._refresh_tag_summary()
+
+    def _refresh_tag_summary(self) -> None:
+        if not self.selected_tag_ids:
+            self.tags_summary_var.set("No tags selected")
+            return
+
+        try:
+            tags = self.repository.list_tags(
+                target_language_code=self.target_language_code,
+                include_part_of_speech=False,
+            )
+        except sqlite3.Error:
+            self.tags_summary_var.set(f"{len(self.selected_tag_ids)} tags selected")
+            return
+
+        label_by_id = {
+            tag_id: f"{type_name}:{tag_name}"
+            for tag_id, _type_id, type_name, tag_name, _type_predefined, _tag_predefined in tags
+        }
+        selected_labels = [label_by_id[tag_id] for tag_id in self.selected_tag_ids if tag_id in label_by_id]
+        if not selected_labels:
+            self.tags_summary_var.set(f"{len(self.selected_tag_ids)} tags selected")
+            return
+
+        summary = ", ".join(selected_labels[:2])
+        if len(selected_labels) > 2:
+            summary += f", +{len(selected_labels) - 2} more"
+        self.tags_summary_var.set(summary)
+
     def _save(self) -> None:
         try:
             self.save_handler(
@@ -2494,6 +3021,7 @@ class EntryDialog(tk.Toplevel):
                 self.kana_var.get(),
                 self.english_var.get(),
                 self.part_of_speech_var.get(),
+                list(self.selected_tag_ids),
             )
         except ValidationError as exc:
             messagebox.showerror("Validation error", str(exc), parent=self)
@@ -2586,6 +3114,7 @@ class VocabularyDetailDialog(tk.Toplevel):
         text_fonts: dict[str, tkfont.Font],
         target_label: str,
         assistant_label: str,
+        target_language_code: str,
         enable_kana_suggest: bool,
         on_saved: Callable[[], None],
     ) -> None:
@@ -2595,6 +3124,7 @@ class VocabularyDetailDialog(tk.Toplevel):
         self.text_fonts = text_fonts
         self.target_label = target_label
         self.assistant_label = assistant_label
+        self.target_language_code = target_language_code
         self.enable_kana_suggest = enable_kana_suggest
         self.on_saved = on_saved
 
@@ -2607,10 +3137,12 @@ class VocabularyDetailDialog(tk.Toplevel):
         self.kana_var = tk.StringVar(value="")
         self.assistant_var = tk.StringVar(value="")
         self.part_of_speech_var = tk.StringVar(value="")
+        self.tags_summary_var = tk.StringVar(value="No tags selected")
         self.stats_var = tk.StringVar(value="")
         self.created_var = tk.StringVar(value="")
         self.latest_practice_var = tk.StringVar(value="")
         self.details_markdown = ""
+        self.selected_tag_ids: list[int] = []
 
         self.title("Vocabulary details")
         self.transient(parent)
@@ -2670,21 +3202,37 @@ class VocabularyDetailDialog(tk.Toplevel):
         )
         self.part_of_speech_combo.grid(row=3, column=1, sticky="ew", padx=(8, 0), pady=(0, 6))
 
+        ttk.Label(header, text="Tags", style="App.TLabel").grid(row=4, column=0, sticky="w")
+        tag_actions = ttk.Frame(header)
+        tag_actions.grid(row=4, column=1, columnspan=2, sticky="ew", padx=(8, 0), pady=(0, 6))
+        tag_actions.columnconfigure(1, weight=1)
+        ttk.Button(tag_actions, text="Select tags", command=self._open_tag_selector, style="App.TButton").grid(
+            row=0,
+            column=0,
+            sticky="w",
+        )
+        ttk.Label(tag_actions, textvariable=self.tags_summary_var, style="Status.TLabel").grid(
+            row=0,
+            column=1,
+            sticky="w",
+            padx=(8, 0),
+        )
+
         ttk.Label(header, textvariable=self.stats_var, style="Status.TLabel").grid(
-            row=4,
+            row=5,
             column=0,
             columnspan=3,
             sticky="w",
             pady=(4, 0),
         )
         ttk.Label(header, textvariable=self.created_var, style="Status.TLabel").grid(
-            row=5,
+            row=6,
             column=0,
             columnspan=3,
             sticky="w",
         )
         ttk.Label(header, textvariable=self.latest_practice_var, style="Status.TLabel").grid(
-            row=6,
+            row=7,
             column=0,
             columnspan=3,
             sticky="w",
@@ -2762,6 +3310,17 @@ class VocabularyDetailDialog(tk.Toplevel):
         self.part_of_speech_var.set(entry.part_of_speech or "")
         self.details_markdown = entry.details_markdown or ""
 
+        try:
+            tag_rows = self.repository.get_entry_tags(
+                self.entry_id,
+                target_language_code=self.target_language_code,
+                include_part_of_speech=False,
+            )
+        except sqlite3.Error:
+            tag_rows = []
+        self.selected_tag_ids = [tag_id for tag_id, _type_id, _type_name, _tag_name in tag_rows]
+        self._refresh_tag_summary()
+
         self.stats_var.set(f"Tests: {test_count} | Errors: {error_count} | Tier: {tier}")
         self.created_var.set(f"Created at: {entry.created_at}")
         self.latest_practice_var.set(f"Latest practice: {latest_practiced or 'Never'}")
@@ -2833,6 +3392,51 @@ class VocabularyDetailDialog(tk.Toplevel):
         if force_message:
             messagebox.showinfo("Kana suggestion", message, parent=self)
 
+    def _open_tag_selector(self) -> None:
+        dialog = TagSelectionDialog(
+            self,
+            repository=self.repository,
+            target_language_code=self.target_language_code,
+            selected_tag_ids=self.selected_tag_ids,
+            include_part_of_speech=False,
+            title="Select tags",
+            text_font=self.text_fonts["latin"],
+        )
+        self.wait_window(dialog)
+        if dialog.result is None:
+            return
+
+        self.selected_tag_ids = list(dialog.result)
+        self._refresh_tag_summary()
+
+    def _refresh_tag_summary(self) -> None:
+        if not self.selected_tag_ids:
+            self.tags_summary_var.set("No tags selected")
+            return
+
+        try:
+            tags = self.repository.list_tags(
+                target_language_code=self.target_language_code,
+                include_part_of_speech=False,
+            )
+        except sqlite3.Error:
+            self.tags_summary_var.set(f"{len(self.selected_tag_ids)} tags selected")
+            return
+
+        label_by_id = {
+            tag_id: f"{type_name}:{tag_name}"
+            for tag_id, _type_id, type_name, tag_name, _type_predefined, _tag_predefined in tags
+        }
+        selected_labels = [label_by_id[tag_id] for tag_id in self.selected_tag_ids if tag_id in label_by_id]
+        if not selected_labels:
+            self.tags_summary_var.set(f"{len(self.selected_tag_ids)} tags selected")
+            return
+
+        summary = ", ".join(selected_labels[:2])
+        if len(selected_labels) > 2:
+            summary += f", +{len(selected_labels) - 2} more"
+        self.tags_summary_var.set(summary)
+
     def _save(self) -> None:
         details_value = self.details_editor.get("1.0", "end-1c") if self._is_editing_markdown else self.details_markdown
 
@@ -2843,6 +3447,12 @@ class VocabularyDetailDialog(tk.Toplevel):
                 self.kana_var.get(),
                 self.assistant_var.get(),
                 self.part_of_speech_var.get(),
+            )
+            self.repository.set_entry_tags(
+                self.entry_id,
+                self.selected_tag_ids,
+                target_language_code=self.target_language_code,
+                include_part_of_speech=False,
             )
             self.repository.update_entry_details(self.entry_id, details_value)
         except ValidationError as exc:
