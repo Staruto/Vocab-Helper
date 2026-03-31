@@ -17,6 +17,8 @@ from .validators import (
 
 
 class VocabRepository:
+    ERROR_COUNT_RECOVERY_CHANCE = 0.35
+
     def __init__(self, db_path: Path | str) -> None:
         self.db_path = Path(db_path)
 
@@ -63,6 +65,18 @@ class VocabRepository:
                 CREATE TABLE IF NOT EXISTS practice_daily_unique (
                     entry_id INTEGER NOT NULL,
                     practice_date TEXT NOT NULL,
+                    PRIMARY KEY (entry_id, practice_date),
+                    FOREIGN KEY (entry_id) REFERENCES vocab_entries(id) ON DELETE CASCADE
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS practice_daily_error_recovery (
+                    entry_id INTEGER NOT NULL,
+                    practice_date TEXT NOT NULL,
+                    has_mistake INTEGER NOT NULL DEFAULT 0,
+                    used_decrease INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY (entry_id, practice_date),
                     FOREIGN KEY (entry_id) REFERENCES vocab_entries(id) ON DELETE CASCADE
                 )
@@ -422,7 +436,13 @@ class VocabRepository:
         finally:
             connection.close()
 
-    def record_test_result(self, entry_id: int, is_correct: bool) -> None:
+    def record_test_result(
+        self,
+        entry_id: int,
+        is_correct: bool,
+        recovery_roll: float | None = None,
+        practiced_on: date | None = None,
+    ) -> None:
         connection = sqlite3.connect(self.db_path)
         try:
             entry_exists = connection.execute(
@@ -457,7 +477,7 @@ class VocabRepository:
                 (0 if is_correct else 1, entry_id),
             )
 
-            practice_date = date.today().isoformat()
+            practice_date = (practiced_on or date.today()).isoformat()
             connection.execute(
                 """
                 INSERT INTO practice_daily_unique (entry_id, practice_date)
@@ -466,6 +486,73 @@ class VocabRepository:
                 """,
                 (entry_id, practice_date),
             )
+
+            connection.execute(
+                """
+                INSERT INTO practice_daily_error_recovery (entry_id, practice_date)
+                VALUES (?, ?)
+                ON CONFLICT(entry_id, practice_date) DO NOTHING
+                """,
+                (entry_id, practice_date),
+            )
+
+            if not is_correct:
+                connection.execute(
+                    """
+                    UPDATE practice_daily_error_recovery
+                    SET has_mistake = 1
+                    WHERE entry_id = ?
+                      AND practice_date = ?
+                    """,
+                    (entry_id, practice_date),
+                )
+                connection.commit()
+                return
+
+            roll = recovery_roll if recovery_roll is not None else random.random()
+            if roll >= self.ERROR_COUNT_RECOVERY_CHANCE:
+                connection.commit()
+                return
+
+            row = connection.execute(
+                """
+                SELECT
+                    s.error_count,
+                    r.has_mistake,
+                    r.used_decrease
+                FROM vocab_stats AS s
+                INNER JOIN practice_daily_error_recovery AS r
+                    ON r.entry_id = s.entry_id
+                WHERE s.entry_id = ?
+                  AND r.practice_date = ?
+                """,
+                (entry_id, practice_date),
+            ).fetchone()
+
+            if row is not None:
+                error_count = int(row[0])
+                has_mistake = int(row[1])
+                used_decrease = int(row[2])
+
+                if error_count > 0 and has_mistake == 0 and used_decrease == 0:
+                    connection.execute(
+                        """
+                        UPDATE vocab_stats
+                        SET error_count = CASE WHEN error_count > 0 THEN error_count - 1 ELSE 0 END
+                        WHERE entry_id = ?
+                        """,
+                        (entry_id,),
+                    )
+                    connection.execute(
+                        """
+                        UPDATE practice_daily_error_recovery
+                        SET used_decrease = 1
+                        WHERE entry_id = ?
+                          AND practice_date = ?
+                        """,
+                        (entry_id, practice_date),
+                    )
+
             connection.commit()
         finally:
             connection.close()
@@ -768,6 +855,13 @@ class VocabRepository:
             connection.execute(
                 f"""
                 DELETE FROM practice_daily_unique
+                WHERE entry_id IN ({placeholders})
+                """,
+                tuple(unique_ids),
+            )
+            connection.execute(
+                f"""
+                DELETE FROM practice_daily_error_recovery
                 WHERE entry_id IN ({placeholders})
                 """,
                 tuple(unique_ids),
