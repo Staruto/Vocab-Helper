@@ -26,6 +26,8 @@ Simple JP <-> EN vocabulary memorization helper with a desktop GUI.
 - Refreshes the main list immediately after closing a test dialog
 - Supports optional part of speech metadata for each vocabulary
 - Supports editable markdown details for each vocabulary with in-app display mode
+- Tracks latest practice date per vocabulary
+- Shows a GitHub-style contributions grid for daily practice activity (last 180 days)
 - Requires target text and assistant meaning
 - Treats kana as optional
 - Suggests kana offline using pykakasi and lets users edit before save
@@ -85,6 +87,7 @@ python -m unittest discover -s tests -p "test_*.py"
 - Detail page includes:
 	- Editable top fields (target text, kana, assistant meaning, part of speech)
 	- Stats summary (tests, errors, tier, created time)
+	- Latest practice date
 	- Markdown details section with `Edit markdown` and display mode
 - Markdown display mode supports a basic subset for readability:
 	- Headings (`#`, `##`, `###`)
@@ -98,7 +101,7 @@ python -m unittest discover -s tests -p "test_*.py"
 - Default questions per test: 15
 - You can set a custom positive integer for questions per test
 - You can choose pick preference strategy:
-	- `strict` (default): pick by tier order gray -> red -> yellow -> green
+	- `strict` (default): pick by tier order gray -> red -> yellow -> green, then by oldest latest-practice date within the same tier
 	- `weighted`: probabilistic pick favoring higher-priority tiers while still sampling all tiers
 - If requested count is larger than available vocabularies, the test uses all available entries
 - Given an English meaning, type the Japanese writing and submit
@@ -139,6 +142,13 @@ python -m unittest discover -s tests -p "test_*.py"
 - `green`: tested and currently no errors (`test_count > 0` and `error_count = 0`)
 - `yellow`: medium error level (`error_count` is 1 or 2)
 - `red`: high error level (`error_count >= 3`)
+
+## Daily activity grid
+
+- The main window shows a contributions-style grid for the last 180 days
+- Each cell counts unique vocabularies practiced on that date
+- Repeating the same vocabulary multiple times in one day counts once for that day
+- The grid refreshes automatically after test dialogs close
 
 Manual priority actions adjust `error_count` thresholds (for non-gray entries):
 
