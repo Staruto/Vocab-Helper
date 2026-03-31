@@ -169,6 +169,19 @@ def _render_markdown_to_text(widget: tk.Text, markdown_text: str, base_font: tkf
     widget.configure(state="disabled")
 
 
+def _open_detail_dialog_from_test(test_dialog: tk.Toplevel, entry_id: int) -> None:
+    open_detail = getattr(test_dialog.master, "_open_detail_dialog", None)
+    if not callable(open_detail):
+        return
+
+    test_dialog.grab_release()
+    try:
+        open_detail(entry_id)
+    finally:
+        if test_dialog.winfo_exists():
+            test_dialog.grab_set()
+
+
 class MainWindow(tk.Tk):
     def __init__(self, repository: VocabRepository) -> None:
         super().__init__()
@@ -204,6 +217,16 @@ class MainWindow(tk.Tk):
         style.configure("Japanese.TEntry", font=self.fonts["japanese"])
         style.configure("Treeview", font=self.fonts["japanese"], rowheight=30)
         style.configure("Treeview.Heading", font=self.fonts["tree_heading"])
+        style.configure("App.TNotebook", padding=2)
+        style.configure(
+            "App.TNotebook.Tab",
+            font=(
+                self.fonts["latin"].cget("family"),
+                self.fonts["latin"].cget("size") + 1,
+                "bold",
+            ),
+            padding=(18, 10),
+        )
 
     def _language_display_name(self, code: str) -> str:
         return LANGUAGE_NAMES.get(code.upper(), code.upper())
@@ -225,7 +248,7 @@ class MainWindow(tk.Tk):
         container.columnconfigure(0, weight=1)
         container.rowconfigure(0, weight=1)
 
-        self.page_tabs = ttk.Notebook(container)
+        self.page_tabs = ttk.Notebook(container, style="App.TNotebook")
         self.page_tabs.grid(row=0, column=0, sticky="nsew")
 
         home_page = ttk.Frame(self.page_tabs)
@@ -390,7 +413,7 @@ class MainWindow(tk.Tk):
 
         self.activity_canvas = tk.Canvas(
             activity_frame,
-            height=108,
+            height=140,
             highlightthickness=0,
             background="#ffffff",
         )
@@ -508,15 +531,38 @@ class MainWindow(tk.Tk):
         grid_start = start_date - timedelta(days=start_date.weekday())
         weeks = ((today - grid_start).days // 7) + 1
 
-        cell_size = 10
-        gap = 3
-        pad_x = 2
-        pad_y = 2
-        width = pad_x * 2 + weeks * (cell_size + gap)
-        height = pad_y * 2 + 7 * (cell_size + gap)
+        cell_size = 14
+        gap = 4
+        left_label_width = 34
+        top_padding = 4
+        right_padding = 8
+        bottom_label_height = 20
+        grid_width = weeks * cell_size + (weeks - 1) * gap
+        grid_height = 7 * cell_size + 6 * gap
+        grid_origin_x = left_label_width
+        grid_origin_y = top_padding
+
+        width = grid_origin_x + grid_width + right_padding
+        height = grid_origin_y + grid_height + bottom_label_height
 
         self.activity_canvas.configure(width=width, height=height)
         self.activity_canvas.delete("all")
+
+        weekday_font = (
+            self.fonts["latin"].cget("family"),
+            max(self.fonts["latin"].cget("size") - 2, 9),
+        )
+        weekday_labels = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+        for weekday_index, label in enumerate(weekday_labels):
+            y_center = grid_origin_y + weekday_index * (cell_size + gap) + (cell_size / 2)
+            self.activity_canvas.create_text(
+                grid_origin_x - 6,
+                y_center,
+                text=label,
+                anchor="e",
+                fill="#666666",
+                font=weekday_font,
+            )
 
         current = start_date
         while current <= today:
@@ -525,8 +571,8 @@ class MainWindow(tk.Tk):
             count = counts_by_date.get(current.isoformat(), 0)
             color = ACTIVITY_COLORS[self._activity_level(count)]
 
-            x1 = pad_x + week_index * (cell_size + gap)
-            y1 = pad_y + weekday_index * (cell_size + gap)
+            x1 = grid_origin_x + week_index * (cell_size + gap)
+            y1 = grid_origin_y + weekday_index * (cell_size + gap)
             x2 = x1 + cell_size
             y2 = y1 + cell_size
 
@@ -539,6 +585,36 @@ class MainWindow(tk.Tk):
                 outline="#d0d0d0",
             )
             current += timedelta(days=1)
+
+        month_markers: dict[tuple[int, int], int] = {}
+        current = start_date
+        while current <= today:
+            if current == start_date or current.day == 1:
+                month_key = (current.year, current.month)
+                week_index = (current - grid_start).days // 7
+                if month_key not in month_markers:
+                    month_markers[month_key] = week_index
+            current += timedelta(days=1)
+
+        month_y = grid_origin_y + grid_height + 10
+        month_font = weekday_font
+        last_label_x = -999
+        minimum_gap = 24
+        for year, month in sorted(month_markers):
+            week_index = month_markers[(year, month)]
+            label_x = grid_origin_x + week_index * (cell_size + gap)
+            if label_x - last_label_x < minimum_gap:
+                continue
+            label_text = date(year, month, 1).strftime("%b")
+            self.activity_canvas.create_text(
+                label_x,
+                month_y,
+                text=label_text,
+                anchor="w",
+                fill="#666666",
+                font=month_font,
+            )
+            last_label_x = label_x
 
     def _show_context_menu(self, event: tk.Event) -> None:
         item_id = self.tree.identify_row(event.y)
@@ -825,6 +901,12 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
         self.current_answered = False
         self.requested_count = 15
         self.actual_count = 0
+        self.in_retry_mode = False
+        self.retry_cycle = 0
+        self.initial_failed_questions: list[VocabEntry] = []
+        self.initial_failed_entry_ids: set[int] = set()
+        self.retry_questions: list[VocabEntry] = []
+        self.retry_failed_questions: list[VocabEntry] = []
 
         self.count_var = tk.StringVar(value="15")
         self.start_info_var = tk.StringVar(value="")
@@ -932,8 +1014,16 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
         test_actions.grid(row=6, column=0, sticky="e")
         self.submit_button = ttk.Button(test_actions, text="Submit", command=self._submit_answer, style="App.TButton")
         self.submit_button.grid(row=0, column=0, padx=(0, 8))
+        self.detail_button = ttk.Button(
+            test_actions,
+            text="View details",
+            command=self._open_current_entry_detail,
+            style="App.TButton",
+            state="disabled",
+        )
+        self.detail_button.grid(row=0, column=1, padx=(0, 8))
         self.next_button = ttk.Button(test_actions, text="Next", command=self._next_question, style="App.TButton")
-        self.next_button.grid(row=0, column=1)
+        self.next_button.grid(row=0, column=2)
 
         self.result_frame = ttk.Frame(root)
         self.result_frame.grid(row=0, column=0, sticky="nsew")
@@ -975,6 +1065,33 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
         self.test_frame.grid_remove()
         self.result_frame.grid()
 
+    def _active_questions(self) -> list[VocabEntry]:
+        return self.retry_questions if self.in_retry_mode else self.questions
+
+    def _current_question(self) -> VocabEntry | None:
+        active_questions = self._active_questions()
+        if not active_questions or self.current_index >= len(active_questions):
+            return None
+        return active_questions[self.current_index]
+
+    def _begin_retry_cycle(self, retry_questions: list[VocabEntry]) -> None:
+        if not retry_questions:
+            return
+
+        self.in_retry_mode = True
+        self.retry_cycle += 1
+        self.retry_questions = list(retry_questions)
+        self.retry_failed_questions = []
+        self.current_index = 0
+        self._show_test_frame()
+        self._load_question()
+
+    def _open_current_entry_detail(self) -> None:
+        current = self._current_question()
+        if current is None:
+            return
+        _open_detail_dialog_from_test(self, current.id)
+
     def _start_test(self) -> None:
         try:
             requested = int(self.count_var.get().strip())
@@ -1006,6 +1123,12 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
         self.requested_count = requested
         self.current_index = 0
         self.correct_count = 0
+        self.in_retry_mode = False
+        self.retry_cycle = 0
+        self.initial_failed_questions = []
+        self.initial_failed_entry_ids = set()
+        self.retry_questions = []
+        self.retry_failed_questions = []
 
         if requested > self.actual_count:
             self.start_info_var.set(f"Requested {requested}; using all {self.actual_count} available vocabularies.")
@@ -1016,11 +1139,16 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
         self._load_question()
 
     def _load_question(self) -> None:
-        if not self.questions:
+        active_questions = self._active_questions()
+        if not active_questions:
             return
 
-        current = self.questions[self.current_index]
-        self.progress_var.set(f"Question {self.current_index + 1}/{self.actual_count}")
+        current = active_questions[self.current_index]
+        active_count = len(active_questions)
+        if self.in_retry_mode:
+            self.progress_var.set(f"Retry {self.retry_cycle} - Question {self.current_index + 1}/{active_count}")
+        else:
+            self.progress_var.set(f"Question {self.current_index + 1}/{self.actual_count}")
         self.score_var.set(f"Score: {self.correct_count}")
         self.prompt_var.set(current.english_text)
         self.answer_var.set("")
@@ -1028,14 +1156,18 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
         self.current_answered = False
         self.answer_entry.configure(state="normal")
         self.submit_button.configure(state="normal")
+        self.detail_button.configure(state="disabled")
         self.next_button.configure(state="disabled")
         self.answer_entry.focus_set()
 
     def _submit_answer(self) -> None:
-        if self.current_answered or not self.questions:
+        if self.current_answered:
             return
 
-        current = self.questions[self.current_index]
+        current = self._current_question()
+        if current is None:
+            return
+
         submitted = self.answer_var.get().strip()
         correct_answer = current.japanese_text.strip()
         is_correct = submitted == correct_answer
@@ -1050,9 +1182,17 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
             return
 
         if is_correct:
-            self.correct_count += 1
+            if not self.in_retry_mode:
+                self.correct_count += 1
             self.feedback_var.set("Correct.")
+            self.detail_button.configure(state="disabled")
         else:
+            if self.in_retry_mode:
+                self.retry_failed_questions.append(current)
+            elif current.id not in self.initial_failed_entry_ids:
+                self.initial_failed_entry_ids.add(current.id)
+                self.initial_failed_questions.append(current)
+
             kana_hint = (current.kana_text or "").strip()
             if not kana_hint:
                 suggested_kana, reliable, _message = suggest_hiragana(correct_answer)
@@ -1063,6 +1203,7 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
                 self.feedback_var.set(f"Incorrect. Correct answer: {correct_answer} ({kana_hint})")
             else:
                 self.feedback_var.set(f"Incorrect. Correct answer: {correct_answer}")
+            self.detail_button.configure(state="normal")
 
         self.score_var.set(f"Score: {self.correct_count}")
         self.current_answered = True
@@ -1075,7 +1216,8 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
         if not self.current_answered:
             return
 
-        if self.current_index + 1 >= self.actual_count:
+        active_count = len(self._active_questions())
+        if self.current_index + 1 >= active_count:
             self._finish_test()
             return
 
@@ -1088,10 +1230,22 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
             self._show_result_frame()
             return
 
+        if not self.in_retry_mode and self.initial_failed_questions:
+            self._begin_retry_cycle(self.initial_failed_questions)
+            return
+
+        if self.in_retry_mode and self.retry_failed_questions:
+            self._begin_retry_cycle(self.retry_failed_questions)
+            return
+
         accuracy = (self.correct_count / self.actual_count) * 100
-        self.result_var.set(
-            f"Score: {self.correct_count}/{self.actual_count} ({accuracy:.1f}%)."
-        )
+        result_text = f"Score: {self.correct_count}/{self.actual_count} ({accuracy:.1f}%)."
+        if self.initial_failed_questions:
+            result_text += (
+                f" Initially missed: {len(self.initial_failed_questions)}. "
+                f"Retried until correct in {self.retry_cycle} cycle(s)."
+            )
+        self.result_var.set(result_text)
         self._show_result_frame()
 
     def _restart(self) -> None:
@@ -1100,12 +1254,19 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
         self.correct_count = 0
         self.actual_count = 0
         self.current_answered = False
+        self.in_retry_mode = False
+        self.retry_cycle = 0
+        self.initial_failed_questions = []
+        self.initial_failed_entry_ids = set()
+        self.retry_questions = []
+        self.retry_failed_questions = []
         self.progress_var.set("")
         self.score_var.set("")
         self.prompt_var.set("")
         self.answer_var.set("")
         self.feedback_var.set("")
         self.result_var.set("")
+        self.detail_button.configure(state="disabled")
         self._show_start_frame()
 
     def _on_return_key(self, _event: tk.Event) -> str:
@@ -1145,6 +1306,12 @@ class JapaneseToKanaTestDialog(tk.Toplevel):
         self.current_answered = False
         self.requested_count = 15
         self.actual_count = 0
+        self.in_retry_mode = False
+        self.retry_cycle = 0
+        self.initial_failed_questions: list[VocabEntry] = []
+        self.initial_failed_entry_ids: set[int] = set()
+        self.retry_questions: list[VocabEntry] = []
+        self.retry_failed_questions: list[VocabEntry] = []
 
         self.count_var = tk.StringVar(value="15")
         self.start_info_var = tk.StringVar(value="")
@@ -1252,8 +1419,16 @@ class JapaneseToKanaTestDialog(tk.Toplevel):
         test_actions.grid(row=6, column=0, sticky="e")
         self.submit_button = ttk.Button(test_actions, text="Submit", command=self._submit_answer, style="App.TButton")
         self.submit_button.grid(row=0, column=0, padx=(0, 8))
+        self.detail_button = ttk.Button(
+            test_actions,
+            text="View details",
+            command=self._open_current_entry_detail,
+            style="App.TButton",
+            state="disabled",
+        )
+        self.detail_button.grid(row=0, column=1, padx=(0, 8))
         self.next_button = ttk.Button(test_actions, text="Next", command=self._next_question, style="App.TButton")
-        self.next_button.grid(row=0, column=1)
+        self.next_button.grid(row=0, column=2)
 
         self.result_frame = ttk.Frame(root)
         self.result_frame.grid(row=0, column=0, sticky="nsew")
@@ -1312,6 +1487,34 @@ class JapaneseToKanaTestDialog(tk.Toplevel):
         self.test_frame.grid_remove()
         self.result_frame.grid()
 
+    def _active_questions(self) -> list[VocabEntry]:
+        return self.retry_questions if self.in_retry_mode else self.questions
+
+    def _current_question(self) -> VocabEntry | None:
+        active_questions = self._active_questions()
+        if not active_questions or self.current_index >= len(active_questions):
+            return None
+        return active_questions[self.current_index]
+
+    def _begin_retry_cycle(self, retry_questions: list[VocabEntry]) -> None:
+        eligible_retry_questions = [entry for entry in retry_questions if self._entry_has_kana(entry)]
+        if not eligible_retry_questions:
+            return
+
+        self.in_retry_mode = True
+        self.retry_cycle += 1
+        self.retry_questions = eligible_retry_questions
+        self.retry_failed_questions = []
+        self.current_index = 0
+        self._show_test_frame()
+        self._load_question()
+
+    def _open_current_entry_detail(self) -> None:
+        current = self._current_question()
+        if current is None:
+            return
+        _open_detail_dialog_from_test(self, current.id)
+
     def _start_test(self) -> None:
         try:
             requested = int(self.count_var.get().strip())
@@ -1347,6 +1550,12 @@ class JapaneseToKanaTestDialog(tk.Toplevel):
         self.requested_count = requested
         self.current_index = 0
         self.correct_count = 0
+        self.in_retry_mode = False
+        self.retry_cycle = 0
+        self.initial_failed_questions = []
+        self.initial_failed_entry_ids = set()
+        self.retry_questions = []
+        self.retry_failed_questions = []
 
         if requested > self.actual_count:
             self.start_info_var.set(f"Requested {requested}; using all {self.actual_count} eligible vocabularies.")
@@ -1357,11 +1566,16 @@ class JapaneseToKanaTestDialog(tk.Toplevel):
         self._load_question()
 
     def _load_question(self) -> None:
-        if not self.questions:
+        active_questions = self._active_questions()
+        if not active_questions:
             return
 
-        current = self.questions[self.current_index]
-        self.progress_var.set(f"Question {self.current_index + 1}/{self.actual_count}")
+        current = active_questions[self.current_index]
+        active_count = len(active_questions)
+        if self.in_retry_mode:
+            self.progress_var.set(f"Retry {self.retry_cycle} - Question {self.current_index + 1}/{active_count}")
+        else:
+            self.progress_var.set(f"Question {self.current_index + 1}/{self.actual_count}")
         self.score_var.set(f"Score: {self.correct_count}")
         self.prompt_var.set(current.japanese_text)
         self.answer_var.set("")
@@ -1369,14 +1583,18 @@ class JapaneseToKanaTestDialog(tk.Toplevel):
         self.current_answered = False
         self.answer_entry.configure(state="normal")
         self.submit_button.configure(state="normal")
+        self.detail_button.configure(state="disabled")
         self.next_button.configure(state="disabled")
         self.answer_entry.focus_set()
 
     def _submit_answer(self) -> None:
-        if self.current_answered or not self.questions:
+        if self.current_answered:
             return
 
-        current = self.questions[self.current_index]
+        current = self._current_question()
+        if current is None:
+            return
+
         submitted = self.answer_var.get().strip()
         correct_answer = (current.kana_text or "").strip()
         is_correct = submitted == correct_answer
@@ -1391,10 +1609,18 @@ class JapaneseToKanaTestDialog(tk.Toplevel):
             return
 
         if is_correct:
-            self.correct_count += 1
+            if not self.in_retry_mode:
+                self.correct_count += 1
             self.feedback_var.set("Correct.")
+            self.detail_button.configure(state="disabled")
         else:
+            if self.in_retry_mode:
+                self.retry_failed_questions.append(current)
+            elif current.id not in self.initial_failed_entry_ids:
+                self.initial_failed_entry_ids.add(current.id)
+                self.initial_failed_questions.append(current)
             self.feedback_var.set(f"Incorrect. Correct answer: {correct_answer}")
+            self.detail_button.configure(state="normal")
 
         self.score_var.set(f"Score: {self.correct_count}")
         self.current_answered = True
@@ -1407,7 +1633,8 @@ class JapaneseToKanaTestDialog(tk.Toplevel):
         if not self.current_answered:
             return
 
-        if self.current_index + 1 >= self.actual_count:
+        active_count = len(self._active_questions())
+        if self.current_index + 1 >= active_count:
             self._finish_test()
             return
 
@@ -1420,10 +1647,22 @@ class JapaneseToKanaTestDialog(tk.Toplevel):
             self._show_result_frame()
             return
 
+        if not self.in_retry_mode and self.initial_failed_questions:
+            self._begin_retry_cycle(self.initial_failed_questions)
+            return
+
+        if self.in_retry_mode and self.retry_failed_questions:
+            self._begin_retry_cycle(self.retry_failed_questions)
+            return
+
         accuracy = (self.correct_count / self.actual_count) * 100
-        self.result_var.set(
-            f"Score: {self.correct_count}/{self.actual_count} ({accuracy:.1f}%)."
-        )
+        result_text = f"Score: {self.correct_count}/{self.actual_count} ({accuracy:.1f}%)."
+        if self.initial_failed_questions:
+            result_text += (
+                f" Initially missed: {len(self.initial_failed_questions)}. "
+                f"Retried until correct in {self.retry_cycle} cycle(s)."
+            )
+        self.result_var.set(result_text)
         self._show_result_frame()
 
     def _restart(self) -> None:
@@ -1432,12 +1671,19 @@ class JapaneseToKanaTestDialog(tk.Toplevel):
         self.correct_count = 0
         self.actual_count = 0
         self.current_answered = False
+        self.in_retry_mode = False
+        self.retry_cycle = 0
+        self.initial_failed_questions = []
+        self.initial_failed_entry_ids = set()
+        self.retry_questions = []
+        self.retry_failed_questions = []
         self.progress_var.set("")
         self.score_var.set("")
         self.prompt_var.set("")
         self.answer_var.set("")
         self.feedback_var.set("")
         self.result_var.set("")
+        self.detail_button.configure(state="disabled")
         self._show_start_frame()
 
     def _on_return_key(self, _event: tk.Event) -> str:
@@ -1478,6 +1724,12 @@ class JapaneseToEnglishChoiceTestDialog(tk.Toplevel):
         self.current_answered = False
         self.requested_count = 15
         self.actual_count = 0
+        self.in_retry_mode = False
+        self.retry_cycle = 0
+        self.initial_failed_questions: list[VocabEntry] = []
+        self.initial_failed_entry_ids: set[int] = set()
+        self.retry_questions: list[VocabEntry] = []
+        self.retry_failed_questions: list[VocabEntry] = []
 
         self.count_var = tk.StringVar(value="15")
         self.start_info_var = tk.StringVar(value="")
@@ -1599,8 +1851,16 @@ class JapaneseToEnglishChoiceTestDialog(tk.Toplevel):
             column=0,
             padx=(0, 8),
         )
+        self.detail_button = ttk.Button(
+            test_actions,
+            text="View details",
+            command=self._open_current_entry_detail,
+            style="App.TButton",
+            state="disabled",
+        )
+        self.detail_button.grid(row=0, column=1, padx=(0, 8))
         self.next_button = ttk.Button(test_actions, text="Next", command=self._next_question, style="App.TButton")
-        self.next_button.grid(row=0, column=1)
+        self.next_button.grid(row=0, column=2)
 
         self.result_frame = ttk.Frame(root)
         self.result_frame.grid(row=0, column=0, sticky="nsew")
@@ -1673,6 +1933,48 @@ class JapaneseToEnglishChoiceTestDialog(tk.Toplevel):
         self.test_frame.grid_remove()
         self.result_frame.grid()
 
+    def _active_questions(self) -> list[VocabEntry]:
+        return self.retry_questions if self.in_retry_mode else self.questions
+
+    def _current_question(self) -> VocabEntry | None:
+        active_questions = self._active_questions()
+        if not active_questions or self.current_index >= len(active_questions):
+            return None
+        return active_questions[self.current_index]
+
+    def _options_for_current_question(self, current: VocabEntry) -> list[str]:
+        if not self.in_retry_mode:
+            if self.current_index < len(self.options_by_question):
+                return self.options_by_question[self.current_index]
+            return [current.english_text]
+
+        try:
+            options = self.repository.get_english_options_for_entry(current.id, max_options=4)
+        except LookupError:
+            options = [current.english_text]
+
+        if current.english_text not in options:
+            options = [current.english_text, *options]
+        return options[:4]
+
+    def _begin_retry_cycle(self, retry_questions: list[VocabEntry]) -> None:
+        if not retry_questions:
+            return
+
+        self.in_retry_mode = True
+        self.retry_cycle += 1
+        self.retry_questions = list(retry_questions)
+        self.retry_failed_questions = []
+        self.current_index = 0
+        self._show_test_frame()
+        self._load_question()
+
+    def _open_current_entry_detail(self) -> None:
+        current = self._current_question()
+        if current is None:
+            return
+        _open_detail_dialog_from_test(self, current.id)
+
     def _start_test(self) -> None:
         try:
             requested = int(self.count_var.get().strip())
@@ -1710,6 +2012,12 @@ class JapaneseToEnglishChoiceTestDialog(tk.Toplevel):
         self.requested_count = requested
         self.current_index = 0
         self.correct_count = 0
+        self.in_retry_mode = False
+        self.retry_cycle = 0
+        self.initial_failed_questions = []
+        self.initial_failed_entry_ids = set()
+        self.retry_questions = []
+        self.retry_failed_questions = []
 
         if requested > self.actual_count:
             self.start_info_var.set(f"Requested {requested}; using all {self.actual_count} eligible vocabularies.")
@@ -1720,17 +2028,23 @@ class JapaneseToEnglishChoiceTestDialog(tk.Toplevel):
         self._load_question()
 
     def _load_question(self) -> None:
-        if not self.questions:
+        active_questions = self._active_questions()
+        if not active_questions:
             return
 
-        current = self.questions[self.current_index]
-        options = self.options_by_question[self.current_index]
+        current = active_questions[self.current_index]
+        options = self._options_for_current_question(current)
+        active_count = len(active_questions)
 
-        self.progress_var.set(f"Question {self.current_index + 1}/{self.actual_count}")
+        if self.in_retry_mode:
+            self.progress_var.set(f"Retry {self.retry_cycle} - Question {self.current_index + 1}/{active_count}")
+        else:
+            self.progress_var.set(f"Question {self.current_index + 1}/{self.actual_count}")
         self.score_var.set(f"Score: {self.correct_count}")
         self.prompt_var.set(current.japanese_text)
         self.feedback_var.set("")
         self.current_answered = False
+        self.detail_button.configure(state="disabled")
 
         for index, button in enumerate(self.option_buttons):
             if index < len(options):
@@ -1747,10 +2061,13 @@ class JapaneseToEnglishChoiceTestDialog(tk.Toplevel):
         self.next_button.configure(state="disabled")
 
     def _submit_choice(self, selected_option: str) -> None:
-        if self.current_answered or not self.questions:
+        if self.current_answered:
             return
 
-        current = self.questions[self.current_index]
+        current = self._current_question()
+        if current is None:
+            return
+
         correct_answer = current.english_text.strip()
         is_correct = selected_option.strip() == correct_answer
 
@@ -1764,10 +2081,18 @@ class JapaneseToEnglishChoiceTestDialog(tk.Toplevel):
             return
 
         if is_correct:
-            self.correct_count += 1
+            if not self.in_retry_mode:
+                self.correct_count += 1
             self.feedback_var.set("Correct.")
+            self.detail_button.configure(state="disabled")
         else:
+            if self.in_retry_mode:
+                self.retry_failed_questions.append(current)
+            elif current.id not in self.initial_failed_entry_ids:
+                self.initial_failed_entry_ids.add(current.id)
+                self.initial_failed_questions.append(current)
             self.feedback_var.set(f"Incorrect. Correct answer: {correct_answer}")
+            self.detail_button.configure(state="normal")
 
         self.score_var.set(f"Score: {self.correct_count}")
         self.current_answered = True
@@ -1783,7 +2108,8 @@ class JapaneseToEnglishChoiceTestDialog(tk.Toplevel):
         if not self.current_answered:
             return
 
-        if self.current_index + 1 >= self.actual_count:
+        active_count = len(self._active_questions())
+        if self.current_index + 1 >= active_count:
             self._finish_test()
             return
 
@@ -1796,10 +2122,22 @@ class JapaneseToEnglishChoiceTestDialog(tk.Toplevel):
             self._show_result_frame()
             return
 
+        if not self.in_retry_mode and self.initial_failed_questions:
+            self._begin_retry_cycle(self.initial_failed_questions)
+            return
+
+        if self.in_retry_mode and self.retry_failed_questions:
+            self._begin_retry_cycle(self.retry_failed_questions)
+            return
+
         accuracy = (self.correct_count / self.actual_count) * 100
-        self.result_var.set(
-            f"Score: {self.correct_count}/{self.actual_count} ({accuracy:.1f}%)."
-        )
+        result_text = f"Score: {self.correct_count}/{self.actual_count} ({accuracy:.1f}%)."
+        if self.initial_failed_questions:
+            result_text += (
+                f" Initially missed: {len(self.initial_failed_questions)}. "
+                f"Retried until correct in {self.retry_cycle} cycle(s)."
+            )
+        self.result_var.set(result_text)
         self._show_result_frame()
 
     def _restart(self) -> None:
@@ -1809,11 +2147,18 @@ class JapaneseToEnglishChoiceTestDialog(tk.Toplevel):
         self.correct_count = 0
         self.actual_count = 0
         self.current_answered = False
+        self.in_retry_mode = False
+        self.retry_cycle = 0
+        self.initial_failed_questions = []
+        self.initial_failed_entry_ids = set()
+        self.retry_questions = []
+        self.retry_failed_questions = []
         self.progress_var.set("")
         self.score_var.set("")
         self.prompt_var.set("")
         self.feedback_var.set("")
         self.result_var.set("")
+        self.detail_button.configure(state="disabled")
         self._show_start_frame()
 
     def _on_return_key(self, _event: tk.Event) -> str:
