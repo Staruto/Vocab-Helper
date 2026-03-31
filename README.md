@@ -4,10 +4,12 @@ Simple JP <-> EN vocabulary memorization helper with a desktop GUI.
 
 ## Features
 
-- Lists vocabulary in three columns: Japanese writing, kana (hiragana), English meaning
+- Lists vocabulary in three columns: target text, kana (optional), assistant meaning
+- Supports global language settings for target and assistant languages (default: target JP, assistant EN)
 - Adds new entries through a bottom "+" button
 - Supports bulk add in a dedicated 3-column line editor (Japanese, kana, English)
 - Edits and deletes entries from a right-click context menu
+- Supports opening a full vocabulary detail page via double-click or right-click -> View details
 - Supports multi-select delete from the vocabulary list
 - Supports keyboard shortcuts: Ctrl+N (add), Ctrl+Shift+N (bulk add), Ctrl+T (EN->JP test), Enter (edit selected row), Delete (remove selected rows)
 - Includes three test modes with immediate per-question judgment:
@@ -22,7 +24,9 @@ Simple JP <-> EN vocabulary memorization helper with a desktop GUI.
 - Supports test pick preference strategy selection: strict or weighted
 - Supports manual priority increase/decrease from the context menu (except gray tier)
 - Refreshes the main list immediately after closing a test dialog
-- Requires Japanese writing and English meaning
+- Supports optional part of speech metadata for each vocabulary
+- Supports editable markdown details for each vocabulary with in-app display mode
+- Requires target text and assistant meaning
 - Treats kana as optional
 - Suggests kana offline using pykakasi and lets users edit before save
 - Uses larger UI typography for readability (base size 12)
@@ -62,6 +66,31 @@ python -m unittest discover -s tests -p "test_*.py"
 - One entry per line (same row index across the three columns)
 - Japanese and English are required, kana is optional
 - A row where all three fields are empty is ignored
+
+## Language settings
+
+- Click `Languages` in the settings row to configure global language roles
+- Default values:
+	- Target language: `JP`
+	- Assistant language: `EN`
+- Target and assistant languages must be different
+- List column headers and entry/detail forms update to match current language settings
+
+## Entry metadata and detail page
+
+- Add/Edit dialogs support optional `Part of speech`
+- Open detail page by:
+	- Double-clicking a vocabulary row, or
+	- Right-click row -> `View details`
+- Detail page includes:
+	- Editable top fields (target text, kana, assistant meaning, part of speech)
+	- Stats summary (tests, errors, tier, created time)
+	- Markdown details section with `Edit markdown` and display mode
+- Markdown display mode supports a basic subset for readability:
+	- Headings (`#`, `##`, `###`)
+	- Bullet lists (`-` / `*`)
+	- Bold/italic/code inline styling
+	- Code blocks fenced with triple backticks
 
 ## Test mode (English -> Japanese)
 
