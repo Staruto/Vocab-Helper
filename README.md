@@ -11,6 +11,9 @@ Simple JP <-> EN vocabulary memorization helper with a desktop GUI.
 - Edits and deletes entries from a right-click context menu
 - Supports opening a full vocabulary detail page via double-click or right-click -> View details
 - Supports multi-select delete from the vocabulary list
+- Splits the UI into tabs:
+	- `Home` for vocabularies
+	- `Profile` for the practice activity grid
 - Supports keyboard shortcuts: Ctrl+N (add), Ctrl+Shift+N (bulk add), Ctrl+T (EN->JP test), Enter (edit selected row), Delete (remove selected rows)
 - Includes three test modes with immediate per-question judgment:
 	- English -> Japanese (fill-in)
@@ -145,9 +148,15 @@ python -m unittest discover -s tests -p "test_*.py"
 
 ## Daily activity grid
 
-- The main window shows a contributions-style grid for the last 180 days
+- The `Profile` tab shows a contributions-style grid for the last 180 days
 - Each cell counts unique vocabularies practiced on that date
 - Repeating the same vocabulary multiple times in one day counts once for that day
+- Color thresholds:
+	- 0: no color
+	- 1-10: tier 1
+	- 11-20: tier 2
+	- 21-30: tier 3
+	- 31+: tier 4
 - The grid refreshes automatically after test dialogs close
 
 Manual priority actions adjust `error_count` thresholds (for non-gray entries):
