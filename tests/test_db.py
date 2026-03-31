@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import sqlite3
 from pathlib import Path
 
 from vocab_helper.db import VocabRepository
@@ -24,6 +25,61 @@ class VocabRepositoryTests(unittest.TestCase):
         self.assertEqual(rows[0].japanese_text, "食べる")
         self.assertEqual(rows[0].kana_text, "たべる")
         self.assertEqual(rows[0].english_text, "to eat")
+        self.assertIsNone(rows[0].part_of_speech)
+        self.assertIsNone(rows[0].details_markdown)
+
+    def test_initialize_migrates_legacy_schema_and_adds_settings_table(self) -> None:
+        legacy_db_path = Path(self.temp_dir.name) / "legacy_vocab.db"
+
+        connection = sqlite3.connect(legacy_db_path)
+        try:
+            connection.execute(
+                """
+                CREATE TABLE vocab_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    japanese_text TEXT NOT NULL,
+                    kana_text TEXT NULL,
+                    english_text TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE vocab_stats (
+                    entry_id INTEGER PRIMARY KEY,
+                    error_count INTEGER NOT NULL DEFAULT 0,
+                    test_count INTEGER NOT NULL DEFAULT 0,
+                    last_tested TEXT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        legacy_repository = VocabRepository(legacy_db_path)
+        legacy_repository.initialize()
+
+        connection = sqlite3.connect(legacy_db_path)
+        try:
+            columns = {
+                row[1]
+                for row in connection.execute("PRAGMA table_info(vocab_entries)").fetchall()
+            }
+            self.assertIn("part_of_speech", columns)
+            self.assertIn("details_markdown", columns)
+
+            settings_rows = connection.execute(
+                "SELECT key, value FROM app_settings ORDER BY key"
+            ).fetchall()
+            self.assertEqual(
+                settings_rows,
+                [("assistant_language", "EN"), ("target_language", "JP")],
+            )
+        finally:
+            connection.close()
 
     def test_count_entries_reflects_total_rows(self) -> None:
         self.assertEqual(self.repository.count_entries(), 0)
@@ -32,6 +88,19 @@ class VocabRepositoryTests(unittest.TestCase):
         self.repository.add_entry("行く", "いく", "to go")
 
         self.assertEqual(self.repository.count_entries(), 2)
+
+    def test_language_settings_defaults_and_updates(self) -> None:
+        target, assistant = self.repository.get_language_settings()
+        self.assertEqual((target, assistant), ("JP", "EN"))
+
+        updated_target, updated_assistant = self.repository.set_language_settings("EN", "JP")
+        self.assertEqual((updated_target, updated_assistant), ("EN", "JP"))
+
+        target_after, assistant_after = self.repository.get_language_settings()
+        self.assertEqual((target_after, assistant_after), ("EN", "JP"))
+
+        with self.assertRaises(ValidationError):
+            self.repository.set_language_settings("JP", "JP")
 
     def test_count_distinct_english_meanings_normalizes_case_and_spaces(self) -> None:
         self.repository.add_entries(
@@ -125,25 +194,35 @@ class VocabRepositoryTests(unittest.TestCase):
             self.repository.add_entry("する", "かな", "")
 
     def test_get_entry_returns_inserted_row(self) -> None:
-        inserted = self.repository.add_entry("書く", "かく", "to write")
+        inserted = self.repository.add_entry("書く", "かく", "to write", "verb")
 
         loaded = self.repository.get_entry(inserted.id)
         self.assertEqual(loaded.id, inserted.id)
         self.assertEqual(loaded.japanese_text, "書く")
         self.assertEqual(loaded.kana_text, "かく")
         self.assertEqual(loaded.english_text, "to write")
+        self.assertEqual(loaded.part_of_speech, "verb")
+        self.assertIsNone(loaded.details_markdown)
 
     def test_update_entry_changes_values(self) -> None:
         inserted = self.repository.add_entry("読む", "よむ", "to read")
 
-        updated = self.repository.update_entry(inserted.id, "飲む", "のむ", "to drink")
+        updated = self.repository.update_entry(inserted.id, "飲む", "のむ", "to drink", "verb")
         self.assertEqual(updated.id, inserted.id)
         self.assertEqual(updated.japanese_text, "飲む")
         self.assertEqual(updated.kana_text, "のむ")
         self.assertEqual(updated.english_text, "to drink")
+        self.assertEqual(updated.part_of_speech, "verb")
 
         loaded = self.repository.get_entry(inserted.id)
         self.assertEqual(loaded.japanese_text, "飲む")
+
+    def test_update_entry_details_persists_markdown_content(self) -> None:
+        inserted = self.repository.add_entry("学ぶ", "まなぶ", "to study")
+
+        self.repository.update_entry_details(inserted.id, "# Notes\n- useful word\n**important**")
+        loaded = self.repository.get_entry(inserted.id)
+        self.assertEqual(loaded.details_markdown, "# Notes\n- useful word\n**important**")
 
     def test_delete_entry_removes_row(self) -> None:
         inserted = self.repository.add_entry("行く", "いく", "to go")

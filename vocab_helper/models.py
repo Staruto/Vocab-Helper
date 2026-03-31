@@ -8,4 +8,6 @@ class VocabEntry:
     japanese_text: str
     kana_text: Optional[str]
     english_text: str
+    part_of_speech: Optional[str]
+    details_markdown: Optional[str]
     created_at: str

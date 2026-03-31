@@ -6,7 +6,13 @@ from pathlib import Path
 from typing import Iterable
 
 from .models import VocabEntry
-from .validators import normalize_optional_text, validate_vocab_fields
+from .validators import (
+    ValidationError,
+    normalize_optional_markdown,
+    normalize_optional_text,
+    validate_language_code,
+    validate_vocab_fields,
+)
 
 
 class VocabRepository:
@@ -25,6 +31,8 @@ class VocabRepository:
                     japanese_text TEXT NOT NULL CHECK (trim(japanese_text) <> ''),
                     kana_text TEXT NULL,
                     english_text TEXT NOT NULL CHECK (trim(english_text) <> ''),
+                    part_of_speech TEXT NULL,
+                    details_markdown TEXT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
                 """
@@ -41,9 +49,125 @@ class VocabRepository:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
+
+            # Backward-compatible migrations for existing databases.
+            self._ensure_column(connection, "vocab_entries", "part_of_speech", "TEXT NULL")
+            self._ensure_column(connection, "vocab_entries", "details_markdown", "TEXT NULL")
+
+            connection.execute(
+                """
+                INSERT INTO app_settings (key, value)
+                VALUES ('target_language', 'JP')
+                ON CONFLICT(key) DO NOTHING
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO app_settings (key, value)
+                VALUES ('assistant_language', 'EN')
+                ON CONFLICT(key) DO NOTHING
+                """
+            )
             connection.commit()
         finally:
             connection.close()
+
+    @staticmethod
+    def _ensure_column(connection: sqlite3.Connection, table_name: str, column_name: str, definition: str) -> None:
+        rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+        existing_columns = {str(row[1]) for row in rows}
+        if column_name in existing_columns:
+            return
+        connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
+
+    def get_setting(self, key: str, default: str | None = None) -> str | None:
+        connection = sqlite3.connect(self.db_path)
+        try:
+            row = connection.execute(
+                """
+                SELECT value
+                FROM app_settings
+                WHERE key = ?
+                """,
+                (key,),
+            ).fetchone()
+            if row is None:
+                return default
+            return str(row[0])
+        finally:
+            connection.close()
+
+    def set_setting(self, key: str, value: str) -> None:
+        connection = sqlite3.connect(self.db_path)
+        try:
+            connection.execute(
+                """
+                INSERT INTO app_settings (key, value)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (key, value),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def get_language_settings(self) -> tuple[str, str]:
+        target_raw = self.get_setting("target_language", "JP") or "JP"
+        assistant_raw = self.get_setting("assistant_language", "EN") or "EN"
+
+        try:
+            target = validate_language_code(target_raw, "Target language")
+        except ValidationError:
+            target = "JP"
+
+        try:
+            assistant = validate_language_code(assistant_raw, "Assistant language")
+        except ValidationError:
+            assistant = "EN" if target != "EN" else "JP"
+
+        if target == assistant:
+            assistant = "EN" if target == "JP" else "JP"
+
+        return target, assistant
+
+    def set_language_settings(self, target_language: str, assistant_language: str) -> tuple[str, str]:
+        target = validate_language_code(target_language, "Target language")
+        assistant = validate_language_code(assistant_language, "Assistant language")
+        if target == assistant:
+            raise ValidationError("Target and assistant languages must be different.")
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            connection.execute(
+                """
+                INSERT INTO app_settings (key, value)
+                VALUES ('target_language', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (target,),
+            )
+            connection.execute(
+                """
+                INSERT INTO app_settings (key, value)
+                VALUES ('assistant_language', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (assistant,),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        return target, assistant
 
     def list_entries(self) -> list[VocabEntry]:
         connection = sqlite3.connect(self.db_path)
@@ -51,7 +175,7 @@ class VocabRepository:
             connection.row_factory = sqlite3.Row
             rows: Iterable[sqlite3.Row] = connection.execute(
                 """
-                SELECT id, japanese_text, kana_text, english_text, created_at
+                SELECT id, japanese_text, kana_text, english_text, part_of_speech, details_markdown, created_at
                 FROM vocab_entries
                 ORDER BY id ASC
                 """
@@ -104,7 +228,7 @@ class VocabRepository:
             connection.row_factory = sqlite3.Row
             rows: Iterable[sqlite3.Row] = connection.execute(
                 """
-                SELECT id, japanese_text, kana_text, english_text, created_at
+                SELECT id, japanese_text, kana_text, english_text, part_of_speech, details_markdown, created_at
                 FROM vocab_entries
                 ORDER BY RANDOM()
                 LIMIT ?
@@ -145,6 +269,8 @@ class VocabRepository:
                     e.japanese_text,
                     e.kana_text,
                     e.english_text,
+                    e.part_of_speech,
+                    e.details_markdown,
                     e.created_at,
                     COALESCE(s.error_count, 0) AS error_count,
                     COALESCE(s.test_count, 0) AS test_count
@@ -335,18 +461,33 @@ class VocabRepository:
         finally:
             connection.close()
 
-    def add_entry(self, japanese_text: str, kana_text: str, english_text: str) -> VocabEntry:
-        created = self.add_entries([(japanese_text, kana_text, english_text)])
+    def add_entry(
+        self,
+        japanese_text: str,
+        kana_text: str,
+        english_text: str,
+        part_of_speech: str = "",
+    ) -> VocabEntry:
+        created = self.add_entries([(japanese_text, kana_text, english_text, part_of_speech)])
         if not created:
             raise RuntimeError("Could not load inserted entry.")
         return created[0]
 
-    def add_entries(self, entries: Iterable[tuple[str, str, str]]) -> list[VocabEntry]:
-        normalized_entries: list[tuple[str, str | None, str]] = []
-        for japanese_text, kana_text, english_text in entries:
+    def add_entries(self, entries: Iterable[tuple[str, str, str] | tuple[str, str, str, str]]) -> list[VocabEntry]:
+        normalized_entries: list[tuple[str, str | None, str, str | None, str | None]] = []
+        for entry in entries:
+            if len(entry) == 3:
+                japanese_text, kana_text, english_text = entry
+                part_of_speech = ""
+            elif len(entry) == 4:
+                japanese_text, kana_text, english_text, part_of_speech = entry
+            else:
+                raise ValidationError("Each entry must contain 3 or 4 values.")
+
             japanese, english = validate_vocab_fields(japanese_text, english_text)
             kana = normalize_optional_text(kana_text)
-            normalized_entries.append((japanese, kana, english))
+            normalized_part_of_speech = normalize_optional_text(part_of_speech)
+            normalized_entries.append((japanese, kana, english, normalized_part_of_speech, None))
 
         if not normalized_entries:
             return []
@@ -356,20 +497,20 @@ class VocabRepository:
             connection.row_factory = sqlite3.Row
 
             inserted_ids: list[int] = []
-            for japanese, kana, english in normalized_entries:
+            for japanese, kana, english, part_of_speech, details_markdown in normalized_entries:
                 cursor = connection.execute(
                     """
-                    INSERT INTO vocab_entries (japanese_text, kana_text, english_text)
-                    VALUES (?, ?, ?)
+                    INSERT INTO vocab_entries (japanese_text, kana_text, english_text, part_of_speech, details_markdown)
+                    VALUES (?, ?, ?, ?, ?)
                     """,
-                    (japanese, kana, english),
+                    (japanese, kana, english, part_of_speech, details_markdown),
                 )
                 inserted_ids.append(int(cursor.lastrowid))
 
             placeholders = ",".join("?" for _ in inserted_ids)
             rows = connection.execute(
                 f"""
-                SELECT id, japanese_text, kana_text, english_text, created_at
+                SELECT id, japanese_text, kana_text, english_text, part_of_speech, details_markdown, created_at
                 FROM vocab_entries
                 WHERE id IN ({placeholders})
                 ORDER BY id ASC
@@ -392,7 +533,7 @@ class VocabRepository:
             connection.row_factory = sqlite3.Row
             row = connection.execute(
                 """
-                SELECT id, japanese_text, kana_text, english_text, created_at
+                SELECT id, japanese_text, kana_text, english_text, part_of_speech, details_markdown, created_at
                 FROM vocab_entries
                 WHERE id = ?
                 """,
@@ -406,9 +547,17 @@ class VocabRepository:
 
         return self._map_row(row)
 
-    def update_entry(self, entry_id: int, japanese_text: str, kana_text: str, english_text: str) -> VocabEntry:
+    def update_entry(
+        self,
+        entry_id: int,
+        japanese_text: str,
+        kana_text: str,
+        english_text: str,
+        part_of_speech: str = "",
+    ) -> VocabEntry:
         japanese, english = validate_vocab_fields(japanese_text, english_text)
         kana = normalize_optional_text(kana_text)
+        normalized_part_of_speech = normalize_optional_text(part_of_speech)
 
         connection = sqlite3.connect(self.db_path)
         row: sqlite3.Row | None = None
@@ -417,17 +566,17 @@ class VocabRepository:
             cursor = connection.execute(
                 """
                 UPDATE vocab_entries
-                SET japanese_text = ?, kana_text = ?, english_text = ?
+                SET japanese_text = ?, kana_text = ?, english_text = ?, part_of_speech = ?
                 WHERE id = ?
                 """,
-                (japanese, kana, english, entry_id),
+                (japanese, kana, english, normalized_part_of_speech, entry_id),
             )
             if cursor.rowcount == 0:
                 raise LookupError(f"Vocabulary entry with id {entry_id} was not found.")
 
             row = connection.execute(
                 """
-                SELECT id, japanese_text, kana_text, english_text, created_at
+                SELECT id, japanese_text, kana_text, english_text, part_of_speech, details_markdown, created_at
                 FROM vocab_entries
                 WHERE id = ?
                 """,
@@ -441,6 +590,25 @@ class VocabRepository:
             raise RuntimeError("Could not load updated entry.")
 
         return self._map_row(row)
+
+    def update_entry_details(self, entry_id: int, details_markdown: str) -> None:
+        normalized_details = normalize_optional_markdown(details_markdown)
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            cursor = connection.execute(
+                """
+                UPDATE vocab_entries
+                SET details_markdown = ?
+                WHERE id = ?
+                """,
+                (normalized_details, entry_id),
+            )
+            if cursor.rowcount == 0:
+                raise LookupError(f"Vocabulary entry with id {entry_id} was not found.")
+            connection.commit()
+        finally:
+            connection.close()
 
     def delete_entry(self, entry_id: int) -> None:
         self.delete_entries([entry_id])
@@ -542,11 +710,17 @@ class VocabRepository:
 
     @staticmethod
     def _map_row(row: sqlite3.Row) -> VocabEntry:
+        keys = set(row.keys())
+        part_of_speech = row["part_of_speech"] if "part_of_speech" in keys else None
+        details_markdown = row["details_markdown"] if "details_markdown" in keys else None
+
         return VocabEntry(
             id=int(row["id"]),
             japanese_text=str(row["japanese_text"]),
             kana_text=row["kana_text"],
             english_text=str(row["english_text"]),
+            part_of_speech=str(part_of_speech) if part_of_speech is not None else None,
+            details_markdown=str(details_markdown) if details_markdown is not None else None,
             created_at=str(row["created_at"]),
         )
 

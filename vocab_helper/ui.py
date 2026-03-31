@@ -36,6 +36,23 @@ TIER_BG_COLORS = {
     "red": "#fde7e7",
 }
 
+LANGUAGE_NAMES = {
+    "JP": "Japanese",
+    "EN": "English",
+}
+
+PART_OF_SPEECH_OPTIONS = (
+    "",
+    "noun",
+    "verb",
+    "adjective",
+    "adverb",
+    "expression",
+    "particle",
+    "auxiliary",
+    "other",
+)
+
 
 def _pick_font_family(root: tk.Misc, candidates: tuple[str, ...]) -> str:
     available = {family.lower(): family for family in tkfont.families(root)}
@@ -57,6 +74,92 @@ def _build_font_set(root: tk.Misc) -> dict[str, tkfont.Font]:
     }
 
 
+def _insert_markdown_inline(widget: tk.Text, text: str, tags: tuple[str, ...]) -> None:
+    index = 0
+    while index < len(text):
+        if text.startswith("**", index):
+            end_index = text.find("**", index + 2)
+            if end_index != -1:
+                widget.insert("end", text[index + 2 : end_index], tags + ("md_bold",))
+                index = end_index + 2
+                continue
+        if text.startswith("*", index):
+            end_index = text.find("*", index + 1)
+            if end_index != -1:
+                widget.insert("end", text[index + 1 : end_index], tags + ("md_italic",))
+                index = end_index + 1
+                continue
+        if text.startswith("`", index):
+            end_index = text.find("`", index + 1)
+            if end_index != -1:
+                widget.insert("end", text[index + 1 : end_index], tags + ("md_code_inline",))
+                index = end_index + 1
+                continue
+
+        widget.insert("end", text[index], tags)
+        index += 1
+
+
+def _render_markdown_to_text(widget: tk.Text, markdown_text: str, base_font: tkfont.Font, monospace_font: tkfont.Font) -> None:
+    heading1_font = base_font.copy()
+    heading1_font.configure(size=base_font.cget("size") + 4, weight="bold")
+    heading2_font = base_font.copy()
+    heading2_font.configure(size=base_font.cget("size") + 2, weight="bold")
+    heading3_font = base_font.copy()
+    heading3_font.configure(weight="bold")
+
+    bold_font = base_font.copy()
+    bold_font.configure(weight="bold")
+    italic_font = base_font.copy()
+    italic_font.configure(slant="italic")
+
+    widget.configure(state="normal")
+    widget.delete("1.0", "end")
+    widget.tag_configure("md_body", font=base_font)
+    widget.tag_configure("md_h1", font=heading1_font, spacing1=8, spacing3=4)
+    widget.tag_configure("md_h2", font=heading2_font, spacing1=6, spacing3=3)
+    widget.tag_configure("md_h3", font=heading3_font, spacing1=4, spacing3=2)
+    widget.tag_configure("md_bold", font=bold_font)
+    widget.tag_configure("md_italic", font=italic_font)
+    widget.tag_configure("md_code_inline", font=monospace_font, background="#f3f3f3")
+    widget.tag_configure("md_code_block", font=monospace_font, background="#f7f7f7", lmargin1=8, lmargin2=8)
+
+    in_code_block = False
+    for raw_line in markdown_text.splitlines():
+        line = raw_line.rstrip("\n")
+
+        if line.strip().startswith("```"):
+            in_code_block = not in_code_block
+            continue
+
+        if in_code_block:
+            widget.insert("end", line + "\n", ("md_code_block",))
+            continue
+
+        if line.startswith("# "):
+            _insert_markdown_inline(widget, line[2:], ("md_h1",))
+            widget.insert("end", "\n", ("md_h1",))
+            continue
+        if line.startswith("## "):
+            _insert_markdown_inline(widget, line[3:], ("md_h2",))
+            widget.insert("end", "\n", ("md_h2",))
+            continue
+        if line.startswith("### "):
+            _insert_markdown_inline(widget, line[4:], ("md_h3",))
+            widget.insert("end", "\n", ("md_h3",))
+            continue
+        if line.startswith("- ") or line.startswith("* "):
+            widget.insert("end", "- ", ("md_body",))
+            _insert_markdown_inline(widget, line[2:], ("md_body",))
+            widget.insert("end", "\n", ("md_body",))
+            continue
+
+        _insert_markdown_inline(widget, line, ("md_body",))
+        widget.insert("end", "\n", ("md_body",))
+
+    widget.configure(state="disabled")
+
+
 class MainWindow(tk.Tk):
     def __init__(self, repository: VocabRepository) -> None:
         super().__init__()
@@ -64,6 +167,7 @@ class MainWindow(tk.Tk):
         self.fonts = _build_font_set(self)
         self._tree_entry_ids: dict[str, int] = {}
         self._entry_stats_by_id: dict[int, tuple[int, int, str]] = {}
+        self.target_language_code, self.assistant_language_code = self.repository.get_language_settings()
 
         self.show_tier_colors_var = tk.BooleanVar(value=True)
         self.sort_mode_var = tk.StringVar(value="time")
@@ -92,6 +196,20 @@ class MainWindow(tk.Tk):
         style.configure("Treeview", font=self.fonts["japanese"], rowheight=30)
         style.configure("Treeview.Heading", font=self.fonts["tree_heading"])
 
+    def _language_display_name(self, code: str) -> str:
+        return LANGUAGE_NAMES.get(code.upper(), code.upper())
+
+    def _target_field_label(self) -> str:
+        return f"Target text ({self._language_display_name(self.target_language_code)})"
+
+    def _assistant_field_label(self) -> str:
+        return f"Assistant meaning ({self._language_display_name(self.assistant_language_code)})"
+
+    def _refresh_language_labels(self) -> None:
+        self.tree.heading("jp", text=self._target_field_label())
+        self.tree.heading("kana", text="Kana (optional)")
+        self.tree.heading("en", text=self._assistant_field_label())
+
     def _build_widgets(self) -> None:
         container = ttk.Frame(self, padding=12)
         container.grid(row=0, column=0, sticky="nsew")
@@ -110,9 +228,9 @@ class MainWindow(tk.Tk):
             height=15,
             selectmode="extended",
         )
-        self.tree.heading("jp", text="Japanese writing")
-        self.tree.heading("kana", text="Kana (hiragana)")
-        self.tree.heading("en", text="English meaning")
+        self.tree.heading("jp", text="Target text")
+        self.tree.heading("kana", text="Kana (optional)")
+        self.tree.heading("en", text="Assistant meaning")
         self.tree.column("jp", width=300, anchor="w")
         self.tree.column("kana", width=250, anchor="w")
         self.tree.column("en", width=300, anchor="w")
@@ -124,6 +242,8 @@ class MainWindow(tk.Tk):
         scrollbar.grid(row=0, column=1, sticky="ns")
 
         self.context_menu = tk.Menu(self, tearoff=0, font=self.fonts["latin"])
+        self.context_menu.add_command(label="View details", command=self._open_detail_dialog)
+        self.context_menu.add_separator()
         self.context_menu.add_command(label="Edit", command=self._open_edit_dialog)
         self.context_menu.add_command(label="Delete selected", command=self._delete_selected_entry)
         self.context_menu.add_separator()
@@ -131,6 +251,7 @@ class MainWindow(tk.Tk):
         self.context_menu.add_command(label="Decrease priority", command=self._decrease_selected_priority)
         self.tree.bind("<Button-1>", self._on_tree_left_click, add="+")
         self.tree.bind("<Button-3>", self._show_context_menu)
+        self.tree.bind("<Double-Button-1>", self._on_tree_double_click)
 
         self.tree.tag_configure("tier_gray", background=TIER_BG_COLORS["gray"])
         self.tree.tag_configure("tier_green", background=TIER_BG_COLORS["green"])
@@ -220,7 +341,15 @@ class MainWindow(tk.Tk):
         self.test_pick_combo.grid(row=0, column=6, sticky="w", padx=(4, 0))
         self.test_pick_combo.bind("<<ComboboxSelected>>", self._on_pick_strategy_changed)
 
+        ttk.Button(
+            settings_row,
+            text="Languages",
+            command=self._open_language_settings_dialog,
+            style="App.TButton",
+        ).grid(row=0, column=7, sticky="w", padx=(10, 0))
+
         self._update_sort_controls()
+        self._refresh_language_labels()
 
         status_row = ttk.Frame(container, padding=(0, 8, 0, 0))
         status_row.grid(row=3, column=0, sticky="ew")
@@ -334,6 +463,16 @@ class MainWindow(tk.Tk):
             self.tree.selection_remove(self.tree.selection())
         self.tree.focus("")
 
+    def _on_tree_double_click(self, event: tk.Event) -> str:
+        item_id = self.tree.identify_row(event.y)
+        if not item_id:
+            return "break"
+
+        entry_id = self._tree_entry_ids.get(item_id)
+        if entry_id is not None:
+            self._open_detail_dialog(entry_id)
+        return "break"
+
     def _selected_entry_id(self) -> int | None:
         focused_item = self.tree.focus()
         if focused_item:
@@ -375,6 +514,10 @@ class MainWindow(tk.Tk):
             initial_japanese="",
             initial_kana="",
             initial_english="",
+            initial_part_of_speech="",
+            target_label=self._target_field_label(),
+            assistant_label=self._assistant_field_label(),
+            enable_kana_suggest=self.target_language_code == "JP",
         )
         self.wait_window(dialog)
 
@@ -434,18 +577,67 @@ class MainWindow(tk.Tk):
             self,
             title="Edit vocabulary",
             save_button_text="Save changes",
-            save_handler=lambda japanese, kana, english: self.repository.update_entry(
+            save_handler=lambda japanese, kana, english, part_of_speech: self.repository.update_entry(
                 entry_id,
                 japanese,
                 kana,
                 english,
+                part_of_speech,
             ),
             on_saved=self.refresh_entries,
             initial_japanese=entry.japanese_text,
             initial_kana=entry.kana_text or "",
             initial_english=entry.english_text,
+            initial_part_of_speech=entry.part_of_speech or "",
+            target_label=self._target_field_label(),
+            assistant_label=self._assistant_field_label(),
+            enable_kana_suggest=self.target_language_code == "JP",
         )
         self.wait_window(dialog)
+
+    def _open_detail_dialog(self, entry_id: int | None = None) -> None:
+        resolved_entry_id = entry_id if entry_id is not None else self._selected_entry_id()
+        if resolved_entry_id is None:
+            messagebox.showwarning("No selection", "Select an entry to view details.", parent=self)
+            return
+
+        dialog = VocabularyDetailDialog(
+            self,
+            repository=self.repository,
+            entry_id=resolved_entry_id,
+            text_fonts=self.fonts,
+            target_label=self._target_field_label(),
+            assistant_label=self._assistant_field_label(),
+            enable_kana_suggest=self.target_language_code == "JP",
+            on_saved=self.refresh_entries,
+        )
+        self.wait_window(dialog)
+
+    def _open_language_settings_dialog(self) -> None:
+        dialog = LanguageSettingsDialog(
+            self,
+            target_language=self.target_language_code,
+            assistant_language=self.assistant_language_code,
+            text_font=self.fonts["latin"],
+        )
+        self.wait_window(dialog)
+
+        if dialog.result is None:
+            return
+
+        try:
+            target, assistant = self.repository.set_language_settings(dialog.result[0], dialog.result[1])
+        except ValidationError as exc:
+            messagebox.showerror("Validation error", str(exc), parent=self)
+            return
+        except sqlite3.Error as exc:
+            messagebox.showerror("Database error", f"Could not save language settings: {exc}", parent=self)
+            return
+
+        self.target_language_code = target
+        self.assistant_language_code = assistant
+        self._refresh_language_labels()
+        self.refresh_entries()
 
     def _delete_selected_entry(self) -> None:
         entry_ids = self._selected_entry_ids()
@@ -1718,15 +1910,22 @@ class EntryDialog(tk.Toplevel):
         parent: tk.Tk,
         title: str,
         save_button_text: str,
-        save_handler: Callable[[str, str, str], object],
+        save_handler: Callable[[str, str, str, str], object],
         on_saved: Callable[[], None],
         initial_japanese: str,
         initial_kana: str,
         initial_english: str,
+        initial_part_of_speech: str,
+        target_label: str,
+        assistant_label: str,
+        enable_kana_suggest: bool,
     ) -> None:
         super().__init__(parent)
         self.save_handler = save_handler
         self.on_saved = on_saved
+        self.target_label = target_label
+        self.assistant_label = assistant_label
+        self.enable_kana_suggest = enable_kana_suggest
 
         self._auto_suggest_job: str | None = None
         self._updating_kana = False
@@ -1735,7 +1934,11 @@ class EntryDialog(tk.Toplevel):
         self.japanese_var = tk.StringVar(value=initial_japanese)
         self.kana_var = tk.StringVar(value=initial_kana)
         self.english_var = tk.StringVar(value=initial_english)
-        self.status_var = tk.StringVar(value="Kana is optional. You can edit any suggestion.")
+        self.part_of_speech_var = tk.StringVar(value=initial_part_of_speech)
+        default_status = "Kana is optional. You can edit any suggestion."
+        if not self.enable_kana_suggest:
+            default_status = "Kana is optional. Automatic kana suggestion is only available when target language is Japanese."
+        self.status_var = tk.StringVar(value=default_status)
 
         self.title(title)
         self.transient(parent)
@@ -1756,26 +1959,38 @@ class EntryDialog(tk.Toplevel):
         frame = ttk.Frame(self, padding=14)
         frame.grid(row=0, column=0, sticky="nsew")
 
-        ttk.Label(frame, text="Japanese writing *", style="App.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(frame, text=f"{self.target_label} *", style="App.TLabel").grid(row=0, column=0, sticky="w")
         self.japanese_entry = ttk.Entry(frame, textvariable=self.japanese_var, width=48, style="Japanese.TEntry")
         self.japanese_entry.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
 
-        ttk.Label(frame, text="Kana (hiragana, optional)", style="App.TLabel").grid(row=2, column=0, sticky="w")
+        ttk.Label(frame, text="Kana (optional)", style="App.TLabel").grid(row=2, column=0, sticky="w")
         self.kana_entry = ttk.Entry(frame, textvariable=self.kana_var, width=48, style="Japanese.TEntry")
         self.kana_entry.grid(row=3, column=0, sticky="ew", pady=(0, 10))
 
         suggest_button = ttk.Button(frame, text="Suggest kana", command=self._suggest_kana_manual, style="App.TButton")
         suggest_button.grid(row=3, column=1, sticky="e", padx=(8, 0), pady=(0, 10))
+        if not self.enable_kana_suggest:
+            suggest_button.configure(state="disabled")
 
-        ttk.Label(frame, text="English meaning *", style="App.TLabel").grid(row=4, column=0, sticky="w")
+        ttk.Label(frame, text=f"{self.assistant_label} *", style="App.TLabel").grid(row=4, column=0, sticky="w")
         self.english_entry = ttk.Entry(frame, textvariable=self.english_var, width=48, style="App.TEntry")
         self.english_entry.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(0, 8))
 
+        ttk.Label(frame, text="Part of speech (optional)", style="App.TLabel").grid(row=6, column=0, sticky="w")
+        self.part_of_speech_combo = ttk.Combobox(
+            frame,
+            values=PART_OF_SPEECH_OPTIONS,
+            state="normal",
+            width=46,
+            textvariable=self.part_of_speech_var,
+        )
+        self.part_of_speech_combo.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+
         status_label = ttk.Label(frame, textvariable=self.status_var, style="Status.TLabel", wraplength=460)
-        status_label.grid(row=6, column=0, columnspan=2, sticky="w", pady=(2, 12))
+        status_label.grid(row=8, column=0, columnspan=2, sticky="w", pady=(2, 12))
 
         actions = ttk.Frame(frame)
-        actions.grid(row=7, column=0, columnspan=2, sticky="e")
+        actions.grid(row=9, column=0, columnspan=2, sticky="e")
 
         cancel_button = ttk.Button(actions, text="Cancel", command=self.destroy, style="App.TButton")
         save_button = ttk.Button(actions, text=save_button_text, command=self._save, style="App.TButton")
@@ -1783,6 +1998,8 @@ class EntryDialog(tk.Toplevel):
         save_button.grid(row=0, column=1)
 
     def _on_japanese_text_change(self, *_: object) -> None:
+        if not self.enable_kana_suggest:
+            return
         if self._auto_suggest_job is not None:
             self.after_cancel(self._auto_suggest_job)
         self._auto_suggest_job = self.after(300, self._suggest_kana_automatic)
@@ -1793,12 +2010,17 @@ class EntryDialog(tk.Toplevel):
         self._kana_user_override = bool(self.kana_var.get().strip())
 
     def _suggest_kana_automatic(self) -> None:
+        if not self.enable_kana_suggest:
+            return
         self._auto_suggest_job = None
         if self._kana_user_override and self.kana_var.get().strip():
             return
         self._suggest_kana()
 
     def _suggest_kana_manual(self) -> None:
+        if not self.enable_kana_suggest:
+            self.status_var.set("Kana suggestion is disabled for the current target language.")
+            return
         self._suggest_kana(force_message=True)
 
     def _suggest_kana(self, force_message: bool = False) -> None:
@@ -1821,6 +2043,7 @@ class EntryDialog(tk.Toplevel):
                 self.japanese_var.get(),
                 self.kana_var.get(),
                 self.english_var.get(),
+                self.part_of_speech_var.get(),
             )
         except ValidationError as exc:
             messagebox.showerror("Validation error", str(exc), parent=self)
@@ -1830,6 +2053,347 @@ class EntryDialog(tk.Toplevel):
             return
         except sqlite3.Error as exc:
             messagebox.showerror("Database error", f"Could not save entry: {exc}", parent=self)
+            return
+
+        self.on_saved()
+        self.destroy()
+
+
+class LanguageSettingsDialog(tk.Toplevel):
+    def __init__(
+        self,
+        parent: tk.Tk,
+        target_language: str,
+        assistant_language: str,
+        text_font: tkfont.Font,
+    ) -> None:
+        super().__init__(parent)
+        self.result: tuple[str, str] | None = None
+
+        self.target_var = tk.StringVar(value=target_language)
+        self.assistant_var = tk.StringVar(value=assistant_language)
+
+        self.title("Language settings")
+        self.transient(parent)
+        self.grab_set()
+        self.resizable(False, False)
+
+        frame = ttk.Frame(self, padding=14)
+        frame.grid(row=0, column=0, sticky="nsew")
+
+        ttk.Label(frame, text="Target language", style="App.TLabel").grid(row=0, column=0, sticky="w")
+        target_combo = ttk.Combobox(
+            frame,
+            values=tuple(LANGUAGE_NAMES.keys()),
+            state="readonly",
+            width=10,
+            textvariable=self.target_var,
+            font=text_font,
+        )
+        target_combo.grid(row=1, column=0, sticky="w", pady=(4, 10))
+
+        ttk.Label(frame, text="Assistant language", style="App.TLabel").grid(row=2, column=0, sticky="w")
+        assistant_combo = ttk.Combobox(
+            frame,
+            values=tuple(LANGUAGE_NAMES.keys()),
+            state="readonly",
+            width=10,
+            textvariable=self.assistant_var,
+            font=text_font,
+        )
+        assistant_combo.grid(row=3, column=0, sticky="w", pady=(4, 12))
+
+        actions = ttk.Frame(frame)
+        actions.grid(row=4, column=0, sticky="e")
+
+        ttk.Button(actions, text="Cancel", command=self.destroy, style="App.TButton").grid(
+            row=0,
+            column=0,
+            padx=(0, 8),
+        )
+        ttk.Button(actions, text="Save", command=self._save, style="App.TButton").grid(row=0, column=1)
+
+        self.bind("<Escape>", lambda _event: self.destroy())
+        self.bind("<Return>", lambda _event: self._save())
+
+    def _save(self) -> None:
+        target = self.target_var.get().strip().upper()
+        assistant = self.assistant_var.get().strip().upper()
+        if target == assistant:
+            messagebox.showerror("Validation error", "Target and assistant languages must be different.", parent=self)
+            return
+
+        self.result = (target, assistant)
+        self.destroy()
+
+
+class VocabularyDetailDialog(tk.Toplevel):
+    def __init__(
+        self,
+        parent: tk.Tk,
+        repository: VocabRepository,
+        entry_id: int,
+        text_fonts: dict[str, tkfont.Font],
+        target_label: str,
+        assistant_label: str,
+        enable_kana_suggest: bool,
+        on_saved: Callable[[], None],
+    ) -> None:
+        super().__init__(parent)
+        self.repository = repository
+        self.entry_id = entry_id
+        self.text_fonts = text_fonts
+        self.target_label = target_label
+        self.assistant_label = assistant_label
+        self.enable_kana_suggest = enable_kana_suggest
+        self.on_saved = on_saved
+
+        self._auto_suggest_job: str | None = None
+        self._updating_kana = False
+        self._kana_user_override = False
+        self._is_editing_markdown = False
+
+        self.target_var = tk.StringVar(value="")
+        self.kana_var = tk.StringVar(value="")
+        self.assistant_var = tk.StringVar(value="")
+        self.part_of_speech_var = tk.StringVar(value="")
+        self.stats_var = tk.StringVar(value="")
+        self.created_var = tk.StringVar(value="")
+        self.details_markdown = ""
+
+        self.title("Vocabulary details")
+        self.transient(parent)
+        self.grab_set()
+        self.geometry("900x680")
+        self.minsize(760, 560)
+
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        self._build_widgets()
+        self._load_entry()
+
+        self.target_var.trace_add("write", self._on_target_text_change)
+        self.kana_var.trace_add("write", self._on_kana_text_change)
+
+        self.bind("<Escape>", lambda _event: self.destroy())
+
+    def _build_widgets(self) -> None:
+        frame = ttk.Frame(self, padding=14)
+        frame.grid(row=0, column=0, sticky="nsew")
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(1, weight=1)
+
+        header = ttk.LabelFrame(frame, text="Vocabulary", padding=10)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        header.columnconfigure(1, weight=1)
+
+        ttk.Label(header, text=f"{self.target_label} *", style="App.TLabel").grid(row=0, column=0, sticky="w")
+        self.target_entry = ttk.Entry(header, textvariable=self.target_var, style="Japanese.TEntry")
+        self.target_entry.grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=(0, 6))
+
+        ttk.Label(header, text="Kana (optional)", style="App.TLabel").grid(row=1, column=0, sticky="w")
+        self.kana_entry = ttk.Entry(header, textvariable=self.kana_var, style="Japanese.TEntry")
+        self.kana_entry.grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=(0, 6))
+
+        suggest_kana_button = ttk.Button(
+            header,
+            text="Suggest kana",
+            command=self._suggest_kana_manual,
+            style="App.TButton",
+        )
+        suggest_kana_button.grid(row=1, column=2, sticky="w", padx=(8, 0), pady=(0, 6))
+        if not self.enable_kana_suggest:
+            suggest_kana_button.configure(state="disabled")
+
+        ttk.Label(header, text=f"{self.assistant_label} *", style="App.TLabel").grid(row=2, column=0, sticky="w")
+        self.assistant_entry = ttk.Entry(header, textvariable=self.assistant_var, style="App.TEntry")
+        self.assistant_entry.grid(row=2, column=1, sticky="ew", padx=(8, 0), pady=(0, 6))
+
+        ttk.Label(header, text="Part of speech", style="App.TLabel").grid(row=3, column=0, sticky="w")
+        self.part_of_speech_combo = ttk.Combobox(
+            header,
+            values=PART_OF_SPEECH_OPTIONS,
+            state="normal",
+            textvariable=self.part_of_speech_var,
+        )
+        self.part_of_speech_combo.grid(row=3, column=1, sticky="ew", padx=(8, 0), pady=(0, 6))
+
+        ttk.Label(header, textvariable=self.stats_var, style="Status.TLabel").grid(
+            row=4,
+            column=0,
+            columnspan=3,
+            sticky="w",
+            pady=(4, 0),
+        )
+        ttk.Label(header, textvariable=self.created_var, style="Status.TLabel").grid(
+            row=5,
+            column=0,
+            columnspan=3,
+            sticky="w",
+        )
+
+        details_section = ttk.LabelFrame(frame, text="Details (Markdown)", padding=10)
+        details_section.grid(row=1, column=0, sticky="nsew")
+        details_section.columnconfigure(0, weight=1)
+        details_section.rowconfigure(1, weight=1)
+
+        details_actions = ttk.Frame(details_section)
+        details_actions.grid(row=0, column=0, sticky="e", pady=(0, 8))
+        self.toggle_details_button = ttk.Button(
+            details_actions,
+            text="Edit markdown",
+            command=self._toggle_markdown_mode,
+            style="App.TButton",
+        )
+        self.toggle_details_button.grid(row=0, column=0)
+
+        preview_frame = ttk.Frame(details_section)
+        preview_frame.grid(row=1, column=0, sticky="nsew")
+        preview_frame.columnconfigure(0, weight=1)
+        preview_frame.rowconfigure(0, weight=1)
+
+        self.details_preview = tk.Text(
+            preview_frame,
+            wrap="word",
+            font=self.text_fonts["latin"],
+            state="disabled",
+        )
+        self.details_preview.grid(row=0, column=0, sticky="nsew")
+        preview_scroll = ttk.Scrollbar(preview_frame, orient="vertical", command=self.details_preview.yview)
+        preview_scroll.grid(row=0, column=1, sticky="ns")
+        self.details_preview.configure(yscrollcommand=preview_scroll.set)
+
+        editor_frame = ttk.Frame(details_section)
+        editor_frame.grid(row=1, column=0, sticky="nsew")
+        editor_frame.columnconfigure(0, weight=1)
+        editor_frame.rowconfigure(0, weight=1)
+
+        self.details_editor = tk.Text(editor_frame, wrap="word", font=self.text_fonts["latin"])
+        self.details_editor.grid(row=0, column=0, sticky="nsew")
+        editor_scroll = ttk.Scrollbar(editor_frame, orient="vertical", command=self.details_editor.yview)
+        editor_scroll.grid(row=0, column=1, sticky="ns")
+        self.details_editor.configure(yscrollcommand=editor_scroll.set)
+        editor_frame.grid_remove()
+
+        self._details_preview_frame = preview_frame
+        self._details_editor_frame = editor_frame
+
+        footer = ttk.Frame(frame, padding=(0, 10, 0, 0))
+        footer.grid(row=2, column=0, sticky="e")
+
+        ttk.Button(footer, text="Cancel", command=self.destroy, style="App.TButton").grid(
+            row=0,
+            column=0,
+            padx=(0, 8),
+        )
+        ttk.Button(footer, text="Save", command=self._save, style="App.TButton").grid(row=0, column=1)
+
+    def _load_entry(self) -> None:
+        try:
+            entry = self.repository.get_entry(self.entry_id)
+            test_count, error_count, tier = self.repository.get_entry_stats(self.entry_id)
+        except LookupError as exc:
+            messagebox.showerror("Not found", str(exc), parent=self)
+            self.destroy()
+            return
+
+        self.target_var.set(entry.japanese_text)
+        self.kana_var.set(entry.kana_text or "")
+        self.assistant_var.set(entry.english_text)
+        self.part_of_speech_var.set(entry.part_of_speech or "")
+        self.details_markdown = entry.details_markdown or ""
+
+        self.stats_var.set(f"Tests: {test_count} | Errors: {error_count} | Tier: {tier}")
+        self.created_var.set(f"Created at: {entry.created_at}")
+
+        self.details_editor.delete("1.0", "end")
+        self.details_editor.insert("1.0", self.details_markdown)
+        _render_markdown_to_text(
+            self.details_preview,
+            self.details_markdown,
+            self.text_fonts["latin"],
+            tkfont.Font(self, family="Consolas", size=BASE_FONT_SIZE),
+        )
+
+    def _toggle_markdown_mode(self) -> None:
+        self._is_editing_markdown = not self._is_editing_markdown
+        if self._is_editing_markdown:
+            self._details_preview_frame.grid_remove()
+            self._details_editor_frame.grid()
+            self.toggle_details_button.configure(text="Done editing")
+            self.details_editor.focus_set()
+            return
+
+        self.details_markdown = self.details_editor.get("1.0", "end-1c")
+        _render_markdown_to_text(
+            self.details_preview,
+            self.details_markdown,
+            self.text_fonts["latin"],
+            tkfont.Font(self, family="Consolas", size=BASE_FONT_SIZE),
+        )
+        self._details_editor_frame.grid_remove()
+        self._details_preview_frame.grid()
+        self.toggle_details_button.configure(text="Edit markdown")
+
+    def _on_target_text_change(self, *_: object) -> None:
+        if not self.enable_kana_suggest:
+            return
+        if self._auto_suggest_job is not None:
+            self.after_cancel(self._auto_suggest_job)
+        self._auto_suggest_job = self.after(300, self._suggest_kana_automatic)
+
+    def _on_kana_text_change(self, *_: object) -> None:
+        if self._updating_kana:
+            return
+        self._kana_user_override = bool(self.kana_var.get().strip())
+
+    def _suggest_kana_automatic(self) -> None:
+        self._auto_suggest_job = None
+        if not self.enable_kana_suggest:
+            return
+        if self._kana_user_override and self.kana_var.get().strip():
+            return
+        self._suggest_kana()
+
+    def _suggest_kana_manual(self) -> None:
+        if not self.enable_kana_suggest:
+            return
+        self._suggest_kana(force_message=True)
+
+    def _suggest_kana(self, force_message: bool = False) -> None:
+        suggestion, reliable, message = suggest_hiragana(self.target_var.get())
+
+        if reliable and suggestion:
+            self._updating_kana = True
+            self.kana_var.set(suggestion)
+            self._updating_kana = False
+            self._kana_user_override = False
+            return
+
+        if force_message:
+            messagebox.showinfo("Kana suggestion", message, parent=self)
+
+    def _save(self) -> None:
+        details_value = self.details_editor.get("1.0", "end-1c") if self._is_editing_markdown else self.details_markdown
+
+        try:
+            self.repository.update_entry(
+                self.entry_id,
+                self.target_var.get(),
+                self.kana_var.get(),
+                self.assistant_var.get(),
+                self.part_of_speech_var.get(),
+            )
+            self.repository.update_entry_details(self.entry_id, details_value)
+        except ValidationError as exc:
+            messagebox.showerror("Validation error", str(exc), parent=self)
+            return
+        except LookupError as exc:
+            messagebox.showerror("Not found", str(exc), parent=self)
+            return
+        except sqlite3.Error as exc:
+            messagebox.showerror("Database error", f"Could not save details: {exc}", parent=self)
             return
 
         self.on_saved()
