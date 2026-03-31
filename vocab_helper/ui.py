@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, timedelta
 import sqlite3
 import tkinter as tk
 import tkinter.font as tkfont
@@ -51,6 +52,14 @@ PART_OF_SPEECH_OPTIONS = (
     "particle",
     "auxiliary",
     "other",
+)
+
+ACTIVITY_COLORS = (
+    "#ebedf0",
+    "#c6e48b",
+    "#7bc96f",
+    "#239a3b",
+    "#196127",
 )
 
 
@@ -214,10 +223,34 @@ class MainWindow(tk.Tk):
         container = ttk.Frame(self, padding=12)
         container.grid(row=0, column=0, sticky="nsew")
         container.columnconfigure(0, weight=1)
-        container.rowconfigure(0, weight=1)
+        container.rowconfigure(1, weight=1)
+
+        activity_frame = ttk.LabelFrame(container, text="Daily practice activity (last 180 days)", padding=8)
+        activity_frame.grid(row=0, column=0, sticky="ew")
+        activity_frame.columnconfigure(0, weight=1)
+
+        self.activity_summary_label = ttk.Label(activity_frame, text="", style="Status.TLabel")
+        self.activity_summary_label.grid(row=0, column=0, sticky="w", pady=(0, 6))
+
+        self.activity_canvas = tk.Canvas(
+            activity_frame,
+            height=108,
+            highlightthickness=0,
+            background="#ffffff",
+        )
+        self.activity_canvas.grid(row=1, column=0, sticky="w")
+
+        legend_frame = ttk.Frame(activity_frame)
+        legend_frame.grid(row=2, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(legend_frame, text="Less", style="Status.TLabel").grid(row=0, column=0, padx=(0, 6))
+        for index, color in enumerate(ACTIVITY_COLORS):
+            swatch = tk.Canvas(legend_frame, width=10, height=10, highlightthickness=1, highlightbackground="#cccccc")
+            swatch.create_rectangle(0, 0, 10, 10, fill=color, outline=color)
+            swatch.grid(row=0, column=index + 1, padx=(0, 4))
+        ttk.Label(legend_frame, text="More", style="Status.TLabel").grid(row=0, column=len(ACTIVITY_COLORS) + 1, padx=(2, 0))
 
         table_frame = ttk.Frame(container)
-        table_frame.grid(row=0, column=0, sticky="nsew")
+        table_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
 
@@ -259,7 +292,7 @@ class MainWindow(tk.Tk):
         self.tree.tag_configure("tier_red", background=TIER_BG_COLORS["red"])
 
         button_row = ttk.Frame(container, padding=(0, 10, 0, 0))
-        button_row.grid(row=1, column=0, sticky="ew")
+        button_row.grid(row=2, column=0, sticky="ew")
         button_row.columnconfigure(0, weight=1)
 
         test_button = ttk.Button(
@@ -298,7 +331,7 @@ class MainWindow(tk.Tk):
         add_button.grid(row=0, column=5, sticky="e")
 
         settings_row = ttk.Frame(container, padding=(0, 8, 0, 0))
-        settings_row.grid(row=2, column=0, sticky="ew")
+        settings_row.grid(row=3, column=0, sticky="ew")
         settings_row.columnconfigure(8, weight=1)
 
         ttk.Checkbutton(
@@ -352,7 +385,7 @@ class MainWindow(tk.Tk):
         self._refresh_language_labels()
 
         status_row = ttk.Frame(container, padding=(0, 8, 0, 0))
-        status_row.grid(row=3, column=0, sticky="ew")
+        status_row.grid(row=4, column=0, sticky="ew")
         status_row.columnconfigure(0, weight=1)
 
         self.count_label = ttk.Label(status_row, text="Total vocabularies: 0", style="Status.TLabel")
@@ -434,6 +467,64 @@ class MainWindow(tk.Tk):
             self._entry_stats_by_id[entry.id] = (test_count, error_count, tier)
 
         self.count_label.configure(text=f"Total vocabularies: {len(entries_with_stats)}")
+        self._refresh_activity_grid()
+
+    @staticmethod
+    def _activity_level(count: int) -> int:
+        if count <= 0:
+            return 0
+        if count == 1:
+            return 1
+        if count == 2:
+            return 2
+        if count == 3:
+            return 3
+        return 4
+
+    def _refresh_activity_grid(self) -> None:
+        counts_by_date = self.repository.get_daily_unique_practice_counts(days_back=180)
+        active_days = sum(1 for count in counts_by_date.values() if count > 0)
+        unique_total = sum(counts_by_date.values())
+        self.activity_summary_label.configure(
+            text=f"Unique vocab practiced: {unique_total} across {active_days} active days"
+        )
+
+        today = date.today()
+        start_date = today - timedelta(days=179)
+        grid_start = start_date - timedelta(days=start_date.weekday())
+        weeks = ((today - grid_start).days // 7) + 1
+
+        cell_size = 10
+        gap = 3
+        pad_x = 2
+        pad_y = 2
+        width = pad_x * 2 + weeks * (cell_size + gap)
+        height = pad_y * 2 + 7 * (cell_size + gap)
+
+        self.activity_canvas.configure(width=width, height=height)
+        self.activity_canvas.delete("all")
+
+        current = start_date
+        while current <= today:
+            week_index = (current - grid_start).days // 7
+            weekday_index = current.weekday()
+            count = counts_by_date.get(current.isoformat(), 0)
+            color = ACTIVITY_COLORS[self._activity_level(count)]
+
+            x1 = pad_x + week_index * (cell_size + gap)
+            y1 = pad_y + weekday_index * (cell_size + gap)
+            x2 = x1 + cell_size
+            y2 = y1 + cell_size
+
+            self.activity_canvas.create_rectangle(
+                x1,
+                y1,
+                x2,
+                y2,
+                fill=color,
+                outline="#d0d0d0",
+            )
+            current += timedelta(days=1)
 
     def _show_context_menu(self, event: tk.Event) -> None:
         item_id = self.tree.identify_row(event.y)
@@ -2159,6 +2250,7 @@ class VocabularyDetailDialog(tk.Toplevel):
         self.part_of_speech_var = tk.StringVar(value="")
         self.stats_var = tk.StringVar(value="")
         self.created_var = tk.StringVar(value="")
+        self.latest_practice_var = tk.StringVar(value="")
         self.details_markdown = ""
 
         self.title("Vocabulary details")
@@ -2232,6 +2324,12 @@ class VocabularyDetailDialog(tk.Toplevel):
             columnspan=3,
             sticky="w",
         )
+        ttk.Label(header, textvariable=self.latest_practice_var, style="Status.TLabel").grid(
+            row=6,
+            column=0,
+            columnspan=3,
+            sticky="w",
+        )
 
         details_section = ttk.LabelFrame(frame, text="Details (Markdown)", padding=10)
         details_section.grid(row=1, column=0, sticky="nsew")
@@ -2293,6 +2391,7 @@ class VocabularyDetailDialog(tk.Toplevel):
         try:
             entry = self.repository.get_entry(self.entry_id)
             test_count, error_count, tier = self.repository.get_entry_stats(self.entry_id)
+            latest_practiced = self.repository.get_entry_last_practiced(self.entry_id)
         except LookupError as exc:
             messagebox.showerror("Not found", str(exc), parent=self)
             self.destroy()
@@ -2306,6 +2405,7 @@ class VocabularyDetailDialog(tk.Toplevel):
 
         self.stats_var.set(f"Tests: {test_count} | Errors: {error_count} | Tier: {tier}")
         self.created_var.set(f"Created at: {entry.created_at}")
+        self.latest_practice_var.set(f"Latest practice: {latest_practiced or 'Never'}")
 
         self.details_editor.delete("1.0", "end")
         self.details_editor.insert("1.0", self.details_markdown)

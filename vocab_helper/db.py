@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, timedelta
 import random
 import sqlite3
 from pathlib import Path
@@ -54,6 +55,16 @@ class VocabRepository:
                 CREATE TABLE IF NOT EXISTS app_settings (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS practice_daily_unique (
+                    entry_id INTEGER NOT NULL,
+                    practice_date TEXT NOT NULL,
+                    PRIMARY KEY (entry_id, practice_date),
+                    FOREIGN KEY (entry_id) REFERENCES vocab_entries(id) ON DELETE CASCADE
                 )
                 """
             )
@@ -297,11 +308,11 @@ class VocabRepository:
         if requested == 0:
             return []
 
-        entries_with_stats = self.list_entries_with_stats(sort_mode="time", time_order="newest")
-        if not entries_with_stats:
-            return []
-
         if strategy == "weighted":
+            entries_with_stats = self.list_entries_with_stats(sort_mode="time", time_order="newest")
+            if not entries_with_stats:
+                return []
+
             weighted_pool = list(entries_with_stats)
             weights_by_tier = {"gray": 4, "red": 3, "yellow": 2, "green": 1}
             ordered: list[tuple[VocabEntry, int, int, str]] = []
@@ -311,7 +322,11 @@ class VocabRepository:
                 ordered.append(weighted_pool.pop(selected_index))
             return [entry for entry, _, _, _ in ordered]
 
-        buckets: dict[str, list[tuple[VocabEntry, int, int, str]]] = {
+        entries_with_stats = self._list_entries_with_stats_for_selection()
+        if not entries_with_stats:
+            return []
+
+        buckets: dict[str, list[tuple[VocabEntry, int, int, str, str | None]]] = {
             "gray": [],
             "red": [],
             "yellow": [],
@@ -320,13 +335,54 @@ class VocabRepository:
         for item in entries_with_stats:
             buckets[item[3]].append(item)
 
-        ordered_strict: list[tuple[VocabEntry, int, int, str]] = []
+        ordered_strict: list[tuple[VocabEntry, int, int, str, str | None]] = []
         for tier in ("gray", "red", "yellow", "green"):
-            random.shuffle(buckets[tier])
+            buckets[tier].sort(
+                key=lambda item: (
+                    item[4] is not None,
+                    item[4] or "",
+                    item[0].id,
+                )
+            )
             ordered_strict.extend(buckets[tier])
 
         sliced = ordered_strict[:requested]
-        return [entry for entry, _, _, _ in sliced]
+        return [entry for entry, _, _, _, _ in sliced]
+
+    def _list_entries_with_stats_for_selection(self) -> list[tuple[VocabEntry, int, int, str, str | None]]:
+        connection = sqlite3.connect(self.db_path)
+        try:
+            connection.row_factory = sqlite3.Row
+            rows: Iterable[sqlite3.Row] = connection.execute(
+                """
+                SELECT
+                    e.id,
+                    e.japanese_text,
+                    e.kana_text,
+                    e.english_text,
+                    e.part_of_speech,
+                    e.details_markdown,
+                    e.created_at,
+                    COALESCE(s.error_count, 0) AS error_count,
+                    COALESCE(s.test_count, 0) AS test_count,
+                    s.last_tested AS last_tested
+                FROM vocab_entries AS e
+                LEFT JOIN vocab_stats AS s
+                    ON s.entry_id = e.id
+                """
+            )
+
+            result: list[tuple[VocabEntry, int, int, str, str | None]] = []
+            for row in rows:
+                entry = self._map_row(row)
+                error_count = int(row["error_count"])
+                test_count = int(row["test_count"])
+                tier = self._tier_from_counts(test_count, error_count)
+                last_tested = str(row["last_tested"]) if row["last_tested"] is not None else None
+                result.append((entry, test_count, error_count, tier, last_tested))
+            return result
+        finally:
+            connection.close()
 
     def get_english_options_for_entry(self, entry_id: int, max_options: int = 4) -> list[str]:
         max_count = max(int(max_options), 2)
@@ -400,7 +456,67 @@ class VocabRepository:
                 """,
                 (0 if is_correct else 1, entry_id),
             )
+
+            practice_date = date.today().isoformat()
+            connection.execute(
+                """
+                INSERT INTO practice_daily_unique (entry_id, practice_date)
+                VALUES (?, ?)
+                ON CONFLICT(entry_id, practice_date) DO NOTHING
+                """,
+                (entry_id, practice_date),
+            )
             connection.commit()
+        finally:
+            connection.close()
+
+    def get_entry_last_practiced(self, entry_id: int) -> str | None:
+        connection = sqlite3.connect(self.db_path)
+        try:
+            entry_exists = connection.execute(
+                """
+                SELECT 1
+                FROM vocab_entries
+                WHERE id = ?
+                """,
+                (entry_id,),
+            ).fetchone()
+            if entry_exists is None:
+                raise LookupError(f"Vocabulary entry with id {entry_id} was not found.")
+
+            row = connection.execute(
+                """
+                SELECT last_tested
+                FROM vocab_stats
+                WHERE entry_id = ?
+                """,
+                (entry_id,),
+            ).fetchone()
+
+            if row is None or row[0] is None:
+                return None
+            return str(row[0])
+        finally:
+            connection.close()
+
+    def get_daily_unique_practice_counts(self, days_back: int = 180) -> dict[str, int]:
+        range_days = max(int(days_back), 1)
+        start_date = (date.today() - timedelta(days=range_days - 1)).isoformat()
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            rows = connection.execute(
+                """
+                SELECT practice_date, COUNT(*) AS unique_count
+                FROM practice_daily_unique
+                WHERE practice_date >= ?
+                GROUP BY practice_date
+                ORDER BY practice_date ASC
+                """,
+                (start_date,),
+            ).fetchall()
+
+            return {str(row[0]): int(row[1]) for row in rows}
         finally:
             connection.close()
 
@@ -645,6 +761,13 @@ class VocabRepository:
             connection.execute(
                 f"""
                 DELETE FROM vocab_stats
+                WHERE entry_id IN ({placeholders})
+                """,
+                tuple(unique_ids),
+            )
+            connection.execute(
+                f"""
+                DELETE FROM practice_daily_unique
                 WHERE entry_id IN ({placeholders})
                 """,
                 tuple(unique_ids),

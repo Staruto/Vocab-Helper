@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 import sqlite3
+from datetime import date, timedelta
 from pathlib import Path
 
 from vocab_helper.db import VocabRepository
@@ -304,6 +305,60 @@ class VocabRepositoryTests(unittest.TestCase):
         self.repository.record_test_result(entry.id, is_correct=False)
         self.assertEqual(self.repository.get_entry_stats(entry.id), (4, 3, "red"))
 
+    def test_get_entry_last_practiced_for_untested_and_tested_entry(self) -> None:
+        entry = self.repository.add_entry("覚える", "おぼえる", "to memorize")
+        self.assertIsNone(self.repository.get_entry_last_practiced(entry.id))
+
+        self.repository.record_test_result(entry.id, is_correct=True)
+        latest = self.repository.get_entry_last_practiced(entry.id)
+        self.assertIsNotNone(latest)
+
+    def test_daily_unique_practice_counts_tracks_unique_entries_per_day(self) -> None:
+        created = self.repository.add_entries(
+            [
+                ("食べる", "たべる", "to eat"),
+                ("行く", "いく", "to go"),
+            ]
+        )
+
+        self.repository.record_test_result(created[0].id, is_correct=True)
+        self.repository.record_test_result(created[0].id, is_correct=False)
+        self.repository.record_test_result(created[1].id, is_correct=True)
+
+        counts = self.repository.get_daily_unique_practice_counts(days_back=180)
+        today_key = date.today().isoformat()
+        self.assertIn(today_key, counts)
+        self.assertEqual(counts[today_key], 2)
+
+    def test_daily_unique_practice_counts_respects_days_back(self) -> None:
+        entry = self.repository.add_entry("話す", "はなす", "to speak")
+        old_date = (date.today() - timedelta(days=365)).isoformat()
+        today_key = date.today().isoformat()
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            connection.execute(
+                """
+                INSERT INTO practice_daily_unique (entry_id, practice_date)
+                VALUES (?, ?)
+                """,
+                (entry.id, old_date),
+            )
+            connection.execute(
+                """
+                INSERT INTO practice_daily_unique (entry_id, practice_date)
+                VALUES (?, ?)
+                """,
+                (entry.id, today_key),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        counts = self.repository.get_daily_unique_practice_counts(days_back=180)
+        self.assertIn(today_key, counts)
+        self.assertNotIn(old_date, counts)
+
     def test_list_entries_with_stats_supports_time_and_stats_sort(self) -> None:
         created = self.repository.add_entries(
             [
@@ -358,6 +413,45 @@ class VocabRepositoryTests(unittest.TestCase):
         self.assertEqual(len(set(weighted_ids)), 4)
         self.assertEqual(set(weighted_ids), {gray_id, green_id, yellow_id, red_id})
 
+    def test_strict_strategy_uses_oldest_last_practiced_as_tiebreaker(self) -> None:
+        created = self.repository.add_entries(
+            [
+                ("犬", "いぬ", "dog"),
+                ("猫", "ねこ", "cat"),
+            ]
+        )
+        first_id, second_id = [entry.id for entry in created]
+
+        # Both entries become yellow tier.
+        self.repository.record_test_result(first_id, is_correct=False)
+        self.repository.record_test_result(second_id, is_correct=False)
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            connection.execute(
+                """
+                UPDATE vocab_stats
+                SET last_tested = ?
+                WHERE entry_id = ?
+                """,
+                ("2020-01-01 00:00:00", first_id),
+            )
+            connection.execute(
+                """
+                UPDATE vocab_stats
+                SET last_tested = ?
+                WHERE entry_id = ?
+                """,
+                ("2024-01-01 00:00:00", second_id),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        strict_rows = self.repository.get_test_entries_by_preference(2, strategy="strict")
+        strict_ids = [entry.id for entry in strict_rows]
+        self.assertEqual(strict_ids, [first_id, second_id])
+
     def test_manual_priority_changes_and_gray_restriction(self) -> None:
         gray_entry = self.repository.add_entry("空", "そら", "sky")
         with self.assertRaises(ValueError):
@@ -402,6 +496,9 @@ class VocabRepositoryTests(unittest.TestCase):
 
         with self.assertRaises(LookupError):
             self.repository.record_test_result(9999, is_correct=False)
+
+        with self.assertRaises(LookupError):
+            self.repository.get_entry_last_practiced(9999)
 
         with self.assertRaises(LookupError):
             self.repository.increase_priority(9999)
