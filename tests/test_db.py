@@ -305,6 +305,52 @@ class VocabRepositoryTests(unittest.TestCase):
         self.repository.record_test_result(entry.id, is_correct=False)
         self.assertEqual(self.repository.get_entry_stats(entry.id), (4, 3, "red"))
 
+    def test_correct_answer_can_reduce_error_count_once_per_day(self) -> None:
+        entry = self.repository.add_entry("書く", "かく", "to write")
+        yesterday = date.today() - timedelta(days=1)
+        today = date.today()
+
+        self.repository.record_test_result(entry.id, is_correct=False, practiced_on=yesterday)
+        self.repository.record_test_result(entry.id, is_correct=False, practiced_on=yesterday)
+        self.assertEqual(self.repository.get_entry_stats(entry.id), (2, 2, "yellow"))
+
+        self.repository.record_test_result(entry.id, is_correct=True, recovery_roll=0.0, practiced_on=today)
+        self.assertEqual(self.repository.get_entry_stats(entry.id), (3, 1, "yellow"))
+
+        self.repository.record_test_result(entry.id, is_correct=True, recovery_roll=0.0, practiced_on=today)
+        self.assertEqual(self.repository.get_entry_stats(entry.id), (4, 1, "yellow"))
+
+    def test_mistake_blocks_same_day_error_count_recovery(self) -> None:
+        entry = self.repository.add_entry("読む", "よむ", "to read")
+        yesterday = date.today() - timedelta(days=1)
+        today = date.today()
+
+        self.repository.record_test_result(entry.id, is_correct=False, practiced_on=yesterday)
+        self.repository.record_test_result(entry.id, is_correct=False, practiced_on=yesterday)
+        self.assertEqual(self.repository.get_entry_stats(entry.id), (2, 2, "yellow"))
+
+        self.repository.record_test_result(entry.id, is_correct=False, practiced_on=today)
+        self.assertEqual(self.repository.get_entry_stats(entry.id), (3, 3, "red"))
+
+        self.repository.record_test_result(entry.id, is_correct=True, recovery_roll=0.0, practiced_on=today)
+        self.assertEqual(self.repository.get_entry_stats(entry.id), (4, 3, "red"))
+
+    def test_error_count_recovery_resets_on_next_day(self) -> None:
+        entry = self.repository.add_entry("行く", "いく", "to go")
+        day_one = date.today() - timedelta(days=2)
+        day_two = date.today() - timedelta(days=1)
+        day_three = date.today()
+
+        self.repository.record_test_result(entry.id, is_correct=False, practiced_on=day_one)
+        self.repository.record_test_result(entry.id, is_correct=False, practiced_on=day_one)
+        self.assertEqual(self.repository.get_entry_stats(entry.id), (2, 2, "yellow"))
+
+        self.repository.record_test_result(entry.id, is_correct=True, recovery_roll=0.0, practiced_on=day_two)
+        self.assertEqual(self.repository.get_entry_stats(entry.id), (3, 1, "yellow"))
+
+        self.repository.record_test_result(entry.id, is_correct=True, recovery_roll=0.0, practiced_on=day_three)
+        self.assertEqual(self.repository.get_entry_stats(entry.id), (4, 0, "green"))
+
     def test_get_entry_last_practiced_for_untested_and_tested_entry(self) -> None:
         entry = self.repository.add_entry("覚える", "おぼえる", "to memorize")
         self.assertIsNone(self.repository.get_entry_last_practiced(entry.id))
