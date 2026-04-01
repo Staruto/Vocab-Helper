@@ -1042,18 +1042,12 @@ class MainWindow(tk.Tk):
             messagebox.showwarning("No selection", "Select at least one entry.", parent=self)
             return
 
-        replace_mode_choice = messagebox.askyesnocancel(
-            "Bulk tag assignment mode",
-            "Choose how to apply tags to selected entries:\n\n"
-            "Yes = Replace existing tags\n"
-            "No = Add to existing tags\n"
-            "Cancel = Abort",
-            parent=self,
-        )
-        if replace_mode_choice is None:
+        mode_dialog = BulkTagModeDialog(self, text_font=self.fonts["latin"])
+        self.wait_window(mode_dialog)
+        if mode_dialog.result is None:
             return
 
-        replace_mode = bool(replace_mode_choice)
+        replace_mode = mode_dialog.result == "replace"
 
         dialog = TagSelectionDialog(
             self,
@@ -2655,6 +2649,60 @@ class BulkAddDialog(tk.Toplevel):
         self.destroy()
 
 
+class BulkTagModeDialog(tk.Toplevel):
+    def __init__(self, parent: tk.Misc, text_font: tkfont.Font) -> None:
+        super().__init__(parent)
+        self.result: str | None = None
+
+        self.title("Bulk tag assignment mode")
+        self.transient(parent)
+        self.grab_set()
+        self.resizable(False, False)
+
+        frame = ttk.Frame(self, padding=14)
+        frame.grid(row=0, column=0, sticky="nsew")
+
+        ttk.Label(
+            frame,
+            text="How should selected tags be applied?",
+            style="App.TLabel",
+        ).grid(row=0, column=0, columnspan=3, sticky="w")
+
+        ttk.Label(
+            frame,
+            text="Replace: overwrite existing tags. Add: keep existing tags and append new tags.",
+            style="Status.TLabel",
+            wraplength=420,
+            justify="left",
+            font=text_font,
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 12))
+
+        ttk.Button(
+            frame,
+            text="Replace",
+            command=lambda: self._close_with_result("replace"),
+            style="App.TButton",
+        ).grid(row=2, column=0, padx=(0, 8))
+        ttk.Button(
+            frame,
+            text="Add",
+            command=lambda: self._close_with_result("add"),
+            style="App.TButton",
+        ).grid(row=2, column=1, padx=(0, 8))
+        ttk.Button(
+            frame,
+            text="Cancel",
+            command=self.destroy,
+            style="App.TButton",
+        ).grid(row=2, column=2)
+
+        self.bind("<Escape>", lambda _event: self.destroy())
+
+    def _close_with_result(self, value: str) -> None:
+        self.result = value
+        self.destroy()
+
+
 class TagSelectionDialog(tk.Toplevel):
     def __init__(
         self,
@@ -2677,13 +2725,13 @@ class TagSelectionDialog(tk.Toplevel):
         self._chip_buttons: dict[int, tk.Checkbutton] = {}
         self._chip_colors_by_tag_id: dict[int, tuple[str, str]] = {}
         self._tags_by_type: dict[str, list[tuple[int, str]]] = {}
-        self._current_chip_columns = 3
+        self._last_layout_width = 0
 
         self.title(title)
         self.transient(parent)
         self.grab_set()
-        self.geometry("760x540")
-        self.minsize(520, 360)
+        self.geometry("920x580")
+        self.minsize(680, 400)
 
         frame = ttk.Frame(self, padding=12)
         frame.grid(row=0, column=0, sticky="nsew")
@@ -2745,9 +2793,9 @@ class TagSelectionDialog(tk.Toplevel):
 
     def _on_canvas_configure(self, event: tk.Event) -> None:
         self.tag_canvas.itemconfigure(self._tag_content_window, width=event.width)
-        resolved_columns = self._resolve_chip_columns(event.width)
-        if resolved_columns != self._current_chip_columns:
-            self._current_chip_columns = resolved_columns
+        resolved_width = max(int(event.width), 1)
+        if abs(resolved_width - self._last_layout_width) >= 20:
+            self._last_layout_width = resolved_width
             self._render_tag_sections()
 
     def _on_content_configure(self, _event: tk.Event) -> None:
@@ -2764,10 +2812,8 @@ class TagSelectionDialog(tk.Toplevel):
     def _display_type_name(type_name: str) -> str:
         return type_name.replace("_", " ")
 
-    @staticmethod
-    def _resolve_chip_columns(canvas_width: int) -> int:
-        usable_width = max(int(canvas_width) - 28, 260)
-        return max(2, min(6, usable_width // 170))
+    def _estimate_chip_width(self, label: str) -> int:
+        return max(self.text_font.measure(label) + 38, 86)
 
     def _on_chip_toggled(self, tag_id: int) -> None:
         if tag_id not in self._chip_vars:
@@ -2799,8 +2845,8 @@ class TagSelectionDialog(tk.Toplevel):
             )
         else:
             button.configure(
-                background="#ffffff",
-                activebackground="#f5f5f5",
+                background="#e3e3e3",
+                activebackground="#d5d5d5",
                 fg="#1f2933",
                 activeforeground="#1f2933",
             )
@@ -2837,8 +2883,10 @@ class TagSelectionDialog(tk.Toplevel):
             ("#f4efdf", "#ece4cd"),
         )
 
-        max_columns = self._current_chip_columns
-        for type_index, type_name in enumerate(sorted(self._tags_by_type)):
+        sorted_type_names = sorted(self._tags_by_type)
+        available_width = max(self.tag_canvas.winfo_width() - 34, 340)
+
+        for type_index, type_name in enumerate(sorted_type_names):
             section_frame = tk.Frame(self.tag_content_frame, background="#ffffff")
             section_frame.pack(fill="x", anchor="w", padx=6, pady=(8, 2))
 
@@ -2857,9 +2905,16 @@ class TagSelectionDialog(tk.Toplevel):
             chips_frame.pack(fill="x", anchor="w", pady=(4, 0))
 
             sorted_tags = sorted(self._tags_by_type[type_name], key=lambda item: item[1].lower())
-            for index, (tag_id, tag_name) in enumerate(sorted_tags):
-                row = index // max_columns
-                column = index % max_columns
+            row = 0
+            column = 0
+            current_row_width = 0
+            for tag_id, tag_name in sorted_tags:
+                chip_width = self._estimate_chip_width(tag_name)
+                if current_row_width > 0 and current_row_width + chip_width + 6 > available_width:
+                    row += 1
+                    column = 0
+                    current_row_width = 0
+
                 var = tk.BooleanVar(value=tag_id in self._selected_tag_ids)
                 self._chip_vars[tag_id] = var
 
@@ -2886,6 +2941,12 @@ class TagSelectionDialog(tk.Toplevel):
                 self._chip_colors_by_tag_id[tag_id] = (selected_fill, selected_active_fill)
                 self._refresh_chip_style(tag_id)
 
+                current_row_width += chip_width + 6
+                column += 1
+
+            if type_index < len(sorted_type_names) - 1:
+                ttk.Separator(self.tag_content_frame, orient="horizontal").pack(fill="x", padx=8, pady=(4, 2))
+
     def _load_tags(self, selected_tag_ids: list[int]) -> None:
         try:
             tags = self.repository.list_tags(
@@ -2904,7 +2965,7 @@ class TagSelectionDialog(tk.Toplevel):
             tags_by_type.setdefault(type_name, []).append((tag_id, tag_name))
 
         self._tags_by_type = tags_by_type
-        self._current_chip_columns = self._resolve_chip_columns(self.tag_canvas.winfo_width())
+        self._last_layout_width = max(self.tag_canvas.winfo_width(), 1)
         self._render_tag_sections()
 
     def _clear_selection(self) -> None:
