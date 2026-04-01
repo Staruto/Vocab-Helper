@@ -3636,6 +3636,10 @@ class VocabularyDetailDialog(tk.Toplevel):
             self._tag_chip_labels.append(chip_label)
 
     @staticmethod
+    def _display_type_name(type_name: str) -> str:
+        return type_name.replace("_", " ")
+
+    @staticmethod
     def _select_part_of_speech_value(pos_values: list[str]) -> str:
         ordered_values = [value for value in PART_OF_SPEECH_OPTIONS if value in pos_values]
         if ordered_values:
