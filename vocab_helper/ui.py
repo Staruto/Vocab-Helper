@@ -3279,12 +3279,13 @@ class VocabularyDetailDialog(tk.Toplevel):
         self.target_var = tk.StringVar(value="")
         self.kana_var = tk.StringVar(value="")
         self.assistant_var = tk.StringVar(value="")
-        self.tags_summary_var = tk.StringVar(value="No tags selected")
         self.stats_var = tk.StringVar(value="")
         self.created_var = tk.StringVar(value="")
         self.latest_practice_var = tk.StringVar(value="")
         self.details_markdown = ""
         self.selected_tag_ids: list[int] = []
+        self._tag_chip_labels: list[tk.Label] = []
+        self._tags_chip_area: tk.Frame | None = None
 
         self.title("Vocabulary details")
         self.transient(parent)
@@ -3344,12 +3345,8 @@ class VocabularyDetailDialog(tk.Toplevel):
             column=0,
             sticky="w",
         )
-        ttk.Label(tag_actions, textvariable=self.tags_summary_var, style="Status.TLabel").grid(
-            row=0,
-            column=1,
-            sticky="w",
-            padx=(8, 0),
-        )
+        self._tags_chip_area = tk.Frame(tag_actions, background="#ffffff", highlightthickness=0, borderwidth=0)
+        self._tags_chip_area.grid(row=0, column=1, sticky="w", padx=(8, 0))
 
         ttk.Label(header, textvariable=self.stats_var, style="Status.TLabel").grid(
             row=4,
@@ -3542,8 +3539,35 @@ class VocabularyDetailDialog(tk.Toplevel):
         self._refresh_tag_summary()
 
     def _refresh_tag_summary(self) -> None:
+        if self._tags_chip_area is None:
+            return
+
+        for chip in self._tag_chip_labels:
+            chip.destroy()
+        self._tag_chip_labels = []
+
+        type_palette: tuple[tuple[str, str], ...] = (
+            ("#dff4ff", "#cdeaff"),
+            ("#e8f8e1", "#d8efcf"),
+            ("#fff1dc", "#ffe5c4"),
+            ("#fde8ef", "#f8d8e4"),
+            ("#f1e8ff", "#e7d9ff"),
+            ("#e7f7f4", "#d7f0eb"),
+            ("#f4efdf", "#ece4cd"),
+        )
+
         if not self.selected_tag_ids:
-            self.tags_summary_var.set("No tags selected")
+            empty_label = tk.Label(
+                self._tags_chip_area,
+                text="No tags selected",
+                background="#ffffff",
+                foreground="#667085",
+                anchor="w",
+                justify="left",
+                font=self.text_fonts["latin"],
+            )
+            empty_label.grid(row=0, column=0, sticky="w")
+            self._tag_chip_labels.append(empty_label)
             return
 
         try:
@@ -3552,22 +3576,64 @@ class VocabularyDetailDialog(tk.Toplevel):
                 include_part_of_speech=True,
             )
         except sqlite3.Error:
-            self.tags_summary_var.set(f"{len(self.selected_tag_ids)} tags selected")
+            fallback_label = tk.Label(
+                self._tags_chip_area,
+                text=f"{len(self.selected_tag_ids)} tags selected",
+                background="#ffffff",
+                foreground="#667085",
+                anchor="w",
+                justify="left",
+                font=self.text_fonts["latin"],
+            )
+            fallback_label.grid(row=0, column=0, sticky="w")
+            self._tag_chip_labels.append(fallback_label)
             return
 
-        label_by_id = {
-            tag_id: f"{type_name}:{tag_name}"
+        selected_tag_rows = {
+            tag_id: (type_name, tag_name)
             for tag_id, _type_id, type_name, tag_name, _type_predefined, _tag_predefined in tags
         }
-        selected_labels = [label_by_id[tag_id] for tag_id in self.selected_tag_ids if tag_id in label_by_id]
-        if not selected_labels:
-            self.tags_summary_var.set(f"{len(self.selected_tag_ids)} tags selected")
+        selected_rows = [selected_tag_rows[tag_id] for tag_id in self.selected_tag_ids if tag_id in selected_tag_rows]
+        if not selected_rows:
+            fallback_label = tk.Label(
+                self._tags_chip_area,
+                text=f"{len(self.selected_tag_ids)} tags selected",
+                background="#ffffff",
+                foreground="#667085",
+                anchor="w",
+                justify="left",
+                font=self.text_fonts["latin"],
+            )
+            fallback_label.grid(row=0, column=0, sticky="w")
+            self._tag_chip_labels.append(fallback_label)
             return
 
-        summary = ", ".join(selected_labels[:2])
-        if len(selected_labels) > 2:
-            summary += f", +{len(selected_labels) - 2} more"
-        self.tags_summary_var.set(summary)
+        sorted_type_names = sorted({type_name for type_name, _tag_name in selected_rows})
+        color_by_type = {
+            type_name: type_palette[index % len(type_palette)]
+            for index, type_name in enumerate(sorted_type_names)
+        }
+
+        max_columns = 4
+        for index, (type_name, tag_name) in enumerate(selected_rows):
+            row = index // max_columns
+            column = index % max_columns
+            selected_fill, _selected_active_fill = color_by_type[type_name]
+            chip_label = tk.Label(
+                self._tags_chip_area,
+                text=f"{self._display_type_name(type_name)}: {tag_name}",
+                background=selected_fill,
+                foreground="#1f2933",
+                relief="solid",
+                borderwidth=1,
+                padx=8,
+                pady=3,
+                anchor="center",
+                justify="center",
+                font=self.text_fonts["latin"],
+            )
+            chip_label.grid(row=row, column=column, sticky="w", padx=(0, 6), pady=(0, 6))
+            self._tag_chip_labels.append(chip_label)
 
     @staticmethod
     def _select_part_of_speech_value(pos_values: list[str]) -> str:
