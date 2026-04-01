@@ -2516,8 +2516,11 @@ class TagSelectionDialog(tk.Toplevel):
         self.repository = repository
         self.target_language_code = target_language_code
         self.include_part_of_speech = include_part_of_speech
+        self.text_font = text_font
         self.result: list[int] | None = None
-        self._tag_id_by_index: dict[int, int] = {}
+        self._selected_tag_ids: set[int] = set(selected_tag_ids)
+        self._chip_vars: dict[int, tk.BooleanVar] = {}
+        self._chip_buttons: dict[int, tk.Checkbutton] = {}
 
         self.title(title)
         self.transient(parent)
@@ -2541,16 +2544,28 @@ class TagSelectionDialog(tk.Toplevel):
         list_frame.columnconfigure(0, weight=1)
         list_frame.rowconfigure(0, weight=1)
 
-        self.tag_listbox = tk.Listbox(
+        self.tag_canvas = tk.Canvas(
             list_frame,
-            selectmode="extended",
-            exportselection=False,
-            font=text_font,
+            highlightthickness=1,
+            highlightbackground="#d0d0d0",
+            background="#ffffff",
         )
-        self.tag_listbox.grid(row=0, column=0, sticky="nsew")
-        list_scroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.tag_listbox.yview)
+        self.tag_canvas.grid(row=0, column=0, sticky="nsew")
+        list_scroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.tag_canvas.yview)
         list_scroll.grid(row=0, column=1, sticky="ns")
-        self.tag_listbox.configure(yscrollcommand=list_scroll.set)
+        self.tag_canvas.configure(yscrollcommand=list_scroll.set)
+
+        self.tag_content_frame = tk.Frame(self.tag_canvas, background="#ffffff")
+        self._tag_content_window = self.tag_canvas.create_window(
+            (0, 0),
+            window=self.tag_content_frame,
+            anchor="nw",
+        )
+        self.tag_canvas.bind("<Configure>", self._on_canvas_configure)
+        self.tag_content_frame.bind("<Configure>", self._on_content_configure)
+        self.tag_canvas.bind("<MouseWheel>", self._on_mousewheel)
+        self.tag_canvas.bind("<Button-4>", self._on_mousewheel)
+        self.tag_canvas.bind("<Button-5>", self._on_mousewheel)
 
         actions = ttk.Frame(frame, padding=(0, 10, 0, 0))
         actions.grid(row=2, column=0, sticky="e")
@@ -2571,6 +2586,44 @@ class TagSelectionDialog(tk.Toplevel):
         self.bind("<Escape>", lambda _event: self.destroy())
         self.bind("<Return>", lambda _event: self._apply())
 
+    def _on_canvas_configure(self, event: tk.Event) -> None:
+        self.tag_canvas.itemconfigure(self._tag_content_window, width=event.width)
+
+    def _on_content_configure(self, _event: tk.Event) -> None:
+        self.tag_canvas.configure(scrollregion=self.tag_canvas.bbox("all"))
+
+    def _on_mousewheel(self, event: tk.Event) -> None:
+        if event.num == 5 or event.delta < 0:
+            self.tag_canvas.yview_scroll(1, "units")
+            return
+        if event.num == 4 or event.delta > 0:
+            self.tag_canvas.yview_scroll(-1, "units")
+
+    @staticmethod
+    def _display_type_name(type_name: str) -> str:
+        return type_name.replace("_", " ")
+
+    def _on_chip_toggled(self, tag_id: int) -> None:
+        if tag_id not in self._chip_vars:
+            return
+
+        if self._chip_vars[tag_id].get():
+            self._selected_tag_ids.add(tag_id)
+        else:
+            self._selected_tag_ids.discard(tag_id)
+        self._refresh_chip_style(tag_id)
+
+    def _refresh_chip_style(self, tag_id: int) -> None:
+        button = self._chip_buttons.get(tag_id)
+        var = self._chip_vars.get(tag_id)
+        if button is None or var is None:
+            return
+
+        if var.get():
+            button.configure(background="#e6f2ff", activebackground="#d8ebff")
+        else:
+            button.configure(background="#ffffff", activebackground="#f5f5f5")
+
     def _load_tags(self, selected_tag_ids: list[int]) -> None:
         try:
             tags = self.repository.list_tags(
@@ -2582,24 +2635,83 @@ class TagSelectionDialog(tk.Toplevel):
             self.destroy()
             return
 
-        self.tag_listbox.delete(0, "end")
-        self._tag_id_by_index.clear()
+        for widget in self.tag_content_frame.winfo_children():
+            widget.destroy()
 
-        for index, (tag_id, _type_id, type_name, tag_name, _type_predefined, _tag_predefined) in enumerate(tags):
-            self.tag_listbox.insert("end", f"{type_name}: {tag_name}")
-            self._tag_id_by_index[index] = tag_id
+        self._chip_vars.clear()
+        self._chip_buttons.clear()
+        self._selected_tag_ids = set(selected_tag_ids)
 
-        selected_tag_id_set = set(selected_tag_ids)
-        for index, tag_id in self._tag_id_by_index.items():
-            if tag_id in selected_tag_id_set:
-                self.tag_listbox.selection_set(index)
+        tags_by_type: dict[str, list[tuple[int, str]]] = {}
+        for tag_id, _type_id, type_name, tag_name, _type_predefined, _tag_predefined in tags:
+            tags_by_type.setdefault(type_name, []).append((tag_id, tag_name))
+
+        if not tags_by_type:
+            tk.Label(
+                self.tag_content_frame,
+                text="No tags available.",
+                background="#ffffff",
+                anchor="w",
+                justify="left",
+                font=self.text_font,
+            ).pack(anchor="w", padx=6, pady=6)
+            return
+
+        heading_font = self.text_font.copy()
+        heading_font.configure(weight="bold")
+
+        for type_name in sorted(tags_by_type):
+            section_frame = tk.Frame(self.tag_content_frame, background="#ffffff")
+            section_frame.pack(fill="x", anchor="w", padx=6, pady=(8, 2))
+
+            tk.Label(
+                section_frame,
+                text=self._display_type_name(type_name),
+                background="#ffffff",
+                anchor="w",
+                justify="left",
+                font=heading_font,
+            ).pack(anchor="w")
+
+            chips_frame = tk.Frame(section_frame, background="#ffffff")
+            chips_frame.pack(fill="x", anchor="w", pady=(4, 0))
+
+            max_columns = 5
+            for index, (tag_id, tag_name) in enumerate(sorted(tags_by_type[type_name], key=lambda item: item[1].lower())):
+                row = index // max_columns
+                column = index % max_columns
+                var = tk.BooleanVar(value=tag_id in self._selected_tag_ids)
+                self._chip_vars[tag_id] = var
+
+                button = tk.Checkbutton(
+                    chips_frame,
+                    text=tag_name,
+                    variable=var,
+                    onvalue=True,
+                    offvalue=False,
+                    indicatoron=False,
+                    borderwidth=1,
+                    relief="solid",
+                    offrelief="solid",
+                    highlightthickness=0,
+                    padx=8,
+                    pady=3,
+                    anchor="center",
+                    font=self.text_font,
+                    command=lambda current_tag_id=tag_id: self._on_chip_toggled(current_tag_id),
+                )
+                button.grid(row=row, column=column, sticky="w", padx=(0, 6), pady=(0, 6))
+                self._chip_buttons[tag_id] = button
+                self._refresh_chip_style(tag_id)
 
     def _clear_selection(self) -> None:
-        self.tag_listbox.selection_clear(0, "end")
+        self._selected_tag_ids.clear()
+        for tag_id, var in self._chip_vars.items():
+            var.set(False)
+            self._refresh_chip_style(tag_id)
 
     def _apply(self) -> None:
-        selected_indices = list(self.tag_listbox.curselection())
-        self.result = [self._tag_id_by_index[index] for index in selected_indices if index in self._tag_id_by_index]
+        self.result = sorted(self._selected_tag_ids)
         self.destroy()
 
 
