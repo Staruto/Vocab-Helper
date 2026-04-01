@@ -294,6 +294,8 @@ class MainWindow(tk.Tk):
         self.context_menu.add_separator()
         self.context_menu.add_command(label="Increase priority", command=self._increase_selected_priority)
         self.context_menu.add_command(label="Decrease priority", command=self._decrease_selected_priority)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="Assign tags to selected", command=self._assign_tags_to_selected)
         self.tree.bind("<Button-1>", self._on_tree_left_click, add="+")
         self.tree.bind("<Button-3>", self._show_context_menu)
         self.tree.bind("<Double-Button-1>", self._on_tree_double_click)
@@ -997,6 +999,158 @@ class MainWindow(tk.Tk):
 
     def _decrease_selected_priority(self) -> None:
         self._adjust_selected_priority(increase=False)
+
+    @staticmethod
+    def _select_part_of_speech_value(pos_values: list[str]) -> str:
+        ordered_values = [value for value in PART_OF_SPEECH_OPTIONS if value in pos_values]
+        if ordered_values:
+            return ordered_values[0]
+        return sorted(pos_values)[0]
+
+    def _normalize_selected_tag_ids(
+        self,
+        tag_ids: list[int],
+        tag_meta_by_id: dict[int, tuple[str, str]],
+    ) -> tuple[list[int], str]:
+        valid_tag_ids = sorted({tag_id for tag_id in tag_ids if tag_id in tag_meta_by_id})
+        part_of_speech_tag_ids = [
+            tag_id for tag_id in valid_tag_ids if tag_meta_by_id[tag_id][0].lower() == "part_of_speech"
+        ]
+        if not part_of_speech_tag_ids:
+            return valid_tag_ids, ""
+
+        part_of_speech_values = [tag_meta_by_id[tag_id][1] for tag_id in part_of_speech_tag_ids]
+        selected_part_of_speech = self._select_part_of_speech_value(part_of_speech_values)
+
+        chosen_part_of_speech_tag_id = next(
+            (
+                tag_id
+                for tag_id in part_of_speech_tag_ids
+                if tag_meta_by_id[tag_id][1] == selected_part_of_speech
+            ),
+            part_of_speech_tag_ids[0],
+        )
+
+        part_of_speech_tag_id_set = set(part_of_speech_tag_ids)
+        normalized_tag_ids = [tag_id for tag_id in valid_tag_ids if tag_id not in part_of_speech_tag_id_set]
+        normalized_tag_ids.append(chosen_part_of_speech_tag_id)
+        return sorted(set(normalized_tag_ids)), selected_part_of_speech
+
+    def _assign_tags_to_selected(self) -> None:
+        entry_ids = self._selected_entry_ids()
+        if not entry_ids:
+            messagebox.showwarning("No selection", "Select at least one entry.", parent=self)
+            return
+
+        replace_mode_choice = messagebox.askyesnocancel(
+            "Bulk tag assignment mode",
+            "Choose how to apply tags to selected entries:\n\n"
+            "Yes = Replace existing tags\n"
+            "No = Add to existing tags\n"
+            "Cancel = Abort",
+            parent=self,
+        )
+        if replace_mode_choice is None:
+            return
+
+        replace_mode = bool(replace_mode_choice)
+
+        dialog = TagSelectionDialog(
+            self,
+            repository=self.repository,
+            target_language_code=self.target_language_code,
+            selected_tag_ids=[],
+            include_part_of_speech=True,
+            title="Assign tags to selected entries",
+            text_font=self.fonts["latin"],
+        )
+        self.wait_window(dialog)
+        if dialog.result is None:
+            return
+
+        selected_tag_ids = list(dialog.result)
+        if replace_mode and not selected_tag_ids:
+            confirm_clear = messagebox.askyesno(
+                "Clear tags",
+                f"No tags selected. Replace mode will clear all tags on {len(entry_ids)} entries. Continue?",
+                parent=self,
+            )
+            if not confirm_clear:
+                return
+
+        try:
+            available_tags = self.repository.list_tags(
+                target_language_code=self.target_language_code,
+                include_part_of_speech=True,
+            )
+        except sqlite3.Error as exc:
+            messagebox.showerror("Database error", f"Could not load tags: {exc}", parent=self)
+            return
+
+        tag_meta_by_id = {
+            tag_id: (type_name, tag_name)
+            for tag_id, _type_id, type_name, tag_name, _type_predefined, _tag_predefined in available_tags
+        }
+
+        updated_count = 0
+        failures: list[tuple[int, str]] = []
+        for entry_id in entry_ids:
+            try:
+                if replace_mode:
+                    candidate_tag_ids = list(selected_tag_ids)
+                else:
+                    existing_tag_rows = self.repository.get_entry_tags(
+                        entry_id,
+                        target_language_code=self.target_language_code,
+                        include_part_of_speech=True,
+                    )
+                    existing_tag_ids = [tag_id for tag_id, _type_id, _type_name, _tag_name in existing_tag_rows]
+                    candidate_tag_ids = sorted(set(existing_tag_ids).union(selected_tag_ids))
+
+                normalized_tag_ids, selected_part_of_speech = self._normalize_selected_tag_ids(
+                    candidate_tag_ids,
+                    tag_meta_by_id,
+                )
+
+                entry = self.repository.get_entry(entry_id)
+                if (entry.part_of_speech or "") != selected_part_of_speech:
+                    self.repository.update_entry(
+                        entry_id,
+                        entry.japanese_text,
+                        entry.kana_text or "",
+                        entry.english_text,
+                        selected_part_of_speech,
+                    )
+
+                self.repository.set_entry_tags(
+                    entry_id,
+                    normalized_tag_ids,
+                    target_language_code=self.target_language_code,
+                    include_part_of_speech=True,
+                )
+                updated_count += 1
+            except (ValidationError, LookupError, sqlite3.Error) as exc:
+                failures.append((entry_id, str(exc)))
+
+        self.refresh_entries()
+
+        if failures:
+            preview = "\n".join(f"Entry {entry_id}: {error_text}" for entry_id, error_text in failures[:5])
+            if len(failures) > 5:
+                preview += f"\n... and {len(failures) - 5} more"
+            messagebox.showwarning(
+                "Bulk tag assignment",
+                f"Updated {updated_count} of {len(entry_ids)} entries.\n\nFailures:\n{preview}",
+                parent=self,
+            )
+            return
+
+        if updated_count == 0:
+            messagebox.showinfo("Bulk tag assignment", "No changes were made.", parent=self)
+            return
+
+        mode_label = "Replaced" if replace_mode else "Added"
+        messagebox.showinfo("Bulk tag assignment", f"{mode_label} tags for {updated_count} entries.", parent=self)
 
     def _adjust_selected_priority(self, increase: bool) -> None:
         entry_ids = self._selected_entry_ids()
@@ -2522,12 +2676,14 @@ class TagSelectionDialog(tk.Toplevel):
         self._chip_vars: dict[int, tk.BooleanVar] = {}
         self._chip_buttons: dict[int, tk.Checkbutton] = {}
         self._chip_colors_by_tag_id: dict[int, tuple[str, str]] = {}
+        self._tags_by_type: dict[str, list[tuple[int, str]]] = {}
+        self._current_chip_columns = 3
 
         self.title(title)
         self.transient(parent)
         self.grab_set()
-        self.geometry("520x460")
-        self.minsize(420, 320)
+        self.geometry("760x540")
+        self.minsize(520, 360)
 
         frame = ttk.Frame(self, padding=12)
         frame.grid(row=0, column=0, sticky="nsew")
@@ -2589,6 +2745,10 @@ class TagSelectionDialog(tk.Toplevel):
 
     def _on_canvas_configure(self, event: tk.Event) -> None:
         self.tag_canvas.itemconfigure(self._tag_content_window, width=event.width)
+        resolved_columns = self._resolve_chip_columns(event.width)
+        if resolved_columns != self._current_chip_columns:
+            self._current_chip_columns = resolved_columns
+            self._render_tag_sections()
 
     def _on_content_configure(self, _event: tk.Event) -> None:
         self.tag_canvas.configure(scrollregion=self.tag_canvas.bbox("all"))
@@ -2603,6 +2763,11 @@ class TagSelectionDialog(tk.Toplevel):
     @staticmethod
     def _display_type_name(type_name: str) -> str:
         return type_name.replace("_", " ")
+
+    @staticmethod
+    def _resolve_chip_columns(canvas_width: int) -> int:
+        usable_width = max(int(canvas_width) - 28, 260)
+        return max(2, min(6, usable_width // 170))
 
     def _on_chip_toggled(self, tag_id: int) -> None:
         if tag_id not in self._chip_vars:
@@ -2640,30 +2805,15 @@ class TagSelectionDialog(tk.Toplevel):
                 activeforeground="#1f2933",
             )
 
-    def _load_tags(self, selected_tag_ids: list[int]) -> None:
-        try:
-            tags = self.repository.list_tags(
-                target_language_code=self.target_language_code,
-                include_part_of_speech=self.include_part_of_speech,
-            )
-        except sqlite3.Error as exc:
-            messagebox.showerror("Database error", f"Could not load tags: {exc}", parent=self)
-            self.destroy()
-            return
-
+    def _render_tag_sections(self) -> None:
         for widget in self.tag_content_frame.winfo_children():
             widget.destroy()
 
         self._chip_vars.clear()
         self._chip_buttons.clear()
         self._chip_colors_by_tag_id.clear()
-        self._selected_tag_ids = set(selected_tag_ids)
 
-        tags_by_type: dict[str, list[tuple[int, str]]] = {}
-        for tag_id, _type_id, type_name, tag_name, _type_predefined, _tag_predefined in tags:
-            tags_by_type.setdefault(type_name, []).append((tag_id, tag_name))
-
-        if not tags_by_type:
+        if not self._tags_by_type:
             tk.Label(
                 self.tag_content_frame,
                 text="No tags available.",
@@ -2687,7 +2837,8 @@ class TagSelectionDialog(tk.Toplevel):
             ("#f4efdf", "#ece4cd"),
         )
 
-        for type_index, type_name in enumerate(sorted(tags_by_type)):
+        max_columns = self._current_chip_columns
+        for type_index, type_name in enumerate(sorted(self._tags_by_type)):
             section_frame = tk.Frame(self.tag_content_frame, background="#ffffff")
             section_frame.pack(fill="x", anchor="w", padx=6, pady=(8, 2))
 
@@ -2705,8 +2856,8 @@ class TagSelectionDialog(tk.Toplevel):
             chips_frame = tk.Frame(section_frame, background="#ffffff")
             chips_frame.pack(fill="x", anchor="w", pady=(4, 0))
 
-            max_columns = 5
-            for index, (tag_id, tag_name) in enumerate(sorted(tags_by_type[type_name], key=lambda item: item[1].lower())):
+            sorted_tags = sorted(self._tags_by_type[type_name], key=lambda item: item[1].lower())
+            for index, (tag_id, tag_name) in enumerate(sorted_tags):
                 row = index // max_columns
                 column = index % max_columns
                 var = tk.BooleanVar(value=tag_id in self._selected_tag_ids)
@@ -2734,6 +2885,27 @@ class TagSelectionDialog(tk.Toplevel):
                 self._chip_buttons[tag_id] = button
                 self._chip_colors_by_tag_id[tag_id] = (selected_fill, selected_active_fill)
                 self._refresh_chip_style(tag_id)
+
+    def _load_tags(self, selected_tag_ids: list[int]) -> None:
+        try:
+            tags = self.repository.list_tags(
+                target_language_code=self.target_language_code,
+                include_part_of_speech=self.include_part_of_speech,
+            )
+        except sqlite3.Error as exc:
+            messagebox.showerror("Database error", f"Could not load tags: {exc}", parent=self)
+            self.destroy()
+            return
+
+        self._selected_tag_ids = set(selected_tag_ids)
+
+        tags_by_type: dict[str, list[tuple[int, str]]] = {}
+        for tag_id, _type_id, type_name, tag_name, _type_predefined, _tag_predefined in tags:
+            tags_by_type.setdefault(type_name, []).append((tag_id, tag_name))
+
+        self._tags_by_type = tags_by_type
+        self._current_chip_columns = self._resolve_chip_columns(self.tag_canvas.winfo_width())
+        self._render_tag_sections()
 
     def _clear_selection(self) -> None:
         self._selected_tag_ids.clear()
