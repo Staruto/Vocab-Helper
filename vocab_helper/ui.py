@@ -2723,7 +2723,7 @@ class TagSelectionDialog(tk.Toplevel):
                     relief="solid",
                     offrelief="solid",
                     highlightthickness=0,
-                    selectcolor="#ffffff",
+                    selectcolor=selected_fill,
                     padx=8,
                     pady=3,
                     anchor="center",
