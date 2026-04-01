@@ -2521,6 +2521,7 @@ class TagSelectionDialog(tk.Toplevel):
         self._selected_tag_ids: set[int] = set(selected_tag_ids)
         self._chip_vars: dict[int, tk.BooleanVar] = {}
         self._chip_buttons: dict[int, tk.Checkbutton] = {}
+        self._chip_colors_by_tag_id: dict[int, tuple[str, str]] = {}
 
         self.title(title)
         self.transient(parent)
@@ -2619,10 +2620,25 @@ class TagSelectionDialog(tk.Toplevel):
         if button is None or var is None:
             return
 
+        selected_fill, selected_active_fill = self._chip_colors_by_tag_id.get(
+            tag_id,
+            ("#e6f2ff", "#d8ebff"),
+        )
+
         if var.get():
-            button.configure(background="#e6f2ff", activebackground="#d8ebff")
+            button.configure(
+                background=selected_fill,
+                activebackground=selected_active_fill,
+                fg="#1f2933",
+                activeforeground="#1f2933",
+            )
         else:
-            button.configure(background="#ffffff", activebackground="#f5f5f5")
+            button.configure(
+                background="#ffffff",
+                activebackground="#f5f5f5",
+                fg="#1f2933",
+                activeforeground="#1f2933",
+            )
 
     def _load_tags(self, selected_tag_ids: list[int]) -> None:
         try:
@@ -2640,6 +2656,7 @@ class TagSelectionDialog(tk.Toplevel):
 
         self._chip_vars.clear()
         self._chip_buttons.clear()
+        self._chip_colors_by_tag_id.clear()
         self._selected_tag_ids = set(selected_tag_ids)
 
         tags_by_type: dict[str, list[tuple[int, str]]] = {}
@@ -2660,9 +2677,21 @@ class TagSelectionDialog(tk.Toplevel):
         heading_font = self.text_font.copy()
         heading_font.configure(weight="bold")
 
-        for type_name in sorted(tags_by_type):
+        type_palette: tuple[tuple[str, str], ...] = (
+            ("#dff4ff", "#cdeaff"),
+            ("#e8f8e1", "#d8efcf"),
+            ("#fff1dc", "#ffe5c4"),
+            ("#fde8ef", "#f8d8e4"),
+            ("#f1e8ff", "#e7d9ff"),
+            ("#e7f7f4", "#d7f0eb"),
+            ("#f4efdf", "#ece4cd"),
+        )
+
+        for type_index, type_name in enumerate(sorted(tags_by_type)):
             section_frame = tk.Frame(self.tag_content_frame, background="#ffffff")
             section_frame.pack(fill="x", anchor="w", padx=6, pady=(8, 2))
+
+            selected_fill, selected_active_fill = type_palette[type_index % len(type_palette)]
 
             tk.Label(
                 section_frame,
@@ -2694,6 +2723,7 @@ class TagSelectionDialog(tk.Toplevel):
                     relief="solid",
                     offrelief="solid",
                     highlightthickness=0,
+                    selectcolor="#ffffff",
                     padx=8,
                     pady=3,
                     anchor="center",
@@ -2702,6 +2732,7 @@ class TagSelectionDialog(tk.Toplevel):
                 )
                 button.grid(row=row, column=column, sticky="w", padx=(0, 6), pady=(0, 6))
                 self._chip_buttons[tag_id] = button
+                self._chip_colors_by_tag_id[tag_id] = (selected_fill, selected_active_fill)
                 self._refresh_chip_style(tag_id)
 
     def _clear_selection(self) -> None:
@@ -3248,7 +3279,6 @@ class VocabularyDetailDialog(tk.Toplevel):
         self.target_var = tk.StringVar(value="")
         self.kana_var = tk.StringVar(value="")
         self.assistant_var = tk.StringVar(value="")
-        self.part_of_speech_var = tk.StringVar(value="")
         self.tags_summary_var = tk.StringVar(value="No tags selected")
         self.stats_var = tk.StringVar(value="")
         self.created_var = tk.StringVar(value="")
@@ -3305,18 +3335,9 @@ class VocabularyDetailDialog(tk.Toplevel):
         self.assistant_entry = ttk.Entry(header, textvariable=self.assistant_var, style="App.TEntry")
         self.assistant_entry.grid(row=2, column=1, sticky="ew", padx=(8, 0), pady=(0, 6))
 
-        ttk.Label(header, text="Part of speech", style="App.TLabel").grid(row=3, column=0, sticky="w")
-        self.part_of_speech_combo = ttk.Combobox(
-            header,
-            values=PART_OF_SPEECH_OPTIONS,
-            state="normal",
-            textvariable=self.part_of_speech_var,
-        )
-        self.part_of_speech_combo.grid(row=3, column=1, sticky="ew", padx=(8, 0), pady=(0, 6))
-
-        ttk.Label(header, text="Tags", style="App.TLabel").grid(row=4, column=0, sticky="w")
+        ttk.Label(header, text="Tags", style="App.TLabel").grid(row=3, column=0, sticky="w")
         tag_actions = ttk.Frame(header)
-        tag_actions.grid(row=4, column=1, columnspan=2, sticky="ew", padx=(8, 0), pady=(0, 6))
+        tag_actions.grid(row=3, column=1, columnspan=2, sticky="ew", padx=(8, 0), pady=(0, 6))
         tag_actions.columnconfigure(1, weight=1)
         ttk.Button(tag_actions, text="Select tags", command=self._open_tag_selector, style="App.TButton").grid(
             row=0,
@@ -3331,20 +3352,20 @@ class VocabularyDetailDialog(tk.Toplevel):
         )
 
         ttk.Label(header, textvariable=self.stats_var, style="Status.TLabel").grid(
-            row=5,
+            row=4,
             column=0,
             columnspan=3,
             sticky="w",
             pady=(4, 0),
         )
         ttk.Label(header, textvariable=self.created_var, style="Status.TLabel").grid(
-            row=6,
+            row=5,
             column=0,
             columnspan=3,
             sticky="w",
         )
         ttk.Label(header, textvariable=self.latest_practice_var, style="Status.TLabel").grid(
-            row=7,
+            row=6,
             column=0,
             columnspan=3,
             sticky="w",
@@ -3419,14 +3440,13 @@ class VocabularyDetailDialog(tk.Toplevel):
         self.target_var.set(entry.japanese_text)
         self.kana_var.set(entry.kana_text or "")
         self.assistant_var.set(entry.english_text)
-        self.part_of_speech_var.set(entry.part_of_speech or "")
         self.details_markdown = entry.details_markdown or ""
 
         try:
             tag_rows = self.repository.get_entry_tags(
                 self.entry_id,
                 target_language_code=self.target_language_code,
-                include_part_of_speech=False,
+                include_part_of_speech=True,
             )
         except sqlite3.Error:
             tag_rows = []
@@ -3510,7 +3530,7 @@ class VocabularyDetailDialog(tk.Toplevel):
             repository=self.repository,
             target_language_code=self.target_language_code,
             selected_tag_ids=self.selected_tag_ids,
-            include_part_of_speech=False,
+            include_part_of_speech=True,
             title="Select tags",
             text_font=self.text_fonts["latin"],
         )
@@ -3529,7 +3549,7 @@ class VocabularyDetailDialog(tk.Toplevel):
         try:
             tags = self.repository.list_tags(
                 target_language_code=self.target_language_code,
-                include_part_of_speech=False,
+                include_part_of_speech=True,
             )
         except sqlite3.Error:
             self.tags_summary_var.set(f"{len(self.selected_tag_ids)} tags selected")
@@ -3549,8 +3569,54 @@ class VocabularyDetailDialog(tk.Toplevel):
             summary += f", +{len(selected_labels) - 2} more"
         self.tags_summary_var.set(summary)
 
+    @staticmethod
+    def _select_part_of_speech_value(pos_values: list[str]) -> str:
+        ordered_values = [value for value in PART_OF_SPEECH_OPTIONS if value in pos_values]
+        if ordered_values:
+            return ordered_values[0]
+        return sorted(pos_values)[0]
+
+    def _normalize_selected_tags_for_save(self) -> tuple[list[int], str]:
+        normalized_tag_ids = list(self.selected_tag_ids)
+        selected_part_of_speech_tag_ids: list[int] = []
+        selected_part_of_speech_values: list[str] = []
+
+        try:
+            tags = self.repository.list_tags(
+                target_language_code=self.target_language_code,
+                include_part_of_speech=True,
+            )
+        except sqlite3.Error:
+            return normalized_tag_ids, ""
+
+        selected_lookup = set(self.selected_tag_ids)
+        for tag_id, _type_id, type_name, tag_name, _type_predefined, _tag_predefined in tags:
+            if tag_id not in selected_lookup:
+                continue
+            if type_name.lower() != "part_of_speech":
+                continue
+            selected_part_of_speech_tag_ids.append(tag_id)
+            selected_part_of_speech_values.append(tag_name)
+
+        if not selected_part_of_speech_values:
+            return normalized_tag_ids, ""
+
+        selected_part_of_speech = self._select_part_of_speech_value(selected_part_of_speech_values)
+        chosen_tag_id: int | None = None
+        for tag_id, _type_id, type_name, tag_name, _type_predefined, _tag_predefined in tags:
+            if type_name.lower() == "part_of_speech" and tag_name == selected_part_of_speech:
+                chosen_tag_id = tag_id
+                break
+
+        pruned_tag_ids = [tag_id for tag_id in normalized_tag_ids if tag_id not in set(selected_part_of_speech_tag_ids)]
+        if chosen_tag_id is not None:
+            pruned_tag_ids.append(chosen_tag_id)
+
+        return sorted(set(pruned_tag_ids)), selected_part_of_speech
+
     def _save(self) -> None:
         details_value = self.details_editor.get("1.0", "end-1c") if self._is_editing_markdown else self.details_markdown
+        normalized_tag_ids, part_of_speech_value = self._normalize_selected_tags_for_save()
 
         try:
             self.repository.update_entry(
@@ -3558,13 +3624,13 @@ class VocabularyDetailDialog(tk.Toplevel):
                 self.target_var.get(),
                 self.kana_var.get(),
                 self.assistant_var.get(),
-                self.part_of_speech_var.get(),
+                part_of_speech_value,
             )
             self.repository.set_entry_tags(
                 self.entry_id,
-                self.selected_tag_ids,
+                normalized_tag_ids,
                 target_language_code=self.target_language_code,
-                include_part_of_speech=False,
+                include_part_of_speech=True,
             )
             self.repository.update_entry_details(self.entry_id, details_value)
         except ValidationError as exc:
