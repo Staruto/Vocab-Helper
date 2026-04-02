@@ -1,10 +1,10 @@
 # VocabHelper
 
-Simple JP <-> EN vocabulary memorization helper with a desktop GUI.
+Simple vocabulary memorization helper with a desktop GUI.
 
 ## Features
 
-- Lists vocabulary in three columns: target text, kana (optional), assistant meaning
+- Lists vocabulary in two columns: target text, assistant meaning
 - Supports global language settings for target and assistant languages (default: target JP, assistant EN)
 - Adds new entries through a bottom "+" button
 - Supports bulk add in a dedicated 3-column line editor (Japanese, kana, English)
