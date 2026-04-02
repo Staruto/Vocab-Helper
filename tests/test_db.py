@@ -135,14 +135,12 @@ class VocabRepositoryTests(unittest.TestCase):
         finally:
             connection.close()
 
-    def test_default_workbook_is_created_and_selected(self) -> None:
+    def test_no_default_workbook_is_created_on_initialize(self) -> None:
         workbooks = self.repository.list_workbooks()
-        self.assertEqual(len(workbooks), 1)
-        self.assertEqual(workbooks[0].name, "JP")
-        self.assertEqual(workbooks[0].target_language_code, "JP")
+        self.assertEqual(len(workbooks), 0)
 
         current_workbook_id = self.repository.get_current_workbook_id()
-        self.assertEqual(current_workbook_id, workbooks[0].id)
+        self.assertIsNone(current_workbook_id)
 
     def test_language_properties_are_seeded_for_supported_languages(self) -> None:
         jp_properties = self.repository.list_language_properties("JP")
@@ -158,8 +156,8 @@ class VocabRepositoryTests(unittest.TestCase):
         self.assertNotIn("kana", en_keys)
 
     def test_workbook_visibility_defaults_exist(self) -> None:
-        workbook_id = self.repository.get_current_workbook_id()
-        self.assertIsNotNone(workbook_id)
+        workbook = self.repository.create_workbook("JP", "JP", preset_key="japanese")
+        workbook_id = workbook.id
 
         visibility_rows = self.repository.get_workbook_visible_properties(int(workbook_id))
         visibility_by_key = {
@@ -221,8 +219,8 @@ class VocabRepositoryTests(unittest.TestCase):
         self.assertNotIn("register", values_after_property_delete)
 
     def test_set_workbook_visible_properties_keeps_target_text_visible(self) -> None:
-        workbook_id = self.repository.get_current_workbook_id()
-        self.assertIsNotNone(workbook_id)
+        workbook = self.repository.create_workbook("JP", "JP", preset_key="japanese")
+        workbook_id = workbook.id
 
         rows = self.repository.get_workbook_visible_properties(int(workbook_id))
         meaning_property_id = next(property_id for property_id, key, *_rest in rows if key == "meaning")
@@ -238,8 +236,8 @@ class VocabRepositoryTests(unittest.TestCase):
         self.assertIn("meaning", visible_keys)
 
     def test_deleting_last_workbook_is_allowed(self) -> None:
-        workbook_id = self.repository.get_current_workbook_id()
-        self.assertIsNotNone(workbook_id)
+        workbook = self.repository.create_workbook("JP", "JP", preset_key="japanese")
+        workbook_id = workbook.id
         entry = self.repository.add_entry("食べる", "たべる", "to eat", workbook_id=int(workbook_id))
         self.assertGreater(entry.id, 0)
 
@@ -249,7 +247,8 @@ class VocabRepositoryTests(unittest.TestCase):
         self.assertEqual(self.repository.list_workbooks(), [])
 
     def test_initialize_renames_legacy_default_workbook_name_to_jp(self) -> None:
-        current_workbook_id = self.repository.get_current_workbook_id()
+        workbook = self.repository.create_workbook("JP", "JP", preset_key="japanese")
+        current_workbook_id = workbook.id
 
         connection = sqlite3.connect(self.db_path)
         try:
@@ -270,7 +269,8 @@ class VocabRepositoryTests(unittest.TestCase):
         self.assertEqual(renamed_workbook.name, "JP")
 
     def test_entries_are_scoped_by_workbook(self) -> None:
-        default_workbook_id = self.repository.get_current_workbook_id()
+        default_workbook = self.repository.create_workbook("JP", "JP", preset_key="japanese")
+        default_workbook_id = default_workbook.id
         second_workbook = self.repository.create_workbook("English workbook", "EN", preset_key="generic")
 
         self.repository.add_entry("食べる", "たべる", "to eat", workbook_id=default_workbook_id)
@@ -285,7 +285,8 @@ class VocabRepositoryTests(unittest.TestCase):
         self.assertEqual(second_entries[0].japanese_text, "run")
 
     def test_get_english_options_are_scoped_by_workbook(self) -> None:
-        default_workbook_id = self.repository.get_current_workbook_id()
+        default_workbook = self.repository.create_workbook("JP", "JP", preset_key="japanese")
+        default_workbook_id = default_workbook.id
         second_workbook = self.repository.create_workbook("Workbook two", "EN", preset_key="generic")
 
         first = self.repository.add_entry("食べる", "たべる", "to eat", workbook_id=default_workbook_id)
@@ -320,6 +321,8 @@ class VocabRepositoryTests(unittest.TestCase):
             self.repository.set_language_settings("JP", "JP")
 
     def test_predefined_tag_types_and_tags_are_seeded_for_target_language(self) -> None:
+        self.repository.create_workbook("JP", "JP", preset_key="japanese")
+
         tag_types = self.repository.list_tag_types(target_language_code="JP")
         tag_type_names = {name for _tag_type_id, name, _is_predefined in tag_types}
         self.assertIn("part_of_speech", tag_type_names)
@@ -461,6 +464,8 @@ class VocabRepositoryTests(unittest.TestCase):
         )
 
     def test_tag_types_are_scoped_by_target_language(self) -> None:
+        self.repository.create_workbook("JP", "JP", preset_key="japanese")
+
         jp_types = {name for _id, name, _is_predefined in self.repository.list_tag_types("JP")}
         self.assertIn("difficulty", jp_types)
 

@@ -3227,9 +3227,9 @@ class BulkAddDialog(tk.Toplevel):
             text_widget.bind("<Button-4>", self._on_mousewheel_linux_up)
             text_widget.bind("<Button-5>", self._on_mousewheel_linux_down)
         if self._show_kana:
-            text_widget.bind("<MouseWheel>", self._on_mousewheel)
-            text_widget.bind("<Button-4>", self._on_mousewheel_linux_up)
-            text_widget.bind("<Button-5>", self._on_mousewheel_linux_down)
+            self.kana_text.bind("<MouseWheel>", self._on_mousewheel)
+            self.kana_text.bind("<Button-4>", self._on_mousewheel_linux_up)
+            self.kana_text.bind("<Button-5>", self._on_mousewheel_linux_down)
 
         actions = ttk.Frame(frame, padding=(0, 10, 0, 0))
         actions.grid(row=3, column=0, sticky="e")

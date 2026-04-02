@@ -243,8 +243,6 @@ class VocabRepository:
                 WHERE key = 'current_workbook_id'
                 """
             ).fetchone()
-            if default_workbook_id is None and current_setting_exists is None:
-                default_workbook_id = self._ensure_default_workbook(connection)
 
             if default_workbook_id is not None:
                 connection.execute(
@@ -263,7 +261,7 @@ class VocabRepository:
                     VALUES ('current_workbook_id', ?)
                     ON CONFLICT(key) DO NOTHING
                     """,
-                    (str(default_workbook_id) if default_workbook_id is not None else ""),
+                    (str(default_workbook_id) if default_workbook_id is not None else "",),
                 )
 
             current_workbook_id = self._read_current_workbook_id_from_connection(connection, default_workbook_id)
@@ -483,7 +481,40 @@ class VocabRepository:
         fallback_workbook_id = self._first_workbook_id(connection)
         resolved_workbook_id = self._read_current_workbook_id_from_connection(connection, fallback_workbook_id)
         if resolved_workbook_id is None:
-            raise LookupError("No workbook is available. Create a workbook first.")
+            resolved_workbook_id = self._ensure_default_workbook(connection)
+            connection.execute(
+                """
+                UPDATE vocab_entries
+                SET workbook_id = ?
+                WHERE workbook_id IS NULL
+                """,
+                (resolved_workbook_id,),
+            )
+            connection.execute(
+                """
+                INSERT INTO app_settings (key, value)
+                VALUES ('current_workbook_id', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (str(resolved_workbook_id),),
+            )
+
+            target_language_code = self._read_workbook_target_language_from_connection(connection, resolved_workbook_id)
+            connection.execute(
+                """
+                INSERT INTO app_settings (key, value)
+                VALUES ('target_language', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (target_language_code,),
+            )
+
+            self._ensure_predefined_tags(connection, target_language_code)
+            self._migrate_legacy_part_of_speech_tags(connection, target_language_code)
+            self._ensure_predefined_language_properties(connection)
+            self._migrate_legacy_entry_property_values(connection)
+            self._initialize_workbook_visible_properties(connection, resolved_workbook_id)
+            connection.commit()
         return resolved_workbook_id
 
     @staticmethod
@@ -1021,6 +1052,10 @@ class VocabRepository:
 
         connection = sqlite3.connect(self.db_path)
         try:
+            had_current_workbook_id = self._read_current_workbook_id_from_connection(
+                connection,
+                self._first_workbook_id(connection),
+            )
             cursor = connection.execute(
                 """
                 INSERT INTO workbooks (name, target_language_code, preset_key)
@@ -1036,11 +1071,7 @@ class VocabRepository:
             self._ensure_predefined_language_properties(connection)
             self._initialize_workbook_visible_properties(connection, workbook_id)
 
-            current_workbook_id = self._read_current_workbook_id_from_connection(
-                connection,
-                self._first_workbook_id(connection),
-            )
-            if current_workbook_id is None:
+            if had_current_workbook_id is None:
                 connection.execute(
                     """
                     INSERT INTO app_settings (key, value)
