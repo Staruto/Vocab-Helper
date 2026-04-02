@@ -144,6 +144,110 @@ class VocabRepositoryTests(unittest.TestCase):
         current_workbook_id = self.repository.get_current_workbook_id()
         self.assertEqual(current_workbook_id, workbooks[0].id)
 
+    def test_language_properties_are_seeded_for_supported_languages(self) -> None:
+        jp_properties = self.repository.list_language_properties("JP")
+        jp_keys = {key for _property_id, key, _label, _is_predefined, _is_required in jp_properties}
+        self.assertIn("target_text", jp_keys)
+        self.assertIn("meaning", jp_keys)
+        self.assertIn("kana", jp_keys)
+
+        en_properties = self.repository.list_language_properties("EN")
+        en_keys = {key for _property_id, key, _label, _is_predefined, _is_required in en_properties}
+        self.assertIn("target_text", en_keys)
+        self.assertIn("meaning", en_keys)
+        self.assertNotIn("kana", en_keys)
+
+    def test_workbook_visibility_defaults_exist(self) -> None:
+        workbook_id = self.repository.get_current_workbook_id()
+        self.assertIsNotNone(workbook_id)
+
+        visibility_rows = self.repository.get_workbook_visible_properties(int(workbook_id))
+        visibility_by_key = {
+            key: is_visible
+            for _property_id, key, _label, _is_predefined, _is_required, is_visible, _display_order in visibility_rows
+        }
+        self.assertTrue(visibility_by_key["target_text"])
+        self.assertTrue(visibility_by_key["meaning"])
+        self.assertTrue(visibility_by_key["kana"])
+
+    def test_language_property_crud_and_required_property_protection(self) -> None:
+        property_id = self.repository.add_language_property("JP", "example_note", "Example note")
+        jp_keys = {
+            key
+            for _property_id, key, _label, _is_predefined, _is_required in self.repository.list_language_properties("JP")
+        }
+        self.assertIn("example_note", jp_keys)
+
+        self.repository.delete_language_property(property_id)
+        jp_keys_after_delete = {
+            key
+            for _property_id, key, _label, _is_predefined, _is_required in self.repository.list_language_properties("JP")
+        }
+        self.assertNotIn("example_note", jp_keys_after_delete)
+
+        required_property_id = next(
+            property_id
+            for property_id, key, _label, _is_predefined, is_required in self.repository.list_language_properties("JP")
+            if key == "target_text" and is_required
+        )
+        with self.assertRaises(ValueError):
+            self.repository.delete_language_property(required_property_id)
+
+    def test_entry_property_values_persist_and_sync_predefined_columns(self) -> None:
+        entry = self.repository.add_entry("食べる", "たべる", "to eat")
+        custom_property_id = self.repository.add_language_property("JP", "register", "Register")
+
+        self.repository.set_entry_property_values(
+            entry.id,
+            {
+                "target_text": "喰べる",
+                "meaning": "to consume",
+                "kana": "たべる",
+                "register": "casual",
+            },
+        )
+
+        values = self.repository.get_entry_property_values(entry.id)
+        self.assertEqual(values["target_text"], "喰べる")
+        self.assertEqual(values["meaning"], "to consume")
+        self.assertEqual(values["register"], "casual")
+
+        loaded = self.repository.get_entry(entry.id)
+        self.assertEqual(loaded.japanese_text, "喰べる")
+        self.assertEqual(loaded.english_text, "to consume")
+
+        self.repository.delete_language_property(custom_property_id)
+        values_after_property_delete = self.repository.get_entry_property_values(entry.id)
+        self.assertNotIn("register", values_after_property_delete)
+
+    def test_set_workbook_visible_properties_keeps_target_text_visible(self) -> None:
+        workbook_id = self.repository.get_current_workbook_id()
+        self.assertIsNotNone(workbook_id)
+
+        rows = self.repository.get_workbook_visible_properties(int(workbook_id))
+        meaning_property_id = next(property_id for property_id, key, *_rest in rows if key == "meaning")
+        self.repository.set_workbook_visible_properties(int(workbook_id), [meaning_property_id])
+
+        updated_rows = self.repository.get_workbook_visible_properties(int(workbook_id))
+        visible_keys = {
+            key
+            for _property_id, key, _label, _is_predefined, _is_required, is_visible, _display_order in updated_rows
+            if is_visible
+        }
+        self.assertIn("target_text", visible_keys)
+        self.assertIn("meaning", visible_keys)
+
+    def test_deleting_last_workbook_is_allowed(self) -> None:
+        workbook_id = self.repository.get_current_workbook_id()
+        self.assertIsNotNone(workbook_id)
+        entry = self.repository.add_entry("食べる", "たべる", "to eat", workbook_id=int(workbook_id))
+        self.assertGreater(entry.id, 0)
+
+        next_current = self.repository.delete_workbook(int(workbook_id))
+        self.assertIsNone(next_current)
+        self.assertEqual(self.repository.get_current_workbook_id(), None)
+        self.assertEqual(self.repository.list_workbooks(), [])
+
     def test_initialize_renames_legacy_default_workbook_name_to_jp(self) -> None:
         current_workbook_id = self.repository.get_current_workbook_id()
 

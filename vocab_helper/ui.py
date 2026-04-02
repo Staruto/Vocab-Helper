@@ -192,9 +192,17 @@ class MainWindow(tk.Tk):
         self.workbook_rows: list[Workbook] = self.repository.list_workbooks()
         self._workbook_display_to_id: dict[str, int] = {}
         self.current_workbook_id = self.repository.get_current_workbook_id()
-        self.current_workbook = self.repository.get_workbook(self.current_workbook_id)
-        self.target_language_code = self.current_workbook.target_language_code
+        self.current_workbook = (
+            self.repository.get_workbook(self.current_workbook_id)
+            if self.current_workbook_id is not None
+            else None
+        )
+        self.target_language_code = self.current_workbook.target_language_code if self.current_workbook else "JP"
         self.assistant_language_code = "EN"
+        self.settings_language_code_var = tk.StringVar(value=self.target_language_code)
+        self._settings_workbook_display_to_id: dict[str, int] = {}
+        self._settings_column_vars: dict[int, tk.BooleanVar] = {}
+        self._table_column_keys: list[str] = ["target_text", "kana", "meaning"]
 
         self.show_tier_colors_var = tk.BooleanVar(value=True)
         self.sort_mode_var = tk.StringVar(value="time")
@@ -217,6 +225,8 @@ class MainWindow(tk.Tk):
         self._refresh_workbook_selector(select_workbook_id=self.current_workbook_id)
         self._refresh_test_button_labels()
         self._refresh_table_columns()
+        self._refresh_settings_page()
+        self._set_home_action_enabled(self.current_workbook_id is not None)
         self._bind_shortcuts()
         self.refresh_entries()
 
@@ -250,21 +260,56 @@ class MainWindow(tk.Tk):
         return "Meaning"
 
     def _refresh_language_labels(self) -> None:
-        self.tree.heading("jp", text=self._target_field_label())
-        self.tree.heading("kana", text="Kana (optional)")
-        self.tree.heading("en", text=self._assistant_field_label())
-
-    def _refresh_table_columns(self) -> None:
-        if self.target_language_code == "JP":
-            self.tree.configure(displaycolumns=("jp", "kana", "en"))
-            self.tree.column("jp", width=300, anchor="w")
-            self.tree.column("kana", width=250, anchor="w")
-            self.tree.column("en", width=300, anchor="w")
+        if self.current_workbook_id is None:
             return
 
-        self.tree.configure(displaycolumns=("jp", "en"))
-        self.tree.column("jp", width=420, anchor="w")
-        self.tree.column("en", width=420, anchor="w")
+        self._refresh_table_columns()
+
+    def _refresh_table_columns(self) -> None:
+        if self.current_workbook_id is None:
+            self.tree.configure(columns=("empty",), displaycolumns=("empty",))
+            self.tree.heading("empty", text="No workbook selected")
+            self.tree.column("empty", width=860, anchor="w")
+            self._table_column_keys = []
+            return
+
+        try:
+            property_rows = self.repository.get_workbook_visible_properties(self.current_workbook_id)
+        except (LookupError, sqlite3.Error):
+            property_rows = []
+
+        visible_rows = [
+            row for row in property_rows if row[5] or row[1] == "target_text"
+        ]
+        if not visible_rows:
+            visible_rows = [
+                row
+                for row in property_rows
+                if row[1] in {"target_text", "meaning"}
+            ]
+
+        self._table_column_keys = [row[1] for row in visible_rows]
+        column_ids = tuple(f"col_{index}" for index, _row in enumerate(visible_rows))
+        self.tree.configure(columns=column_ids, displaycolumns=column_ids)
+
+        if not visible_rows:
+            return
+
+        total_width = max(self.tree.winfo_width(), 840)
+        width_per_column = max(int(total_width / len(visible_rows)) - 10, 180)
+
+        for index, row in enumerate(visible_rows):
+            column_id = column_ids[index]
+            property_key = row[1]
+            property_label = row[2]
+            if property_key == "target_text":
+                heading_text = self._target_field_label()
+            elif property_key == "meaning":
+                heading_text = self._assistant_field_label()
+            else:
+                heading_text = property_label
+            self.tree.heading(column_id, text=heading_text)
+            self.tree.column(column_id, width=width_per_column, anchor="w")
 
     def _build_widgets(self) -> None:
         container = ttk.Frame(self, padding=12)
@@ -298,8 +343,10 @@ class MainWindow(tk.Tk):
 
         home_page = ttk.Frame(self.page_tabs)
         profile_page = ttk.Frame(self.page_tabs)
+        settings_page = ttk.Frame(self.page_tabs)
         self.page_tabs.add(home_page, text="Home")
         self.page_tabs.add(profile_page, text="Profile")
+        self.page_tabs.add(settings_page, text="Settings")
 
         home_page.columnconfigure(0, weight=1)
         home_page.rowconfigure(0, weight=1)
@@ -311,17 +358,17 @@ class MainWindow(tk.Tk):
 
         self.tree = ttk.Treeview(
             table_frame,
-            columns=("jp", "kana", "en"),
+            columns=("col_0", "col_1", "col_2"),
             show="headings",
             height=15,
             selectmode="extended",
         )
-        self.tree.heading("jp", text="Target text")
-        self.tree.heading("kana", text="Kana (optional)")
-        self.tree.heading("en", text="Assistant meaning")
-        self.tree.column("jp", width=300, anchor="w")
-        self.tree.column("kana", width=250, anchor="w")
-        self.tree.column("en", width=300, anchor="w")
+        self.tree.heading("col_0", text="Target text")
+        self.tree.heading("col_1", text="Kana")
+        self.tree.heading("col_2", text="Meaning")
+        self.tree.column("col_0", width=300, anchor="w")
+        self.tree.column("col_1", width=250, anchor="w")
+        self.tree.column("col_2", width=300, anchor="w")
 
         scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
@@ -376,16 +423,16 @@ class MainWindow(tk.Tk):
         )
         self.target_to_meaning_test_button.grid(row=0, column=3, padx=(0, 8), sticky="e")
 
-        bulk_add_button = ttk.Button(
+        self.bulk_add_button = ttk.Button(
             button_row,
             text="Bulk add",
             command=self._open_bulk_add_dialog,
             style="App.TButton",
         )
-        bulk_add_button.grid(row=0, column=4, padx=(0, 8), sticky="e")
+        self.bulk_add_button.grid(row=0, column=4, padx=(0, 8), sticky="e")
 
-        add_button = ttk.Button(button_row, text="+", width=4, command=self._open_add_dialog, style="App.TButton")
-        add_button.grid(row=0, column=5, sticky="e")
+        self.add_button = ttk.Button(button_row, text="+", width=4, command=self._open_add_dialog, style="App.TButton")
+        self.add_button.grid(row=0, column=5, sticky="e")
 
         settings_row = ttk.Frame(home_page, padding=(0, 8, 0, 0))
         settings_row.grid(row=2, column=0, sticky="ew")
@@ -431,36 +478,40 @@ class MainWindow(tk.Tk):
         self.test_pick_combo.grid(row=0, column=6, sticky="w", padx=(4, 0))
         self.test_pick_combo.bind("<<ComboboxSelected>>", self._on_pick_strategy_changed)
 
-        ttk.Button(
+        self.home_new_workbook_button = ttk.Button(
             settings_row,
             text="New workbook",
             command=self._open_workbook_creation_dialog,
             style="App.TButton",
-        ).grid(row=0, column=7, sticky="w", padx=(10, 0))
+        )
+        self.home_new_workbook_button.grid(row=0, column=7, sticky="w", padx=(10, 0))
 
-        ttk.Button(
+        self.home_tags_button = ttk.Button(
             settings_row,
             text="Tags",
             command=self._open_tag_manager_dialog,
             style="App.TButton",
-        ).grid(row=0, column=8, sticky="w", padx=(8, 0))
+        )
+        self.home_tags_button.grid(row=0, column=8, sticky="w", padx=(8, 0))
 
         filter_row = ttk.Frame(home_page, padding=(0, 6, 0, 0))
         filter_row.grid(row=3, column=0, sticky="ew")
         filter_row.columnconfigure(2, weight=1)
 
-        ttk.Button(
+        self.filter_tags_button = ttk.Button(
             filter_row,
             text="Filter tags",
             command=self._open_tag_filter_dialog,
             style="App.TButton",
-        ).grid(row=0, column=0, sticky="w")
-        ttk.Button(
+        )
+        self.filter_tags_button.grid(row=0, column=0, sticky="w")
+        self.clear_filter_button = ttk.Button(
             filter_row,
             text="Clear filter",
             command=self._clear_tag_filter,
             style="App.TButton",
-        ).grid(row=0, column=1, sticky="w", padx=(8, 0))
+        )
+        self.clear_filter_button.grid(row=0, column=1, sticky="w", padx=(8, 0))
         ttk.Label(filter_row, textvariable=self.tag_filter_summary_var, style="Status.TLabel").grid(
             row=0,
             column=2,
@@ -506,6 +557,8 @@ class MainWindow(tk.Tk):
             swatch.grid(row=0, column=index + 1, padx=(0, 4))
         ttk.Label(legend_frame, text="More", style="Status.TLabel").grid(row=0, column=len(ACTIVITY_COLORS) + 1, padx=(2, 0))
 
+        self._build_settings_widgets(settings_page)
+
     def _bind_shortcuts(self) -> None:
         self.bind("<Control-n>", self._handle_add_shortcut)
         self.bind("<Control-N>", self._handle_add_shortcut)
@@ -518,6 +571,385 @@ class MainWindow(tk.Tk):
         self.tree.bind("<Return>", self._handle_edit_shortcut)
         self.tree.bind("<KP_Enter>", self._handle_edit_shortcut)
         self.tree.bind("<Delete>", self._handle_delete_shortcut)
+
+    def _build_settings_widgets(self, settings_page: ttk.Frame) -> None:
+        settings_page.columnconfigure(0, weight=1)
+        settings_page.rowconfigure(0, weight=1)
+
+        root = ttk.Frame(settings_page, padding=10)
+        root.grid(row=0, column=0, sticky="nsew")
+        root.columnconfigure(0, weight=1)
+        root.columnconfigure(1, weight=1)
+        root.rowconfigure(0, weight=1)
+        root.rowconfigure(1, weight=1)
+
+        workbook_section = ttk.LabelFrame(root, text="Workbooks", padding=10)
+        workbook_section.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=(0, 6))
+        workbook_section.columnconfigure(0, weight=1)
+        workbook_section.rowconfigure(0, weight=1)
+
+        self.settings_workbook_listbox = tk.Listbox(workbook_section, exportselection=False, font=self.fonts["latin"])
+        self.settings_workbook_listbox.grid(row=0, column=0, sticky="nsew")
+        workbook_scroll = ttk.Scrollbar(workbook_section, orient="vertical", command=self.settings_workbook_listbox.yview)
+        workbook_scroll.grid(row=0, column=1, sticky="ns")
+        self.settings_workbook_listbox.configure(yscrollcommand=workbook_scroll.set)
+        self.settings_workbook_listbox.bind("<<ListboxSelect>>", self._on_settings_workbook_selected)
+
+        workbook_actions = ttk.Frame(workbook_section)
+        workbook_actions.grid(row=1, column=0, columnspan=2, sticky="e", pady=(8, 0))
+        ttk.Button(workbook_actions, text="Create", command=self._open_workbook_creation_dialog, style="App.TButton").grid(
+            row=0,
+            column=0,
+            padx=(0, 8),
+        )
+        ttk.Button(workbook_actions, text="Switch", command=self._switch_selected_settings_workbook, style="App.TButton").grid(
+            row=0,
+            column=1,
+            padx=(0, 8),
+        )
+        ttk.Button(workbook_actions, text="Delete", command=self._delete_selected_settings_workbook, style="App.TButton").grid(
+            row=0,
+            column=2,
+        )
+
+        visibility_section = ttk.LabelFrame(root, text="Workbook columns", padding=10)
+        visibility_section.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=(0, 6))
+        visibility_section.columnconfigure(0, weight=1)
+        visibility_section.rowconfigure(1, weight=1)
+
+        self.settings_visibility_info_var = tk.StringVar(value="Select a workbook to configure visible columns.")
+        ttk.Label(
+            visibility_section,
+            textvariable=self.settings_visibility_info_var,
+            style="Status.TLabel",
+            wraplength=340,
+            justify="left",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 8))
+
+        self.settings_column_container = ttk.Frame(visibility_section)
+        self.settings_column_container.grid(row=1, column=0, sticky="nsew")
+        self.settings_column_container.columnconfigure(0, weight=1)
+
+        ttk.Button(
+            visibility_section,
+            text="Save column visibility",
+            command=self._save_selected_workbook_column_visibility,
+            style="App.TButton",
+        ).grid(row=2, column=0, sticky="e", pady=(8, 0))
+
+        language_section = ttk.LabelFrame(root, text="Language schema", padding=10)
+        language_section.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        language_section.columnconfigure(0, weight=1)
+        language_section.rowconfigure(2, weight=1)
+
+        language_row = ttk.Frame(language_section)
+        language_row.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        ttk.Label(language_row, text="Language", style="App.TLabel").grid(row=0, column=0, sticky="w")
+        self.settings_language_combo = ttk.Combobox(
+            language_row,
+            state="readonly",
+            values=tuple(LANGUAGE_NAMES.keys()),
+            textvariable=self.settings_language_code_var,
+            width=8,
+            font=self.fonts["latin"],
+        )
+        self.settings_language_combo.grid(row=0, column=1, sticky="w", padx=(8, 0))
+        self.settings_language_combo.bind("<<ComboboxSelected>>", self._on_settings_language_changed)
+
+        property_actions = ttk.Frame(language_section)
+        property_actions.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        ttk.Button(property_actions, text="Add property", command=self._add_language_property_from_settings, style="App.TButton").grid(
+            row=0,
+            column=0,
+            padx=(0, 8),
+        )
+        ttk.Button(
+            property_actions,
+            text="Delete property",
+            command=self._delete_language_property_from_settings,
+            style="App.TButton",
+        ).grid(row=0, column=1, padx=(0, 8))
+        ttk.Button(
+            property_actions,
+            text="Manage tags",
+            command=self._open_settings_language_tag_manager,
+            style="App.TButton",
+        ).grid(row=0, column=2)
+
+        property_frame = ttk.Frame(language_section)
+        property_frame.grid(row=2, column=0, sticky="nsew")
+        property_frame.columnconfigure(0, weight=1)
+        property_frame.rowconfigure(0, weight=1)
+
+        self.settings_property_listbox = tk.Listbox(property_frame, exportselection=False, font=self.fonts["latin"])
+        self.settings_property_listbox.grid(row=0, column=0, sticky="nsew")
+        property_scroll = ttk.Scrollbar(property_frame, orient="vertical", command=self.settings_property_listbox.yview)
+        property_scroll.grid(row=0, column=1, sticky="ns")
+        self.settings_property_listbox.configure(yscrollcommand=property_scroll.set)
+
+    def _set_home_action_enabled(self, enabled: bool) -> None:
+        state = "normal" if enabled else "disabled"
+        self.meaning_to_target_test_button.configure(state=state)
+        self.target_to_meaning_test_button.configure(state=state)
+        self.target_to_kana_test_button.configure(state=state)
+        self.bulk_add_button.configure(state=state)
+        self.add_button.configure(state=state)
+        self.home_tags_button.configure(state=state)
+        self.filter_tags_button.configure(state=state)
+        self.clear_filter_button.configure(state=state)
+        self.sort_mode_combo.configure(state="readonly" if enabled else "disabled")
+        self.time_order_combo.configure(state="readonly" if enabled else "disabled")
+        self.test_pick_combo.configure(state="readonly" if enabled else "disabled")
+
+    def _refresh_settings_page(self) -> None:
+        self._refresh_settings_workbook_list()
+        self._refresh_settings_language_properties()
+        self._refresh_settings_column_visibility()
+
+    def _refresh_settings_workbook_list(self) -> None:
+        self.workbook_rows = self.repository.list_workbooks()
+        self._settings_workbook_display_to_id.clear()
+        self.settings_workbook_listbox.delete(0, "end")
+
+        selected_index = 0
+        for index, workbook in enumerate(self.workbook_rows):
+            display = f"{workbook.name} ({self._language_display_name(workbook.target_language_code)})"
+            self.settings_workbook_listbox.insert("end", display)
+            self._settings_workbook_display_to_id[display] = workbook.id
+            if workbook.id == self.current_workbook_id:
+                selected_index = index
+
+        if self.workbook_rows:
+            self.settings_workbook_listbox.selection_clear(0, "end")
+            self.settings_workbook_listbox.selection_set(selected_index)
+
+    def _selected_settings_workbook_id(self) -> int | None:
+        selection = self.settings_workbook_listbox.curselection()
+        if not selection:
+            return None
+        index = selection[0]
+        if index >= len(self.workbook_rows):
+            return None
+        return self.workbook_rows[index].id
+
+    def _refresh_settings_column_visibility(self) -> None:
+        for child in self.settings_column_container.winfo_children():
+            child.destroy()
+        self._settings_column_vars.clear()
+
+        selected_workbook_id = self._selected_settings_workbook_id()
+        if selected_workbook_id is None:
+            ttk.Label(
+                self.settings_column_container,
+                text="No workbook available.",
+                style="Status.TLabel",
+            ).grid(row=0, column=0, sticky="w")
+            self.settings_visibility_info_var.set("Create a workbook to configure columns.")
+            return
+
+        try:
+            visibility_rows = self.repository.get_workbook_visible_properties(selected_workbook_id)
+            workbook = self.repository.get_workbook(selected_workbook_id)
+        except (LookupError, sqlite3.Error) as exc:
+            self.settings_visibility_info_var.set(f"Could not load visibility settings: {exc}")
+            return
+
+        self.settings_visibility_info_var.set(
+            f"Visible columns for workbook '{workbook.name}'. Target text is always visible."
+        )
+
+        for row_index, row in enumerate(visibility_rows):
+            property_id, property_key, property_label, _is_predefined, _is_required, is_visible, _display_order = row
+            var = tk.BooleanVar(value=bool(is_visible) or property_key == "target_text")
+            self._settings_column_vars[property_id] = var
+            checkbox = ttk.Checkbutton(
+                self.settings_column_container,
+                text=property_label,
+                variable=var,
+            )
+            checkbox.grid(row=row_index, column=0, sticky="w", pady=(0, 4))
+            if property_key == "target_text":
+                checkbox.configure(state="disabled")
+
+    def _save_selected_workbook_column_visibility(self) -> None:
+        selected_workbook_id = self._selected_settings_workbook_id()
+        if selected_workbook_id is None:
+            messagebox.showwarning("No workbook", "Select a workbook first.", parent=self)
+            return
+
+        selected_property_ids = [
+            property_id
+            for property_id, var in self._settings_column_vars.items()
+            if var.get()
+        ]
+        try:
+            self.repository.set_workbook_visible_properties(selected_workbook_id, selected_property_ids)
+        except (ValidationError, LookupError) as exc:
+            messagebox.showerror("Visibility error", str(exc), parent=self)
+            return
+        except sqlite3.Error as exc:
+            messagebox.showerror("Database error", f"Could not save visibility settings: {exc}", parent=self)
+            return
+
+        if self.current_workbook_id == selected_workbook_id:
+            self._refresh_table_columns()
+            self.refresh_entries()
+
+    def _refresh_settings_language_properties(self) -> None:
+        language_code = self.settings_language_code_var.get().strip().upper() or "JP"
+        self.settings_property_listbox.delete(0, "end")
+        try:
+            property_rows = self.repository.list_language_properties(language_code)
+        except (ValidationError, sqlite3.Error):
+            return
+
+        for _property_id, property_key, property_label, is_predefined, is_required in property_rows:
+            flags: list[str] = []
+            if is_predefined:
+                flags.append("predefined")
+            if is_required:
+                flags.append("required")
+            suffix = f" ({', '.join(flags)})" if flags else ""
+            self.settings_property_listbox.insert("end", f"{property_label} [{property_key}]{suffix}")
+
+    def _property_id_at_settings_selection(self) -> int | None:
+        selection = self.settings_property_listbox.curselection()
+        if not selection:
+            return None
+
+        language_code = self.settings_language_code_var.get().strip().upper() or "JP"
+        property_rows = self.repository.list_language_properties(language_code)
+        index = selection[0]
+        if index >= len(property_rows):
+            return None
+        return property_rows[index][0]
+
+    def _add_language_property_from_settings(self) -> None:
+        language_code = self.settings_language_code_var.get().strip().upper() or "JP"
+        key = simpledialog.askstring("Add property", "Property key (snake_case):", parent=self)
+        if key is None:
+            return
+        label = simpledialog.askstring("Add property", "Property label:", parent=self)
+        if label is None:
+            return
+
+        try:
+            self.repository.add_language_property(language_code, key, label)
+        except ValidationError as exc:
+            messagebox.showerror("Validation error", str(exc), parent=self)
+            return
+        except sqlite3.Error as exc:
+            messagebox.showerror("Database error", f"Could not add property: {exc}", parent=self)
+            return
+
+        self._refresh_settings_language_properties()
+        self._refresh_settings_column_visibility()
+        if self.current_workbook is not None and self.current_workbook.target_language_code == language_code:
+            self._refresh_table_columns()
+            self.refresh_entries()
+
+    def _delete_language_property_from_settings(self) -> None:
+        property_id = self._property_id_at_settings_selection()
+        if property_id is None:
+            messagebox.showwarning("No selection", "Select a property to delete.", parent=self)
+            return
+
+        if not messagebox.askyesno(
+            "Delete property",
+            "Delete this property from the selected language? Existing values will be removed.",
+            parent=self,
+        ):
+            return
+
+        try:
+            self.repository.delete_language_property(property_id)
+        except (LookupError, ValueError) as exc:
+            messagebox.showerror("Not allowed", str(exc), parent=self)
+            return
+        except sqlite3.Error as exc:
+            messagebox.showerror("Database error", f"Could not delete property: {exc}", parent=self)
+            return
+
+        self._refresh_settings_language_properties()
+        self._refresh_settings_column_visibility()
+        self._refresh_table_columns()
+        self.refresh_entries()
+
+    def _open_settings_language_tag_manager(self) -> None:
+        language_code = self.settings_language_code_var.get().strip().upper() or "JP"
+        dialog = TagManagerDialog(
+            self,
+            repository=self.repository,
+            target_language_code=language_code,
+            text_font=self.fonts["latin"],
+        )
+        self.wait_window(dialog)
+
+        if dialog.changed and language_code == self.target_language_code:
+            self._refresh_tag_filter_summary()
+            self.refresh_entries()
+
+    def _switch_selected_settings_workbook(self) -> None:
+        workbook_id = self._selected_settings_workbook_id()
+        if workbook_id is None:
+            messagebox.showwarning("No selection", "Select a workbook to switch.", parent=self)
+            return
+        self._switch_workbook(workbook_id)
+
+    def _delete_selected_settings_workbook(self) -> None:
+        workbook_id = self._selected_settings_workbook_id()
+        if workbook_id is None:
+            messagebox.showwarning("No selection", "Select a workbook to delete.", parent=self)
+            return
+
+        workbook = next((row for row in self.workbook_rows if row.id == workbook_id), None)
+        if workbook is None:
+            return
+
+        if not messagebox.askyesno(
+            "Delete workbook",
+            f"Delete workbook '{workbook.name}' and all its vocabulary data? This cannot be undone.",
+            parent=self,
+        ):
+            return
+
+        try:
+            new_current_workbook_id = self.repository.delete_workbook(workbook_id)
+        except LookupError as exc:
+            messagebox.showerror("Not found", str(exc), parent=self)
+            return
+        except sqlite3.Error as exc:
+            messagebox.showerror("Database error", f"Could not delete workbook: {exc}", parent=self)
+            return
+
+        self.current_workbook_id = new_current_workbook_id
+        if new_current_workbook_id is None:
+            self.current_workbook = None
+            self.target_language_code = "JP"
+            self.active_filter_tag_ids = []
+            self._set_home_action_enabled(False)
+            self._refresh_workbook_selector(select_workbook_id=None)
+            self._refresh_language_labels()
+            self._refresh_test_button_labels()
+            self._refresh_table_columns()
+            self.refresh_entries()
+        else:
+            self.current_workbook = self.repository.get_workbook(new_current_workbook_id)
+            self.target_language_code = self.current_workbook.target_language_code
+            self._set_home_action_enabled(True)
+            self._refresh_workbook_selector(select_workbook_id=new_current_workbook_id)
+            self._refresh_language_labels()
+            self._refresh_test_button_labels()
+            self._refresh_table_columns()
+            self.refresh_entries()
+
+        self._refresh_settings_page()
+
+    def _on_settings_workbook_selected(self, _event: tk.Event) -> None:
+        self._refresh_settings_column_visibility()
+
+    def _on_settings_language_changed(self, _event: tk.Event) -> None:
+        self._refresh_settings_language_properties()
 
     def _refresh_workbook_selector(self, select_workbook_id: int | None = None) -> None:
         self.workbook_rows = self.repository.list_workbooks()
@@ -533,7 +965,10 @@ class MainWindow(tk.Tk):
 
         if not self.workbook_rows:
             self.workbook_selection_var.set("")
+            self.workbook_combo.configure(state="disabled")
             return
+
+        self.workbook_combo.configure(state="readonly")
 
         desired_id = select_workbook_id if select_workbook_id is not None else self.current_workbook_id
         selected_workbook = next((workbook for workbook in self.workbook_rows if workbook.id == desired_id), self.workbook_rows[0])
@@ -541,6 +976,12 @@ class MainWindow(tk.Tk):
         self.workbook_selection_var.set(selected_display)
 
     def _refresh_test_button_labels(self) -> None:
+        if self.current_workbook_id is None:
+            self.meaning_to_target_test_button.configure(text="Test Meaning -> Target")
+            self.target_to_meaning_test_button.configure(text="Test Target -> Meaning")
+            self.target_to_kana_test_button.configure(text="Kana test (JP only)", state="disabled")
+            return
+
         language_name = self._language_display_name(self.target_language_code)
         self.meaning_to_target_test_button.configure(text=f"Test Meaning -> {language_name}")
         self.target_to_meaning_test_button.configure(text=f"Test {language_name} -> Meaning")
@@ -575,6 +1016,8 @@ class MainWindow(tk.Tk):
         self._refresh_test_button_labels()
         self._refresh_table_columns()
         self._refresh_tag_filter_summary()
+        self._set_home_action_enabled(True)
+        self._refresh_settings_page()
         self.refresh_entries()
 
     def _on_workbook_selected(self, _event: tk.Event) -> None:
@@ -609,6 +1052,7 @@ class MainWindow(tk.Tk):
             return
 
         self._workbook_filter_tag_ids.setdefault(workbook.id, [])
+        self._set_home_action_enabled(True)
         self._switch_workbook(workbook.id)
 
     def _on_sort_mode_changed(self, _event: tk.Event) -> None:
@@ -654,6 +1098,13 @@ class MainWindow(tk.Tk):
 
         self._tree_entry_ids.clear()
         self._entry_stats_by_id.clear()
+
+        if self.current_workbook_id is None:
+            self.count_label.configure(text="No workbook. Create one in Settings.")
+            self.activity_summary_label.configure(text="No workbook selected.")
+            self.activity_canvas.delete("all")
+            return
+
         entries_with_stats = self.repository.list_entries_with_stats(
             sort_mode=self.sort_mode_var.get(),
             time_order=self.time_order_var.get(),
@@ -668,10 +1119,25 @@ class MainWindow(tk.Tk):
             if self.show_tier_colors_var.get():
                 tags = (f"tier_{tier}",)
 
+            value_by_key: dict[str, str] = {
+                "target_text": entry.japanese_text,
+                "meaning": entry.english_text,
+                "kana": entry.kana_text or "",
+            }
+            try:
+                dynamic_values = self.repository.get_entry_property_values(entry.id)
+            except (LookupError, sqlite3.Error):
+                dynamic_values = {}
+            value_by_key.update(dynamic_values)
+
+            ordered_values = tuple(value_by_key.get(property_key, "") for property_key in self._table_column_keys)
+            if not ordered_values:
+                ordered_values = (entry.japanese_text,)
+
             item_id = self.tree.insert(
                 "",
                 "end",
-                values=(entry.japanese_text, entry.kana_text or "", entry.english_text),
+                values=ordered_values,
                 tags=tags,
             )
             self._tree_entry_ids[item_id] = entry.id
@@ -685,6 +1151,10 @@ class MainWindow(tk.Tk):
         self._refresh_activity_grid()
 
     def _refresh_tag_filter_summary(self) -> None:
+        if self.current_workbook_id is None:
+            self.tag_filter_summary_var.set("Tag filter: unavailable")
+            return
+
         try:
             available_tags = self.repository.list_tags(target_language_code=self.target_language_code)
         except sqlite3.Error:
@@ -707,6 +1177,10 @@ class MainWindow(tk.Tk):
         self.tag_filter_summary_var.set(f"Tag filter (ALL): {preview}")
 
     def _open_tag_manager_dialog(self) -> None:
+        if self.current_workbook_id is None:
+            messagebox.showwarning("No workbook", "Create or select a workbook first.", parent=self)
+            return
+
         dialog = TagManagerDialog(
             self,
             repository=self.repository,
@@ -720,6 +1194,10 @@ class MainWindow(tk.Tk):
             self.refresh_entries()
 
     def _open_tag_filter_dialog(self) -> None:
+        if self.current_workbook_id is None:
+            messagebox.showwarning("No workbook", "Create or select a workbook first.", parent=self)
+            return
+
         dialog = TagSelectionDialog(
             self,
             repository=self.repository,
@@ -928,6 +1406,10 @@ class MainWindow(tk.Tk):
         return str(values[0])
 
     def _open_add_dialog(self) -> None:
+        if self.current_workbook_id is None:
+            messagebox.showwarning("No workbook", "Create or select a workbook first.", parent=self)
+            return
+
         def save_with_tags(
             japanese: str,
             kana: str,
@@ -963,6 +1445,10 @@ class MainWindow(tk.Tk):
         self.wait_window(dialog)
 
     def _open_bulk_add_dialog(self) -> None:
+        if self.current_workbook_id is None:
+            messagebox.showwarning("No workbook", "Create or select a workbook first.", parent=self)
+            return
+
         dialog = BulkAddDialog(
             self,
             repository=self.repository,
@@ -972,6 +1458,10 @@ class MainWindow(tk.Tk):
         self.wait_window(dialog)
 
     def _open_en_to_jp_test_dialog(self) -> None:
+        if self.current_workbook_id is None:
+            messagebox.showwarning("No workbook", "Create or select a workbook first.", parent=self)
+            return
+
         dialog = EnglishToJapaneseTestDialog(
             self,
             repository=self.repository,
@@ -982,6 +1472,10 @@ class MainWindow(tk.Tk):
         self.refresh_entries()
 
     def _open_jp_to_kana_test_dialog(self) -> None:
+        if self.current_workbook_id is None:
+            messagebox.showwarning("No workbook", "Create or select a workbook first.", parent=self)
+            return
+
         dialog = JapaneseToKanaTestDialog(
             self,
             repository=self.repository,
@@ -992,6 +1486,10 @@ class MainWindow(tk.Tk):
         self.refresh_entries()
 
     def _open_jp_to_en_test_dialog(self) -> None:
+        if self.current_workbook_id is None:
+            messagebox.showwarning("No workbook", "Create or select a workbook first.", parent=self)
+            return
+
         dialog = JapaneseToEnglishChoiceTestDialog(
             self,
             repository=self.repository,
@@ -1002,6 +1500,10 @@ class MainWindow(tk.Tk):
         self.refresh_entries()
 
     def _open_edit_dialog(self) -> None:
+        if self.current_workbook_id is None:
+            messagebox.showwarning("No workbook", "Create or select a workbook first.", parent=self)
+            return
+
         entry_id = self._selected_entry_id()
         if entry_id is None:
             messagebox.showwarning("No selection", "Select an entry to edit.", parent=self)
@@ -1062,6 +1564,10 @@ class MainWindow(tk.Tk):
         self.wait_window(dialog)
 
     def _open_detail_dialog(self, entry_id: int | None = None) -> None:
+        if self.current_workbook_id is None:
+            messagebox.showwarning("No workbook", "Create or select a workbook first.", parent=self)
+            return
+
         resolved_entry_id = entry_id if entry_id is not None else self._selected_entry_id()
         if resolved_entry_id is None:
             messagebox.showwarning("No selection", "Select an entry to view details.", parent=self)
@@ -1109,6 +1615,10 @@ class MainWindow(tk.Tk):
         self.refresh_entries()
 
     def _delete_selected_entry(self) -> None:
+        if self.current_workbook_id is None:
+            messagebox.showwarning("No workbook", "Create or select a workbook first.", parent=self)
+            return
+
         entry_ids = self._selected_entry_ids()
         if not entry_ids:
             messagebox.showwarning("No selection", "Select at least one entry to delete.", parent=self)
@@ -1176,6 +1686,10 @@ class MainWindow(tk.Tk):
         return sorted(set(normalized_tag_ids)), selected_part_of_speech
 
     def _assign_tags_to_selected(self) -> None:
+        if self.current_workbook_id is None:
+            messagebox.showwarning("No workbook", "Create or select a workbook first.", parent=self)
+            return
+
         entry_ids = self._selected_entry_ids()
         if not entry_ids:
             messagebox.showwarning("No selection", "Select at least one entry.", parent=self)

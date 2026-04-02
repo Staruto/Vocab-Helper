@@ -4,7 +4,7 @@ from datetime import date, timedelta
 import random
 import sqlite3
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Mapping
 
 from .models import VocabEntry, Workbook
 from .validators import (
@@ -29,6 +29,17 @@ class VocabRepository:
         "other",
     )
     PREDEFINED_DIFFICULTY_TAGS = ("N5", "N4", "N3", "N2", "N1")
+    PREDEFINED_LANGUAGE_PROPERTIES: dict[str, tuple[tuple[str, str, bool], ...]] = {
+        "JP": (
+            ("target_text", "Target text", True),
+            ("meaning", "Meaning", True),
+            ("kana", "Kana", False),
+        ),
+        "EN": (
+            ("target_text", "Target text", True),
+            ("meaning", "Meaning", True),
+        ),
+    }
 
     def __init__(self, db_path: Path | str) -> None:
         self.db_path = Path(db_path)
@@ -81,6 +92,46 @@ class VocabRepository:
                     preset_key TEXT NOT NULL DEFAULT 'generic',
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE (name)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS language_properties (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    target_language_code TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    is_predefined INTEGER NOT NULL DEFAULT 0,
+                    is_required INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (target_language_code, key)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS entry_property_values (
+                    entry_id INTEGER NOT NULL,
+                    property_id INTEGER NOT NULL,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (entry_id, property_id),
+                    FOREIGN KEY (entry_id) REFERENCES vocab_entries(id) ON DELETE CASCADE,
+                    FOREIGN KEY (property_id) REFERENCES language_properties(id) ON DELETE CASCADE
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS workbook_visible_properties (
+                    workbook_id INTEGER NOT NULL,
+                    property_id INTEGER NOT NULL,
+                    is_visible INTEGER NOT NULL DEFAULT 1,
+                    display_order INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (workbook_id, property_id),
+                    FOREIGN KEY (workbook_id) REFERENCES workbooks(id) ON DELETE CASCADE,
+                    FOREIGN KEY (property_id) REFERENCES language_properties(id) ON DELETE CASCADE
                 )
                 """
             )
@@ -152,6 +203,22 @@ class VocabRepository:
             self._ensure_column(connection, "vocab_entries", "part_of_speech", "TEXT NULL")
             self._ensure_column(connection, "vocab_entries", "details_markdown", "TEXT NULL")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_vocab_entries_workbook_id ON vocab_entries(workbook_id)")
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_language_properties_language_key "
+                "ON language_properties(target_language_code, key)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_entry_property_values_entry_id "
+                "ON entry_property_values(entry_id)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_entry_property_values_property_id "
+                "ON entry_property_values(property_id)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_workbook_visible_properties_workbook_id "
+                "ON workbook_visible_properties(workbook_id)"
+            )
 
             connection.execute(
                 """
@@ -168,38 +235,56 @@ class VocabRepository:
                 """
             )
 
-            default_workbook_id = self._ensure_default_workbook(connection)
-            connection.execute(
+            default_workbook_id = self._first_workbook_id(connection)
+            current_setting_exists = connection.execute(
                 """
-                UPDATE vocab_entries
-                SET workbook_id = ?
-                WHERE workbook_id IS NULL
-                """,
-                (default_workbook_id,),
-            )
-            connection.execute(
+                SELECT 1
+                FROM app_settings
+                WHERE key = 'current_workbook_id'
                 """
-                INSERT INTO app_settings (key, value)
-                VALUES ('current_workbook_id', ?)
-                ON CONFLICT(key) DO NOTHING
-                """,
-                (str(default_workbook_id),),
-            )
+            ).fetchone()
+            if default_workbook_id is None and current_setting_exists is None:
+                default_workbook_id = self._ensure_default_workbook(connection)
+
+            if default_workbook_id is not None:
+                connection.execute(
+                    """
+                    UPDATE vocab_entries
+                    SET workbook_id = ?
+                    WHERE workbook_id IS NULL
+                    """,
+                    (default_workbook_id,),
+                )
+
+            if current_setting_exists is None:
+                connection.execute(
+                    """
+                    INSERT INTO app_settings (key, value)
+                    VALUES ('current_workbook_id', ?)
+                    ON CONFLICT(key) DO NOTHING
+                    """,
+                    (str(default_workbook_id) if default_workbook_id is not None else ""),
+                )
 
             current_workbook_id = self._read_current_workbook_id_from_connection(connection, default_workbook_id)
-            self._migrate_legacy_default_workbook_name(connection, current_workbook_id)
-            target_language_code = self._read_workbook_target_language_from_connection(connection, current_workbook_id)
-            connection.execute(
-                """
-                INSERT INTO app_settings (key, value)
-                VALUES ('target_language', ?)
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value
-                """,
-                (target_language_code,),
-            )
+            if current_workbook_id is not None:
+                self._migrate_legacy_default_workbook_name(connection, current_workbook_id)
+                target_language_code = self._read_workbook_target_language_from_connection(connection, current_workbook_id)
+                connection.execute(
+                    """
+                    INSERT INTO app_settings (key, value)
+                    VALUES ('target_language', ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                    """,
+                    (target_language_code,),
+                )
 
-            self._ensure_predefined_tags(connection, target_language_code)
-            self._migrate_legacy_part_of_speech_tags(connection, target_language_code)
+                self._ensure_predefined_tags(connection, target_language_code)
+                self._migrate_legacy_part_of_speech_tags(connection, target_language_code)
+
+            self._ensure_predefined_language_properties(connection)
+            self._migrate_legacy_entry_property_values(connection)
+            self._ensure_workbook_property_visibility_defaults(connection)
             connection.commit()
         finally:
             connection.close()
@@ -252,6 +337,20 @@ class VocabRepository:
         )
         return int(cursor.lastrowid)
 
+    @staticmethod
+    def _first_workbook_id(connection: sqlite3.Connection) -> int | None:
+        row = connection.execute(
+            """
+            SELECT id
+            FROM workbooks
+            ORDER BY id ASC
+            LIMIT 1
+            """
+        ).fetchone()
+        if row is None:
+            return None
+        return int(row[0])
+
     def _migrate_legacy_default_workbook_name(self, connection: sqlite3.Connection, workbook_id: int) -> None:
         row = connection.execute(
             """
@@ -293,8 +392,8 @@ class VocabRepository:
     def _read_current_workbook_id_from_connection(
         self,
         connection: sqlite3.Connection,
-        fallback_workbook_id: int,
-    ) -> int:
+        fallback_workbook_id: int | None,
+    ) -> int | None:
         row = connection.execute(
             """
             SELECT value
@@ -303,12 +402,15 @@ class VocabRepository:
             """
         ).fetchone()
         if row is None or row[0] is None:
-            return int(fallback_workbook_id)
+            return int(fallback_workbook_id) if fallback_workbook_id is not None else None
 
+        raw_value = str(row[0]).strip()
+        if raw_value == "":
+            return int(fallback_workbook_id) if fallback_workbook_id is not None else None
         try:
-            workbook_id = int(str(row[0]))
+            workbook_id = int(raw_value)
         except (TypeError, ValueError):
-            return int(fallback_workbook_id)
+            return int(fallback_workbook_id) if fallback_workbook_id is not None else None
 
         exists = connection.execute(
             """
@@ -319,7 +421,7 @@ class VocabRepository:
             (workbook_id,),
         ).fetchone()
         if exists is None:
-            return int(fallback_workbook_id)
+            return int(fallback_workbook_id) if fallback_workbook_id is not None else None
         return workbook_id
 
     def _read_workbook_target_language_from_connection(
@@ -377,8 +479,212 @@ class VocabRepository:
                 raise LookupError(f"Workbook with id {resolved_workbook_id} was not found.")
             return resolved_workbook_id
 
-        fallback_workbook_id = self._ensure_default_workbook(connection)
-        return self._read_current_workbook_id_from_connection(connection, fallback_workbook_id)
+        fallback_workbook_id = self._first_workbook_id(connection)
+        resolved_workbook_id = self._read_current_workbook_id_from_connection(connection, fallback_workbook_id)
+        if resolved_workbook_id is None:
+            raise LookupError("No workbook is available. Create a workbook first.")
+        return resolved_workbook_id
+
+    @staticmethod
+    def _language_property_key_to_column_name(property_key: str) -> str | None:
+        if property_key == "target_text":
+            return "japanese_text"
+        if property_key == "meaning":
+            return "english_text"
+        if property_key == "kana":
+            return "kana_text"
+        return None
+
+    def _ensure_predefined_language_properties(self, connection: sqlite3.Connection) -> None:
+        for target_language_code, properties in self.PREDEFINED_LANGUAGE_PROPERTIES.items():
+            for key, label, is_required in properties:
+                connection.execute(
+                    """
+                    INSERT INTO language_properties (
+                        target_language_code,
+                        key,
+                        label,
+                        is_predefined,
+                        is_required
+                    )
+                    VALUES (?, ?, ?, 1, ?)
+                    ON CONFLICT(target_language_code, key)
+                    DO UPDATE SET
+                        label = excluded.label,
+                        is_predefined = 1,
+                        is_required = excluded.is_required
+                    """,
+                    (target_language_code, key, label, 1 if is_required else 0),
+                )
+
+    def _migrate_legacy_entry_property_values(self, connection: sqlite3.Connection) -> None:
+        rows = connection.execute(
+            """
+            SELECT
+                e.id,
+                w.target_language_code,
+                e.japanese_text,
+                e.english_text,
+                e.kana_text
+            FROM vocab_entries AS e
+            INNER JOIN workbooks AS w
+                ON w.id = e.workbook_id
+            """
+        ).fetchall()
+        if not rows:
+            return
+
+        property_rows = connection.execute(
+            """
+            SELECT id, target_language_code, key
+            FROM language_properties
+            """
+        ).fetchall()
+        property_id_by_language_and_key: dict[tuple[str, str], int] = {
+            (str(row[1]), str(row[2])): int(row[0]) for row in property_rows
+        }
+
+        for row in rows:
+            entry_id = int(row[0])
+            target_language_code = validate_language_code(str(row[1]), "Target language")
+            japanese_text = str(row[2])
+            english_text = str(row[3])
+            kana_text = normalize_optional_text(str(row[4])) if row[4] is not None else None
+
+            values_by_key: dict[str, str | None] = {
+                "target_text": japanese_text,
+                "meaning": english_text,
+                "kana": kana_text,
+            }
+            for property_key, value in values_by_key.items():
+                property_id = property_id_by_language_and_key.get((target_language_code, property_key))
+                if property_id is None:
+                    continue
+                normalized_value = normalize_optional_text(value or "")
+                if normalized_value is None:
+                    connection.execute(
+                        """
+                        DELETE FROM entry_property_values
+                        WHERE entry_id = ?
+                          AND property_id = ?
+                        """,
+                        (entry_id, property_id),
+                    )
+                    continue
+
+                connection.execute(
+                    """
+                    INSERT INTO entry_property_values (entry_id, property_id, value)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(entry_id, property_id)
+                    DO UPDATE SET
+                        value = excluded.value,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (entry_id, property_id, normalized_value),
+                )
+
+    def _sync_predefined_property_values_for_entry(
+        self,
+        connection: sqlite3.Connection,
+        entry_id: int,
+        target_language_code: str,
+        japanese_text: str,
+        english_text: str,
+        kana_text: str | None,
+    ) -> None:
+        property_rows = connection.execute(
+            """
+            SELECT id, key
+            FROM language_properties
+            WHERE target_language_code = ?
+              AND is_predefined = 1
+            """,
+            (target_language_code,),
+        ).fetchall()
+        if not property_rows:
+            return
+
+        values_by_key: dict[str, str | None] = {
+            "target_text": japanese_text,
+            "meaning": english_text,
+            "kana": kana_text,
+        }
+        for row in property_rows:
+            property_id = int(row[0])
+            property_key = str(row[1])
+            normalized_value = normalize_optional_text(values_by_key.get(property_key, "") or "")
+            if normalized_value is None:
+                connection.execute(
+                    """
+                    DELETE FROM entry_property_values
+                    WHERE entry_id = ?
+                      AND property_id = ?
+                    """,
+                    (entry_id, property_id),
+                )
+                continue
+
+            connection.execute(
+                """
+                INSERT INTO entry_property_values (entry_id, property_id, value)
+                VALUES (?, ?, ?)
+                ON CONFLICT(entry_id, property_id)
+                DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (entry_id, property_id, normalized_value),
+            )
+
+    def _initialize_workbook_visible_properties(self, connection: sqlite3.Connection, workbook_id: int) -> None:
+        workbook_row = connection.execute(
+            """
+            SELECT target_language_code
+            FROM workbooks
+            WHERE id = ?
+            """,
+            (workbook_id,),
+        ).fetchone()
+        if workbook_row is None:
+            return
+        target_language_code = validate_language_code(str(workbook_row[0]), "Target language")
+
+        property_rows = connection.execute(
+            """
+            SELECT id, key
+            FROM language_properties
+            WHERE target_language_code = ?
+            ORDER BY is_required DESC, is_predefined DESC, id ASC
+            """,
+            (target_language_code,),
+        ).fetchall()
+        for order_index, row in enumerate(property_rows):
+            property_id = int(row[0])
+            property_key = str(row[1])
+            is_visible = 1 if property_key in {"target_text", "meaning", "kana"} else 0
+            connection.execute(
+                """
+                INSERT INTO workbook_visible_properties (workbook_id, property_id, is_visible, display_order)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(workbook_id, property_id)
+                DO UPDATE SET
+                    is_visible = COALESCE(workbook_visible_properties.is_visible, excluded.is_visible),
+                    display_order = COALESCE(workbook_visible_properties.display_order, excluded.display_order)
+                """,
+                (workbook_id, property_id, is_visible, order_index),
+            )
+
+    def _ensure_workbook_property_visibility_defaults(self, connection: sqlite3.Connection) -> None:
+        workbook_rows = connection.execute(
+            """
+            SELECT id
+            FROM workbooks
+            ORDER BY id ASC
+            """
+        ).fetchall()
+        for row in workbook_rows:
+            self._initialize_workbook_visible_properties(connection, int(row[0]))
 
     def _resolve_workbook_id(self, workbook_id: int | None = None) -> int:
         connection = sqlite3.connect(self.db_path)
@@ -714,6 +1020,31 @@ class VocabRepository:
             if normalized_preset_key == "japanese":
                 self._ensure_predefined_tags(connection, "JP")
 
+            self._ensure_predefined_language_properties(connection)
+            self._initialize_workbook_visible_properties(connection, workbook_id)
+
+            current_workbook_id = self._read_current_workbook_id_from_connection(
+                connection,
+                self._first_workbook_id(connection),
+            )
+            if current_workbook_id is None:
+                connection.execute(
+                    """
+                    INSERT INTO app_settings (key, value)
+                    VALUES ('current_workbook_id', ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                    """,
+                    (str(workbook_id),),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO app_settings (key, value)
+                    VALUES ('target_language', ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                    """,
+                    (target_language,),
+                )
+
             connection.commit()
         except sqlite3.IntegrityError as exc:
             raise ValidationError(f"Workbook '{normalized_name}' already exists.") from exc
@@ -722,10 +1053,10 @@ class VocabRepository:
 
         return self.get_workbook(workbook_id)
 
-    def get_current_workbook_id(self) -> int:
+    def get_current_workbook_id(self) -> int | None:
         connection = sqlite3.connect(self.db_path)
         try:
-            fallback_workbook_id = self._ensure_default_workbook(connection)
+            fallback_workbook_id = self._first_workbook_id(connection)
             workbook_id = self._read_current_workbook_id_from_connection(connection, fallback_workbook_id)
             connection.execute(
                 """
@@ -733,7 +1064,7 @@ class VocabRepository:
                 VALUES ('current_workbook_id', ?)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value
                 """,
-                (str(workbook_id),),
+                (str(workbook_id) if workbook_id is not None else "",),
             )
             connection.commit()
             return workbook_id
@@ -766,6 +1097,488 @@ class VocabRepository:
             connection.close()
 
         return resolved_workbook
+
+    def delete_workbook(self, workbook_id: int) -> int | None:
+        resolved_workbook_id = int(workbook_id)
+        connection = sqlite3.connect(self.db_path)
+        try:
+            workbook_exists = connection.execute(
+                """
+                SELECT 1
+                FROM workbooks
+                WHERE id = ?
+                """,
+                (resolved_workbook_id,),
+            ).fetchone()
+            if workbook_exists is None:
+                raise LookupError(f"Workbook with id {resolved_workbook_id} was not found.")
+
+            entry_rows = connection.execute(
+                """
+                SELECT id
+                FROM vocab_entries
+                WHERE workbook_id = ?
+                """,
+                (resolved_workbook_id,),
+            ).fetchall()
+            entry_ids = [int(row[0]) for row in entry_rows]
+            if entry_ids:
+                placeholders = ",".join("?" for _ in entry_ids)
+                connection.execute(
+                    f"""
+                    DELETE FROM vocab_stats
+                    WHERE entry_id IN ({placeholders})
+                    """,
+                    tuple(entry_ids),
+                )
+                connection.execute(
+                    f"""
+                    DELETE FROM practice_daily_unique
+                    WHERE entry_id IN ({placeholders})
+                    """,
+                    tuple(entry_ids),
+                )
+                connection.execute(
+                    f"""
+                    DELETE FROM practice_daily_error_recovery
+                    WHERE entry_id IN ({placeholders})
+                    """,
+                    tuple(entry_ids),
+                )
+                connection.execute(
+                    f"""
+                    DELETE FROM entry_tags
+                    WHERE entry_id IN ({placeholders})
+                    """,
+                    tuple(entry_ids),
+                )
+                connection.execute(
+                    f"""
+                    DELETE FROM entry_property_values
+                    WHERE entry_id IN ({placeholders})
+                    """,
+                    tuple(entry_ids),
+                )
+                connection.execute(
+                    f"""
+                    DELETE FROM vocab_entries
+                    WHERE id IN ({placeholders})
+                    """,
+                    tuple(entry_ids),
+                )
+
+            connection.execute(
+                """
+                DELETE FROM workbook_visible_properties
+                WHERE workbook_id = ?
+                """,
+                (resolved_workbook_id,),
+            )
+            connection.execute(
+                """
+                DELETE FROM workbooks
+                WHERE id = ?
+                """,
+                (resolved_workbook_id,),
+            )
+
+            remaining_workbook_id = self._first_workbook_id(connection)
+            current_workbook_id = self._read_current_workbook_id_from_connection(connection, remaining_workbook_id)
+            if current_workbook_id == resolved_workbook_id:
+                current_workbook_id = remaining_workbook_id
+
+            connection.execute(
+                """
+                INSERT INTO app_settings (key, value)
+                VALUES ('current_workbook_id', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (str(current_workbook_id) if current_workbook_id is not None else "",),
+            )
+
+            if current_workbook_id is not None:
+                target_language_code = self._read_workbook_target_language_from_connection(connection, current_workbook_id)
+                connection.execute(
+                    """
+                    INSERT INTO app_settings (key, value)
+                    VALUES ('target_language', ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                    """,
+                    (target_language_code,),
+                )
+
+            connection.commit()
+            return current_workbook_id
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _normalize_property_key(value: str) -> str:
+        normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+        if not normalized:
+            raise ValidationError("Property key is required.")
+        if not normalized.replace("_", "").isalnum() or normalized[0].isdigit():
+            raise ValidationError("Property key can only contain letters, numbers, and underscores.")
+        return normalized
+
+    def list_language_properties(
+        self,
+        target_language_code: str,
+    ) -> list[tuple[int, str, str, bool, bool]]:
+        resolved_target_language_code = validate_language_code(target_language_code, "Target language")
+        connection = sqlite3.connect(self.db_path)
+        try:
+            rows = connection.execute(
+                """
+                SELECT id, key, label, is_predefined, is_required
+                FROM language_properties
+                WHERE target_language_code = ?
+                ORDER BY is_required DESC, is_predefined DESC, id ASC
+                """,
+                (resolved_target_language_code,),
+            ).fetchall()
+            return [
+                (int(row[0]), str(row[1]), str(row[2]), bool(row[3]), bool(row[4]))
+                for row in rows
+            ]
+        finally:
+            connection.close()
+
+    def add_language_property(self, target_language_code: str, key: str, label: str) -> int:
+        resolved_target_language_code = validate_language_code(target_language_code, "Target language")
+        normalized_key = self._normalize_property_key(key)
+        normalized_label = self._normalize_tag_name(label, "Property label")
+        if normalized_key in {"target_text", "meaning", "kana"}:
+            raise ValidationError("This property key is reserved.")
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            cursor = connection.execute(
+                """
+                INSERT INTO language_properties (target_language_code, key, label, is_predefined, is_required)
+                VALUES (?, ?, ?, 0, 0)
+                """,
+                (resolved_target_language_code, normalized_key, normalized_label),
+            )
+            property_id = int(cursor.lastrowid)
+
+            workbook_rows = connection.execute(
+                """
+                SELECT id
+                FROM workbooks
+                WHERE target_language_code = ?
+                ORDER BY id ASC
+                """,
+                (resolved_target_language_code,),
+            ).fetchall()
+            for workbook_row in workbook_rows:
+                workbook_id = int(workbook_row[0])
+                max_order_row = connection.execute(
+                    """
+                    SELECT COALESCE(MAX(display_order), -1)
+                    FROM workbook_visible_properties
+                    WHERE workbook_id = ?
+                    """,
+                    (workbook_id,),
+                ).fetchone()
+                display_order = int(max_order_row[0]) + 1 if max_order_row is not None else 0
+                connection.execute(
+                    """
+                    INSERT INTO workbook_visible_properties (workbook_id, property_id, is_visible, display_order)
+                    VALUES (?, ?, 0, ?)
+                    ON CONFLICT(workbook_id, property_id)
+                    DO NOTHING
+                    """,
+                    (workbook_id, property_id, display_order),
+                )
+
+            connection.commit()
+            return property_id
+        except sqlite3.IntegrityError as exc:
+            raise ValidationError(f"Property '{normalized_key}' already exists for this language.") from exc
+        finally:
+            connection.close()
+
+    def delete_language_property(self, property_id: int) -> None:
+        resolved_property_id = int(property_id)
+        connection = sqlite3.connect(self.db_path)
+        try:
+            row = connection.execute(
+                """
+                SELECT is_predefined, is_required
+                FROM language_properties
+                WHERE id = ?
+                """,
+                (resolved_property_id,),
+            ).fetchone()
+            if row is None:
+                raise LookupError(f"Property with id {resolved_property_id} was not found.")
+            if bool(row[0]) and bool(row[1]):
+                raise ValueError("Required predefined properties cannot be deleted.")
+
+            connection.execute(
+                """
+                DELETE FROM language_properties
+                WHERE id = ?
+                """,
+                (resolved_property_id,),
+            )
+            connection.execute(
+                """
+                DELETE FROM entry_property_values
+                WHERE property_id = ?
+                """,
+                (resolved_property_id,),
+            )
+            connection.execute(
+                """
+                DELETE FROM workbook_visible_properties
+                WHERE property_id = ?
+                """,
+                (resolved_property_id,),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def get_workbook_visible_properties(
+        self,
+        workbook_id: int,
+    ) -> list[tuple[int, str, str, bool, bool, bool, int]]:
+        resolved_workbook_id = int(workbook_id)
+        connection = sqlite3.connect(self.db_path)
+        try:
+            workbook_row = connection.execute(
+                """
+                SELECT target_language_code
+                FROM workbooks
+                WHERE id = ?
+                """,
+                (resolved_workbook_id,),
+            ).fetchone()
+            if workbook_row is None:
+                raise LookupError(f"Workbook with id {resolved_workbook_id} was not found.")
+            target_language_code = validate_language_code(str(workbook_row[0]), "Target language")
+
+            self._initialize_workbook_visible_properties(connection, resolved_workbook_id)
+
+            rows = connection.execute(
+                """
+                SELECT
+                    lp.id,
+                    lp.key,
+                    lp.label,
+                    lp.is_predefined,
+                    lp.is_required,
+                    wvp.is_visible,
+                    wvp.display_order
+                FROM language_properties AS lp
+                INNER JOIN workbook_visible_properties AS wvp
+                    ON wvp.property_id = lp.id
+                WHERE wvp.workbook_id = ?
+                  AND lp.target_language_code = ?
+                ORDER BY wvp.display_order ASC, lp.id ASC
+                """,
+                (resolved_workbook_id, target_language_code),
+            ).fetchall()
+            connection.commit()
+            return [
+                (
+                    int(row[0]),
+                    str(row[1]),
+                    str(row[2]),
+                    bool(row[3]),
+                    bool(row[4]),
+                    bool(row[5]),
+                    int(row[6]),
+                )
+                for row in rows
+            ]
+        finally:
+            connection.close()
+
+    def set_workbook_visible_properties(self, workbook_id: int, property_ids: Iterable[int]) -> None:
+        resolved_workbook_id = int(workbook_id)
+        requested_property_ids = {int(property_id) for property_id in property_ids}
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            workbook_row = connection.execute(
+                """
+                SELECT target_language_code
+                FROM workbooks
+                WHERE id = ?
+                """,
+                (resolved_workbook_id,),
+            ).fetchone()
+            if workbook_row is None:
+                raise LookupError(f"Workbook with id {resolved_workbook_id} was not found.")
+            target_language_code = validate_language_code(str(workbook_row[0]), "Target language")
+
+            self._initialize_workbook_visible_properties(connection, resolved_workbook_id)
+
+            rows = connection.execute(
+                """
+                SELECT id, key
+                FROM language_properties
+                WHERE target_language_code = ?
+                """,
+                (target_language_code,),
+            ).fetchall()
+            all_property_ids = {int(row[0]) for row in rows}
+            key_by_id = {int(row[0]): str(row[1]) for row in rows}
+
+            invalid_property_ids = requested_property_ids - all_property_ids
+            if invalid_property_ids:
+                raise ValidationError("One or more selected properties are invalid for this workbook language.")
+
+            target_text_id = next(
+                property_id
+                for property_id, property_key in key_by_id.items()
+                if property_key == "target_text"
+            )
+            requested_property_ids.add(target_text_id)
+
+            for property_id in all_property_ids:
+                connection.execute(
+                    """
+                    UPDATE workbook_visible_properties
+                    SET is_visible = ?
+                    WHERE workbook_id = ?
+                      AND property_id = ?
+                    """,
+                    (1 if property_id in requested_property_ids else 0, resolved_workbook_id, property_id),
+                )
+
+            connection.commit()
+        finally:
+            connection.close()
+
+    def get_entry_property_values(self, entry_id: int) -> dict[str, str]:
+        resolved_entry_id = int(entry_id)
+        connection = sqlite3.connect(self.db_path)
+        try:
+            entry_row = connection.execute(
+                """
+                SELECT e.workbook_id, w.target_language_code
+                FROM vocab_entries AS e
+                INNER JOIN workbooks AS w
+                    ON w.id = e.workbook_id
+                WHERE e.id = ?
+                """,
+                (resolved_entry_id,),
+            ).fetchone()
+            if entry_row is None:
+                raise LookupError(f"Vocabulary entry with id {resolved_entry_id} was not found.")
+
+            target_language_code = validate_language_code(str(entry_row[1]), "Target language")
+            rows = connection.execute(
+                """
+                SELECT lp.key, epv.value
+                FROM entry_property_values AS epv
+                INNER JOIN language_properties AS lp
+                    ON lp.id = epv.property_id
+                WHERE epv.entry_id = ?
+                  AND lp.target_language_code = ?
+                ORDER BY lp.id ASC
+                """,
+                (resolved_entry_id, target_language_code),
+            ).fetchall()
+            return {str(row[0]): str(row[1]) for row in rows}
+        finally:
+            connection.close()
+
+    def set_entry_property_values(self, entry_id: int, property_values: Mapping[str, str | None]) -> None:
+        resolved_entry_id = int(entry_id)
+        normalized_input = {self._normalize_property_key(str(key)): value for key, value in property_values.items()}
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            entry_row = connection.execute(
+                """
+                SELECT e.workbook_id, w.target_language_code
+                FROM vocab_entries AS e
+                INNER JOIN workbooks AS w
+                    ON w.id = e.workbook_id
+                WHERE e.id = ?
+                """,
+                (resolved_entry_id,),
+            ).fetchone()
+            if entry_row is None:
+                raise LookupError(f"Vocabulary entry with id {resolved_entry_id} was not found.")
+
+            target_language_code = validate_language_code(str(entry_row[1]), "Target language")
+            property_rows = connection.execute(
+                """
+                SELECT id, key, is_required
+                FROM language_properties
+                WHERE target_language_code = ?
+                """,
+                (target_language_code,),
+            ).fetchall()
+            property_meta_by_key = {
+                str(row[1]): (int(row[0]), bool(row[2]))
+                for row in property_rows
+            }
+
+            unknown_keys = [key for key in normalized_input if key not in property_meta_by_key]
+            if unknown_keys:
+                unknown_text = ", ".join(sorted(unknown_keys))
+                raise ValidationError(f"Unknown properties for this language: {unknown_text}")
+
+            column_updates: dict[str, str | None] = {}
+            for property_key, raw_value in normalized_input.items():
+                property_id, is_required = property_meta_by_key[property_key]
+                normalized_value = normalize_optional_text(raw_value or "")
+                if is_required and normalized_value is None:
+                    raise ValidationError(f"Property '{property_key}' is required.")
+
+                if normalized_value is None:
+                    connection.execute(
+                        """
+                        DELETE FROM entry_property_values
+                        WHERE entry_id = ?
+                          AND property_id = ?
+                        """,
+                        (resolved_entry_id, property_id),
+                    )
+                else:
+                    connection.execute(
+                        """
+                        INSERT INTO entry_property_values (entry_id, property_id, value)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(entry_id, property_id)
+                        DO UPDATE SET
+                            value = excluded.value,
+                            updated_at = CURRENT_TIMESTAMP
+                        """,
+                        (resolved_entry_id, property_id, normalized_value),
+                    )
+
+                column_name = self._language_property_key_to_column_name(property_key)
+                if column_name is not None:
+                    column_updates[column_name] = normalized_value
+
+            if column_updates:
+                japanese_text = column_updates.get("japanese_text")
+                english_text = column_updates.get("english_text")
+                if japanese_text is not None and english_text is not None:
+                    validate_vocab_fields(japanese_text, english_text)
+
+                assignments = ", ".join(f"{column_name} = ?" for column_name in sorted(column_updates))
+                values = [column_updates[column_name] for column_name in sorted(column_updates)]
+                connection.execute(
+                    f"""
+                    UPDATE vocab_entries
+                    SET {assignments}
+                    WHERE id = ?
+                    """,
+                    (*values, resolved_entry_id),
+                )
+
+            connection.commit()
+        finally:
+            connection.close()
 
     def get_language_settings(self) -> tuple[str, str]:
         target_raw = self.get_setting("target_language", "JP") or "JP"
@@ -1750,6 +2563,14 @@ class VocabRepository:
                 normalized_entries,
                 strict=True,
             ):
+                self._sync_predefined_property_values_for_entry(
+                    connection,
+                    inserted_id,
+                    target_language_code,
+                    _japanese,
+                    _english,
+                    _kana,
+                )
                 self._sync_entry_part_of_speech_tag(
                     connection,
                     inserted_id,
@@ -1844,6 +2665,14 @@ class VocabRepository:
                 entry_id,
                 normalized_part_of_speech,
                 target_language_code,
+            )
+            self._sync_predefined_property_values_for_entry(
+                connection,
+                entry_id,
+                target_language_code,
+                japanese,
+                english,
+                kana,
             )
 
             row = connection.execute(
