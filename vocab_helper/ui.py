@@ -691,7 +691,6 @@ class MainWindow(tk.Tk):
         state = "normal" if enabled else "disabled"
         self.meaning_to_target_test_button.configure(state=state)
         self.target_to_meaning_test_button.configure(state=state)
-        self.target_to_kana_test_button.configure(state=state)
         self.bulk_add_button.configure(state=state)
         self.add_button.configure(state=state)
         self.home_tags_button.configure(state=state)
@@ -979,7 +978,7 @@ class MainWindow(tk.Tk):
         if self.current_workbook_id is None:
             self.meaning_to_target_test_button.configure(text="Test Meaning -> Target")
             self.target_to_meaning_test_button.configure(text="Test Target -> Meaning")
-            self.target_to_kana_test_button.configure(text="Kana test (JP only)", state="disabled")
+            self.target_to_kana_test_button.grid_remove()
             return
 
         language_name = self._language_display_name(self.target_language_code)
@@ -987,9 +986,10 @@ class MainWindow(tk.Tk):
         self.target_to_meaning_test_button.configure(text=f"Test {language_name} -> Meaning")
 
         if self.target_language_code == "JP":
+            self.target_to_kana_test_button.grid()
             self.target_to_kana_test_button.configure(text="Test JP -> Kana", state="normal")
         else:
-            self.target_to_kana_test_button.configure(text="Kana test (JP only)", state="disabled")
+            self.target_to_kana_test_button.grid_remove()
 
     def _switch_workbook(self, workbook_id: int) -> None:
         if self.current_workbook_id:
@@ -1454,6 +1454,7 @@ class MainWindow(tk.Tk):
             repository=self.repository,
             on_saved=self.refresh_entries,
             text_font=self.fonts["latin"],
+            target_language_code=self.target_language_code,
         )
         self.wait_window(dialog)
 
@@ -3133,10 +3134,13 @@ class BulkAddDialog(tk.Toplevel):
         repository: VocabRepository,
         on_saved: Callable[[], None],
         text_font: tkfont.Font,
+        target_language_code: str,
     ) -> None:
         super().__init__(parent)
         self.repository = repository
         self.on_saved = on_saved
+        self.target_language_code = target_language_code
+        self._show_kana = self.target_language_code == "JP"
 
         self.title("Bulk add vocabulary")
         self.transient(parent)
@@ -3152,7 +3156,10 @@ class BulkAddDialog(tk.Toplevel):
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(2, weight=1)
 
-        help_text = "One entry per line, aligned across 3 columns: Japanese, Kana (optional), English."
+        if self._show_kana:
+            help_text = "One entry per line, aligned across 3 columns: Japanese, Kana (optional), English."
+        else:
+            help_text = "One entry per line, aligned across 2 columns: Target text and Meaning."
         ttk.Label(frame, text=help_text, style="App.TLabel", wraplength=820).grid(
             row=0,
             column=0,
@@ -3167,21 +3174,24 @@ class BulkAddDialog(tk.Toplevel):
         labels_row.columnconfigure(2, weight=1)
         labels_row.columnconfigure(3, weight=0)
 
-        ttk.Label(labels_row, text="Japanese writing *", style="App.TLabel").grid(
+        target_label = "Japanese writing *" if self._show_kana else "Target text *"
+        ttk.Label(labels_row, text=target_label, style="App.TLabel").grid(
             row=0,
             column=0,
             sticky="w",
             padx=(0, 8),
         )
-        ttk.Label(labels_row, text="Kana (optional)", style="App.TLabel").grid(
+        if self._show_kana:
+            ttk.Label(labels_row, text="Kana (optional)", style="App.TLabel").grid(
+                row=0,
+                column=1,
+                sticky="w",
+                padx=(0, 8),
+            )
+        assistant_label = "English meaning *" if self._show_kana else "Meaning *"
+        ttk.Label(labels_row, text=assistant_label, style="App.TLabel").grid(
             row=0,
-            column=1,
-            sticky="w",
-            padx=(0, 8),
-        )
-        ttk.Label(labels_row, text="English meaning *", style="App.TLabel").grid(
-            row=0,
-            column=2,
+            column=2 if self._show_kana else 1,
             sticky="w",
             padx=(0, 8),
         )
@@ -3199,8 +3209,11 @@ class BulkAddDialog(tk.Toplevel):
         self.en_text = tk.Text(columns_frame, width=26, height=14, wrap="none", font=text_font)
 
         self.jp_text.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-        self.kana_text.grid(row=0, column=1, sticky="nsew", padx=(0, 8))
-        self.en_text.grid(row=0, column=2, sticky="nsew", padx=(0, 8))
+        if self._show_kana:
+            self.kana_text.grid(row=0, column=1, sticky="nsew", padx=(0, 8))
+            self.en_text.grid(row=0, column=2, sticky="nsew", padx=(0, 8))
+        else:
+            self.en_text.grid(row=0, column=1, sticky="nsew", padx=(0, 8))
 
         self.scrollbar = ttk.Scrollbar(columns_frame, orient="vertical", command=self._on_scrollbar)
         self.scrollbar.grid(row=0, column=3, sticky="ns")
@@ -3209,7 +3222,11 @@ class BulkAddDialog(tk.Toplevel):
         self.kana_text.configure(yscrollcommand=self._on_text_yscroll)
         self.en_text.configure(yscrollcommand=self._on_text_yscroll)
 
-        for text_widget in (self.jp_text, self.kana_text, self.en_text):
+        for text_widget in (self.jp_text, self.en_text):
+            text_widget.bind("<MouseWheel>", self._on_mousewheel)
+            text_widget.bind("<Button-4>", self._on_mousewheel_linux_up)
+            text_widget.bind("<Button-5>", self._on_mousewheel_linux_down)
+        if self._show_kana:
             text_widget.bind("<MouseWheel>", self._on_mousewheel)
             text_widget.bind("<Button-4>", self._on_mousewheel_linux_up)
             text_widget.bind("<Button-5>", self._on_mousewheel_linux_down)
@@ -3231,7 +3248,10 @@ class BulkAddDialog(tk.Toplevel):
         self.jp_text.focus_set()
 
     def _on_scrollbar(self, *args: str) -> None:
-        for text_widget in (self.jp_text, self.kana_text, self.en_text):
+        widgets = [self.jp_text, self.en_text]
+        if self._show_kana:
+            widgets.append(self.kana_text)
+        for text_widget in widgets:
             text_widget.yview(*args)
 
     def _on_text_yscroll(self, first: str, last: str) -> None:
@@ -3239,23 +3259,32 @@ class BulkAddDialog(tk.Toplevel):
 
     def _on_mousewheel(self, event: tk.Event) -> str:
         delta = -1 if event.delta > 0 else 1
-        for text_widget in (self.jp_text, self.kana_text, self.en_text):
+        widgets = [self.jp_text, self.en_text]
+        if self._show_kana:
+            widgets.append(self.kana_text)
+        for text_widget in widgets:
             text_widget.yview_scroll(delta, "units")
         return "break"
 
     def _on_mousewheel_linux_up(self, _event: tk.Event) -> str:
-        for text_widget in (self.jp_text, self.kana_text, self.en_text):
+        widgets = [self.jp_text, self.en_text]
+        if self._show_kana:
+            widgets.append(self.kana_text)
+        for text_widget in widgets:
             text_widget.yview_scroll(-1, "units")
         return "break"
 
     def _on_mousewheel_linux_down(self, _event: tk.Event) -> str:
-        for text_widget in (self.jp_text, self.kana_text, self.en_text):
+        widgets = [self.jp_text, self.en_text]
+        if self._show_kana:
+            widgets.append(self.kana_text)
+        for text_widget in widgets:
             text_widget.yview_scroll(1, "units")
         return "break"
 
     def _parse_entries(self, japanese_raw: str, kana_raw: str, english_raw: str) -> list[tuple[str, str, str]]:
         japanese_lines = japanese_raw.splitlines()
-        kana_lines = kana_raw.splitlines()
+        kana_lines = kana_raw.splitlines() if self._show_kana else []
         english_lines = english_raw.splitlines()
 
         line_count = max(len(japanese_lines), len(kana_lines), len(english_lines))
@@ -3286,7 +3315,7 @@ class BulkAddDialog(tk.Toplevel):
         try:
             rows = self._parse_entries(
                 self.jp_text.get("1.0", "end-1c"),
-                self.kana_text.get("1.0", "end-1c"),
+                self.kana_text.get("1.0", "end-1c") if self._show_kana else "",
                 self.en_text.get("1.0", "end-1c"),
             )
             created = self.repository.add_entries(rows)
@@ -3719,7 +3748,14 @@ class TagManagerDialog(tk.Toplevel):
         return self._tag_rows[index]
 
     def _refresh_type_list(self, select_first: bool = False) -> None:
-        self._type_rows = self.repository.list_tag_types(target_language_code=self.target_language_code)
+        rows = self.repository.list_tag_types(target_language_code=self.target_language_code)
+        if self.target_language_code != "JP":
+            rows = [
+                row
+                for row in rows
+                if row[1].lower() != "difficulty"
+            ]
+        self._type_rows = rows
         self.type_listbox.delete(0, "end")
         for _type_id, type_name, is_predefined in self._type_rows:
             suffix = " (predefined)" if is_predefined else ""
@@ -3751,6 +3787,13 @@ class TagManagerDialog(tk.Toplevel):
     def _add_type(self) -> None:
         entered = simpledialog.askstring("Add tag type", "Type name:", parent=self)
         if entered is None:
+            return
+        if self.target_language_code != "JP" and entered.strip().lower() == "difficulty":
+            messagebox.showerror(
+                "Validation error",
+                "Difficulty tags are only available for JP workbooks.",
+                parent=self,
+            )
             return
         try:
             self.repository.add_tag_type(entered, target_language_code=self.target_language_code)
@@ -3908,14 +3951,15 @@ class EntryDialog(tk.Toplevel):
         self.japanese_entry = ttk.Entry(frame, textvariable=self.japanese_var, width=48, style="Japanese.TEntry")
         self.japanese_entry.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
 
-        ttk.Label(frame, text="Kana (optional)", style="App.TLabel").grid(row=2, column=0, sticky="w")
-        self.kana_entry = ttk.Entry(frame, textvariable=self.kana_var, width=48, style="Japanese.TEntry")
-        self.kana_entry.grid(row=3, column=0, sticky="ew", pady=(0, 10))
+        if self.target_language_code == "JP":
+            ttk.Label(frame, text="Kana (optional)", style="App.TLabel").grid(row=2, column=0, sticky="w")
+            self.kana_entry = ttk.Entry(frame, textvariable=self.kana_var, width=48, style="Japanese.TEntry")
+            self.kana_entry.grid(row=3, column=0, sticky="ew", pady=(0, 10))
 
-        suggest_button = ttk.Button(frame, text="Suggest kana", command=self._suggest_kana_manual, style="App.TButton")
-        suggest_button.grid(row=3, column=1, sticky="e", padx=(8, 0), pady=(0, 10))
-        if not self.enable_kana_suggest:
-            suggest_button.configure(state="disabled")
+            suggest_button = ttk.Button(frame, text="Suggest kana", command=self._suggest_kana_manual, style="App.TButton")
+            suggest_button.grid(row=3, column=1, sticky="e", padx=(8, 0), pady=(0, 10))
+            if not self.enable_kana_suggest:
+                suggest_button.configure(state="disabled")
 
         ttk.Label(frame, text=f"{self.assistant_label} *", style="App.TLabel").grid(row=4, column=0, sticky="w")
         self.english_entry = ttk.Entry(frame, textvariable=self.english_var, width=48, style="App.TEntry")

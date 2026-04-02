@@ -466,7 +466,7 @@ class VocabRepositoryTests(unittest.TestCase):
 
         self.repository.set_language_settings("EN", "JP")
         en_types = {name for _id, name, _is_predefined in self.repository.list_tag_types("EN")}
-        self.assertIn("difficulty", en_types)
+        self.assertNotIn("difficulty", en_types)
 
         self.repository.add_tag_type("news", target_language_code="EN")
         en_types_after_add = {name for _id, name, _is_predefined in self.repository.list_tag_types("EN")}
@@ -474,6 +474,10 @@ class VocabRepositoryTests(unittest.TestCase):
 
         self.assertIn("news", en_types_after_add)
         self.assertNotIn("news", jp_types_after_add)
+
+    def test_non_jp_cannot_create_difficulty_tag_type(self) -> None:
+        with self.assertRaises(ValidationError):
+            self.repository.add_tag_type("difficulty", target_language_code="EN")
 
     def test_count_distinct_english_meanings_normalizes_case_and_spaces(self) -> None:
         self.repository.add_entries(

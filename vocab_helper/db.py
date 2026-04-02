@@ -282,6 +282,7 @@ class VocabRepository:
                 self._ensure_predefined_tags(connection, target_language_code)
                 self._migrate_legacy_part_of_speech_tags(connection, target_language_code)
 
+            self._cleanup_non_japanese_difficulty_tags(connection)
             self._ensure_predefined_language_properties(connection)
             self._migrate_legacy_entry_property_values(connection)
             self._ensure_workbook_property_visibility_defaults(connection)
@@ -817,6 +818,9 @@ class VocabRepository:
         for tag_name in self.PREDEFINED_PART_OF_SPEECH_TAGS:
             self._get_or_create_tag(connection, part_of_speech_type_id, tag_name, is_predefined=True)
 
+        if target_language_code != "JP":
+            return
+
         difficulty_type_id = self._get_or_create_tag_type(
             connection,
             target_language_code,
@@ -825,6 +829,15 @@ class VocabRepository:
         )
         for tag_name in self.PREDEFINED_DIFFICULTY_TAGS:
             self._get_or_create_tag(connection, difficulty_type_id, tag_name, is_predefined=True)
+
+    def _cleanup_non_japanese_difficulty_tags(self, connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            DELETE FROM tag_types
+            WHERE target_language_code <> 'JP'
+              AND LOWER(name) = 'difficulty'
+            """
+        )
 
     def _migrate_legacy_part_of_speech_tags(self, connection: sqlite3.Connection, target_language_code: str) -> None:
         part_of_speech_type_id = self._get_tag_type_id_by_name(connection, target_language_code, "part_of_speech")
@@ -1625,6 +1638,7 @@ class VocabRepository:
             )
             self._ensure_predefined_tags(connection, target)
             self._migrate_legacy_part_of_speech_tags(connection, target)
+            self._cleanup_non_japanese_difficulty_tags(connection)
             connection.commit()
         finally:
             connection.close()
@@ -1850,6 +1864,8 @@ class VocabRepository:
     def add_tag_type(self, name: str, target_language_code: str | None = None) -> int:
         resolved_target_language_code = self._resolve_target_language_code(target_language_code)
         normalized_name = self._normalize_tag_name(name, "Tag type")
+        if resolved_target_language_code != "JP" and normalized_name.lower() == "difficulty":
+            raise ValidationError("Difficulty tags are only available for JP workbooks.")
 
         connection = sqlite3.connect(self.db_path)
         try:
