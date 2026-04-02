@@ -216,6 +216,7 @@ class MainWindow(tk.Tk):
         self._build_widgets()
         self._refresh_workbook_selector(select_workbook_id=self.current_workbook_id)
         self._refresh_test_button_labels()
+        self._refresh_table_columns()
         self._bind_shortcuts()
         self.refresh_entries()
 
@@ -252,6 +253,18 @@ class MainWindow(tk.Tk):
         self.tree.heading("jp", text=self._target_field_label())
         self.tree.heading("kana", text="Kana (optional)")
         self.tree.heading("en", text=self._assistant_field_label())
+
+    def _refresh_table_columns(self) -> None:
+        if self.target_language_code == "JP":
+            self.tree.configure(displaycolumns=("jp", "kana", "en"))
+            self.tree.column("jp", width=300, anchor="w")
+            self.tree.column("kana", width=250, anchor="w")
+            self.tree.column("en", width=300, anchor="w")
+            return
+
+        self.tree.configure(displaycolumns=("jp", "en"))
+        self.tree.column("jp", width=420, anchor="w")
+        self.tree.column("en", width=420, anchor="w")
 
     def _build_widgets(self) -> None:
         container = ttk.Frame(self, padding=12)
@@ -560,6 +573,7 @@ class MainWindow(tk.Tk):
         self._refresh_workbook_selector(select_workbook_id=workbook.id)
         self._refresh_language_labels()
         self._refresh_test_button_labels()
+        self._refresh_table_columns()
         self._refresh_tag_filter_summary()
         self.refresh_entries()
 

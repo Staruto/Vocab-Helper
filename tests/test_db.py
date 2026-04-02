@@ -138,11 +138,32 @@ class VocabRepositoryTests(unittest.TestCase):
     def test_default_workbook_is_created_and_selected(self) -> None:
         workbooks = self.repository.list_workbooks()
         self.assertEqual(len(workbooks), 1)
-        self.assertEqual(workbooks[0].name, "Default")
+        self.assertEqual(workbooks[0].name, "JP")
         self.assertEqual(workbooks[0].target_language_code, "JP")
 
         current_workbook_id = self.repository.get_current_workbook_id()
         self.assertEqual(current_workbook_id, workbooks[0].id)
+
+    def test_initialize_renames_legacy_default_workbook_name_to_jp(self) -> None:
+        current_workbook_id = self.repository.get_current_workbook_id()
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            connection.execute(
+                """
+                UPDATE workbooks
+                SET name = 'Default', target_language_code = 'JP'
+                WHERE id = ?
+                """,
+                (current_workbook_id,),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        self.repository.initialize()
+        renamed_workbook = self.repository.get_workbook(current_workbook_id)
+        self.assertEqual(renamed_workbook.name, "JP")
 
     def test_entries_are_scoped_by_workbook(self) -> None:
         default_workbook_id = self.repository.get_current_workbook_id()

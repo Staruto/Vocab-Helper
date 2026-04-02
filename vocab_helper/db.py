@@ -187,6 +187,7 @@ class VocabRepository:
             )
 
             current_workbook_id = self._read_current_workbook_id_from_connection(connection, default_workbook_id)
+            self._migrate_legacy_default_workbook_name(connection, current_workbook_id)
             target_language_code = self._read_workbook_target_language_from_connection(connection, current_workbook_id)
             connection.execute(
                 """
@@ -241,14 +242,53 @@ class VocabRepository:
 
         target_language_code = self._read_target_language_from_connection(connection)
         preset_key = "japanese" if target_language_code == "JP" else "generic"
+        default_name = "JP" if target_language_code == "JP" else "Default"
         cursor = connection.execute(
             """
             INSERT INTO workbooks (name, target_language_code, preset_key)
             VALUES (?, ?, ?)
             """,
-            ("Default", target_language_code, preset_key),
+            (default_name, target_language_code, preset_key),
         )
         return int(cursor.lastrowid)
+
+    def _migrate_legacy_default_workbook_name(self, connection: sqlite3.Connection, workbook_id: int) -> None:
+        row = connection.execute(
+            """
+            SELECT name, target_language_code
+            FROM workbooks
+            WHERE id = ?
+            """,
+            (workbook_id,),
+        ).fetchone()
+        if row is None:
+            return
+
+        workbook_name = str(row[0]) if row[0] is not None else ""
+        target_language_code = str(row[1]) if row[1] is not None else ""
+        if workbook_name.strip().lower() != "default" or target_language_code.upper() != "JP":
+            return
+
+        jp_exists = connection.execute(
+            """
+            SELECT 1
+            FROM workbooks
+            WHERE LOWER(name) = 'jp'
+              AND id <> ?
+            """,
+            (workbook_id,),
+        ).fetchone()
+        if jp_exists is not None:
+            return
+
+        connection.execute(
+            """
+            UPDATE workbooks
+            SET name = 'JP'
+            WHERE id = ?
+            """,
+            (workbook_id,),
+        )
 
     def _read_current_workbook_id_from_connection(
         self,
