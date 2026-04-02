@@ -1843,6 +1843,9 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
         super().__init__(parent)
         self.repository = repository
         self.text_font = text_font
+        self.target_language_code = str(getattr(parent, "target_language_code", "JP")).upper()
+        self.target_language_name = LANGUAGE_NAMES.get(self.target_language_code, self.target_language_code)
+        self._show_kana_hint = self.target_language_code == "JP"
 
         self.questions: list[VocabEntry] = []
         self.current_index = 0
@@ -1867,7 +1870,7 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
         self.result_var = tk.StringVar(value="")
         self.pick_strategy_var = tk.StringVar(value=pick_strategy if pick_strategy in {"strict", "weighted"} else "strict")
 
-        self.title("Test mode: English -> Japanese")
+        self.title(f"Test mode: Meaning -> {self.target_language_name}")
         self.transient(parent)
         self.grab_set()
         self.resizable(False, False)
@@ -1889,7 +1892,7 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
 
         ttk.Label(
             self.start_frame,
-            text="English -> Japanese test",
+            text=f"Meaning -> {self.target_language_name} test",
             style="App.TLabel",
         ).grid(row=0, column=0, sticky="w")
 
@@ -1942,7 +1945,7 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
         ttk.Label(header_row, textvariable=self.progress_var, style="App.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(header_row, textvariable=self.score_var, style="App.TLabel").grid(row=0, column=1, sticky="e")
 
-        ttk.Label(self.test_frame, text="English meaning", style="App.TLabel").grid(row=1, column=0, sticky="w")
+        ttk.Label(self.test_frame, text="Meaning", style="App.TLabel").grid(row=1, column=0, sticky="w")
         self.prompt_label = ttk.Label(
             self.test_frame,
             textvariable=self.prompt_var,
@@ -1952,7 +1955,11 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
         )
         self.prompt_label.grid(row=2, column=0, sticky="w", pady=(4, 12))
 
-        ttk.Label(self.test_frame, text="Your Japanese answer", style="App.TLabel").grid(row=3, column=0, sticky="w")
+        ttk.Label(
+            self.test_frame,
+            text=f"Your {self.target_language_name} answer",
+            style="App.TLabel",
+        ).grid(row=3, column=0, sticky="w")
         self.answer_entry = ttk.Entry(self.test_frame, textvariable=self.answer_var, width=38, style="Japanese.TEntry")
         self.answer_entry.grid(row=4, column=0, sticky="w", pady=(4, 8))
 
@@ -2142,13 +2149,15 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
                 self.initial_failed_entry_ids.add(current.id)
                 self.initial_failed_questions.append(current)
 
-            kana_hint = (current.kana_text or "").strip()
-            if not kana_hint:
-                suggested_kana, reliable, _message = suggest_hiragana(correct_answer)
-                if reliable and suggested_kana:
-                    kana_hint = suggested_kana
+            kana_hint = ""
+            if self._show_kana_hint:
+                kana_hint = (current.kana_text or "").strip()
+                if not kana_hint:
+                    suggested_kana, reliable, _message = suggest_hiragana(correct_answer)
+                    if reliable and suggested_kana:
+                        kana_hint = suggested_kana
 
-            if kana_hint:
+            if self._show_kana_hint and kana_hint:
                 self.feedback_var.set(f"Incorrect. Correct answer: {correct_answer} ({kana_hint})")
             else:
                 self.feedback_var.set(f"Incorrect. Correct answer: {correct_answer}")
@@ -2665,6 +2674,8 @@ class JapaneseToEnglishChoiceTestDialog(tk.Toplevel):
         super().__init__(parent)
         self.repository = repository
         self.text_font = text_font
+        self.target_language_code = str(getattr(parent, "target_language_code", "JP")).upper()
+        self.target_language_name = LANGUAGE_NAMES.get(self.target_language_code, self.target_language_code)
 
         self.questions: list[VocabEntry] = []
         self.options_by_question: list[list[str]] = []
@@ -2689,7 +2700,7 @@ class JapaneseToEnglishChoiceTestDialog(tk.Toplevel):
         self.result_var = tk.StringVar(value="")
         self.pick_strategy_var = tk.StringVar(value=pick_strategy if pick_strategy in {"strict", "weighted"} else "strict")
 
-        self.title("Test mode: Japanese -> English")
+        self.title(f"Test mode: {self.target_language_name} -> Meaning")
         self.transient(parent)
         self.grab_set()
         self.resizable(False, False)
@@ -2711,7 +2722,7 @@ class JapaneseToEnglishChoiceTestDialog(tk.Toplevel):
 
         ttk.Label(
             self.start_frame,
-            text="Japanese -> English test (single choice)",
+            text=f"{self.target_language_name} -> Meaning test (single choice)",
             style="App.TLabel",
         ).grid(row=0, column=0, sticky="w")
 
@@ -2764,7 +2775,11 @@ class JapaneseToEnglishChoiceTestDialog(tk.Toplevel):
         ttk.Label(header_row, textvariable=self.progress_var, style="App.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(header_row, textvariable=self.score_var, style="App.TLabel").grid(row=0, column=1, sticky="e")
 
-        ttk.Label(self.test_frame, text="Japanese writing", style="App.TLabel").grid(row=1, column=0, sticky="w")
+        ttk.Label(
+            self.test_frame,
+            text=f"{self.target_language_name} text",
+            style="App.TLabel",
+        ).grid(row=1, column=0, sticky="w")
         self.prompt_label = ttk.Label(
             self.test_frame,
             textvariable=self.prompt_var,
@@ -2774,7 +2789,7 @@ class JapaneseToEnglishChoiceTestDialog(tk.Toplevel):
         )
         self.prompt_label.grid(row=2, column=0, sticky="w", pady=(4, 12))
 
-        ttk.Label(self.test_frame, text="Choose the correct English meaning", style="App.TLabel").grid(
+        ttk.Label(self.test_frame, text="Choose the correct meaning", style="App.TLabel").grid(
             row=3,
             column=0,
             sticky="w",
@@ -2944,7 +2959,7 @@ class JapaneseToEnglishChoiceTestDialog(tk.Toplevel):
         if not eligible_questions:
             messagebox.showerror(
                 "No eligible vocabularies",
-                "Add at least two vocabularies with different English meanings before starting JP->EN test.",
+                "Add at least two vocabularies with different meanings before starting this test.",
                 parent=self,
             )
             return
