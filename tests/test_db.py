@@ -126,10 +126,52 @@ class VocabRepositoryTests(unittest.TestCase):
             ).fetchall()
             self.assertEqual(
                 settings_rows,
-                [("assistant_language", "EN"), ("target_language", "JP")],
+                [
+                    ("assistant_language", "EN"),
+                    ("current_workbook_id", "1"),
+                    ("target_language", "JP"),
+                ],
             )
         finally:
             connection.close()
+
+    def test_default_workbook_is_created_and_selected(self) -> None:
+        workbooks = self.repository.list_workbooks()
+        self.assertEqual(len(workbooks), 1)
+        self.assertEqual(workbooks[0].name, "Default")
+        self.assertEqual(workbooks[0].target_language_code, "JP")
+
+        current_workbook_id = self.repository.get_current_workbook_id()
+        self.assertEqual(current_workbook_id, workbooks[0].id)
+
+    def test_entries_are_scoped_by_workbook(self) -> None:
+        default_workbook_id = self.repository.get_current_workbook_id()
+        second_workbook = self.repository.create_workbook("English workbook", "EN", preset_key="generic")
+
+        self.repository.add_entry("食べる", "たべる", "to eat", workbook_id=default_workbook_id)
+        self.repository.add_entry("run", "", "to run", workbook_id=second_workbook.id)
+
+        default_entries = self.repository.list_entries(workbook_id=default_workbook_id)
+        second_entries = self.repository.list_entries(workbook_id=second_workbook.id)
+
+        self.assertEqual(len(default_entries), 1)
+        self.assertEqual(default_entries[0].japanese_text, "食べる")
+        self.assertEqual(len(second_entries), 1)
+        self.assertEqual(second_entries[0].japanese_text, "run")
+
+    def test_get_english_options_are_scoped_by_workbook(self) -> None:
+        default_workbook_id = self.repository.get_current_workbook_id()
+        second_workbook = self.repository.create_workbook("Workbook two", "EN", preset_key="generic")
+
+        first = self.repository.add_entry("食べる", "たべる", "to eat", workbook_id=default_workbook_id)
+        self.repository.add_entry("行く", "いく", "to go", workbook_id=default_workbook_id)
+        self.repository.add_entry("run", "", "to run", workbook_id=second_workbook.id)
+
+        options = self.repository.get_english_options_for_entry(first.id, max_options=4, workbook_id=default_workbook_id)
+        normalized = {option.strip().lower() for option in options}
+        self.assertIn("to eat", normalized)
+        self.assertIn("to go", normalized)
+        self.assertNotIn("to run", normalized)
 
     def test_count_entries_reflects_total_rows(self) -> None:
         self.assertEqual(self.repository.count_entries(), 0)

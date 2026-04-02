@@ -9,7 +9,7 @@ from typing import Callable
 
 from .db import VocabRepository
 from .kana import suggest_hiragana
-from .models import VocabEntry
+from .models import VocabEntry, Workbook
 from .validators import ValidationError
 
 
@@ -189,16 +189,23 @@ class MainWindow(tk.Tk):
         self.fonts = _build_font_set(self)
         self._tree_entry_ids: dict[str, int] = {}
         self._entry_stats_by_id: dict[int, tuple[int, int, str]] = {}
-        self.target_language_code, self.assistant_language_code = self.repository.get_language_settings()
+        self.workbook_rows: list[Workbook] = self.repository.list_workbooks()
+        self._workbook_display_to_id: dict[str, int] = {}
+        self.current_workbook_id = self.repository.get_current_workbook_id()
+        self.current_workbook = self.repository.get_workbook(self.current_workbook_id)
+        self.target_language_code = self.current_workbook.target_language_code
+        self.assistant_language_code = "EN"
 
         self.show_tier_colors_var = tk.BooleanVar(value=True)
         self.sort_mode_var = tk.StringVar(value="time")
         self.time_order_var = tk.StringVar(value="newest")
         self.test_pick_strategy_var = tk.StringVar(value="strict")
         self.active_filter_tag_ids: list[int] = []
+        self._workbook_filter_tag_ids: dict[int, list[int]] = {}
         self.tag_filter_summary_var = tk.StringVar(value="Tag filter: All")
+        self.workbook_selection_var = tk.StringVar(value="")
 
-        self.title("JP <-> EN Vocabulary Helper")
+        self.title("Vocabulary Workbook Helper")
         self.geometry("900x580")
         self.minsize(760, 460)
 
@@ -207,6 +214,8 @@ class MainWindow(tk.Tk):
 
         self._configure_styles()
         self._build_widgets()
+        self._refresh_workbook_selector(select_workbook_id=self.current_workbook_id)
+        self._refresh_test_button_labels()
         self._bind_shortcuts()
         self.refresh_entries()
 
@@ -237,7 +246,7 @@ class MainWindow(tk.Tk):
         return f"Target text ({self._language_display_name(self.target_language_code)})"
 
     def _assistant_field_label(self) -> str:
-        return f"Assistant meaning ({self._language_display_name(self.assistant_language_code)})"
+        return "Meaning"
 
     def _refresh_language_labels(self) -> None:
         self.tree.heading("jp", text=self._target_field_label())
@@ -248,10 +257,31 @@ class MainWindow(tk.Tk):
         container = ttk.Frame(self, padding=12)
         container.grid(row=0, column=0, sticky="nsew")
         container.columnconfigure(0, weight=1)
-        container.rowconfigure(0, weight=1)
+        container.rowconfigure(1, weight=1)
+
+        workbook_row = ttk.Frame(container)
+        workbook_row.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        workbook_row.columnconfigure(1, weight=1)
+
+        ttk.Label(workbook_row, text="Workbook", style="App.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.workbook_combo = ttk.Combobox(
+            workbook_row,
+            state="readonly",
+            textvariable=self.workbook_selection_var,
+            width=36,
+            font=self.fonts["latin"],
+        )
+        self.workbook_combo.grid(row=0, column=1, sticky="ew")
+        self.workbook_combo.bind("<<ComboboxSelected>>", self._on_workbook_selected)
+        ttk.Button(
+            workbook_row,
+            text="New workbook",
+            command=self._open_workbook_creation_dialog,
+            style="App.TButton",
+        ).grid(row=0, column=2, sticky="w", padx=(8, 0))
 
         self.page_tabs = ttk.Notebook(container, style="App.TNotebook")
-        self.page_tabs.grid(row=0, column=0, sticky="nsew")
+        self.page_tabs.grid(row=1, column=0, sticky="nsew")
 
         home_page = ttk.Frame(self.page_tabs)
         profile_page = ttk.Frame(self.page_tabs)
@@ -309,29 +339,29 @@ class MainWindow(tk.Tk):
         button_row.grid(row=1, column=0, sticky="ew")
         button_row.columnconfigure(0, weight=1)
 
-        test_button = ttk.Button(
+        self.meaning_to_target_test_button = ttk.Button(
             button_row,
-            text="Test EN->JP",
+            text="Test Meaning -> Target",
             command=self._open_en_to_jp_test_dialog,
             style="App.TButton",
         )
-        test_button.grid(row=0, column=1, padx=(0, 8), sticky="e")
+        self.meaning_to_target_test_button.grid(row=0, column=1, padx=(0, 8), sticky="e")
 
-        test_kana_button = ttk.Button(
+        self.target_to_kana_test_button = ttk.Button(
             button_row,
-            text="Test JP->Kana",
+            text="Test Target -> Kana",
             command=self._open_jp_to_kana_test_dialog,
             style="App.TButton",
         )
-        test_kana_button.grid(row=0, column=2, padx=(0, 8), sticky="e")
+        self.target_to_kana_test_button.grid(row=0, column=2, padx=(0, 8), sticky="e")
 
-        test_en_choice_button = ttk.Button(
+        self.target_to_meaning_test_button = ttk.Button(
             button_row,
-            text="Test JP->EN",
+            text="Test Target -> Meaning",
             command=self._open_jp_to_en_test_dialog,
             style="App.TButton",
         )
-        test_en_choice_button.grid(row=0, column=3, padx=(0, 8), sticky="e")
+        self.target_to_meaning_test_button.grid(row=0, column=3, padx=(0, 8), sticky="e")
 
         bulk_add_button = ttk.Button(
             button_row,
@@ -390,8 +420,8 @@ class MainWindow(tk.Tk):
 
         ttk.Button(
             settings_row,
-            text="Languages",
-            command=self._open_language_settings_dialog,
+            text="New workbook",
+            command=self._open_workbook_creation_dialog,
             style="App.TButton",
         ).grid(row=0, column=7, sticky="w", padx=(10, 0))
 
@@ -476,6 +506,97 @@ class MainWindow(tk.Tk):
         self.tree.bind("<KP_Enter>", self._handle_edit_shortcut)
         self.tree.bind("<Delete>", self._handle_delete_shortcut)
 
+    def _refresh_workbook_selector(self, select_workbook_id: int | None = None) -> None:
+        self.workbook_rows = self.repository.list_workbooks()
+        self._workbook_display_to_id = {}
+
+        display_values: list[str] = []
+        for workbook in self.workbook_rows:
+            display = f"{workbook.name} ({self._language_display_name(workbook.target_language_code)})"
+            display_values.append(display)
+            self._workbook_display_to_id[display] = workbook.id
+
+        self.workbook_combo.configure(values=tuple(display_values))
+
+        if not self.workbook_rows:
+            self.workbook_selection_var.set("")
+            return
+
+        desired_id = select_workbook_id if select_workbook_id is not None else self.current_workbook_id
+        selected_workbook = next((workbook for workbook in self.workbook_rows if workbook.id == desired_id), self.workbook_rows[0])
+        selected_display = f"{selected_workbook.name} ({self._language_display_name(selected_workbook.target_language_code)})"
+        self.workbook_selection_var.set(selected_display)
+
+    def _refresh_test_button_labels(self) -> None:
+        language_name = self._language_display_name(self.target_language_code)
+        self.meaning_to_target_test_button.configure(text=f"Test Meaning -> {language_name}")
+        self.target_to_meaning_test_button.configure(text=f"Test {language_name} -> Meaning")
+
+        if self.target_language_code == "JP":
+            self.target_to_kana_test_button.configure(text="Test JP -> Kana", state="normal")
+        else:
+            self.target_to_kana_test_button.configure(text="Kana test (JP only)", state="disabled")
+
+    def _switch_workbook(self, workbook_id: int) -> None:
+        if self.current_workbook_id:
+            self._workbook_filter_tag_ids[self.current_workbook_id] = list(self.active_filter_tag_ids)
+
+        try:
+            workbook = self.repository.set_current_workbook_id(workbook_id)
+        except (LookupError, ValidationError) as exc:
+            messagebox.showerror("Workbook error", str(exc), parent=self)
+            self._refresh_workbook_selector(select_workbook_id=self.current_workbook_id)
+            return
+        except sqlite3.Error as exc:
+            messagebox.showerror("Database error", f"Could not switch workbook: {exc}", parent=self)
+            self._refresh_workbook_selector(select_workbook_id=self.current_workbook_id)
+            return
+
+        self.current_workbook_id = workbook.id
+        self.current_workbook = workbook
+        self.target_language_code = workbook.target_language_code
+        self.active_filter_tag_ids = list(self._workbook_filter_tag_ids.get(workbook.id, []))
+
+        self._refresh_workbook_selector(select_workbook_id=workbook.id)
+        self._refresh_language_labels()
+        self._refresh_test_button_labels()
+        self._refresh_tag_filter_summary()
+        self.refresh_entries()
+
+    def _on_workbook_selected(self, _event: tk.Event) -> None:
+        selected_display = self.workbook_selection_var.get().strip()
+        if not selected_display:
+            return
+
+        selected_workbook_id = self._workbook_display_to_id.get(selected_display)
+        if selected_workbook_id is None or selected_workbook_id == self.current_workbook_id:
+            return
+
+        self._switch_workbook(selected_workbook_id)
+
+    def _open_workbook_creation_dialog(self) -> None:
+        dialog = WorkbookCreationDialog(self, text_font=self.fonts["latin"])
+        self.wait_window(dialog)
+        if dialog.result is None:
+            return
+
+        workbook_name, target_language_code, preset_key = dialog.result
+        try:
+            workbook = self.repository.create_workbook(
+                workbook_name,
+                target_language_code,
+                preset_key=preset_key,
+            )
+        except ValidationError as exc:
+            messagebox.showerror("Validation error", str(exc), parent=self)
+            return
+        except sqlite3.Error as exc:
+            messagebox.showerror("Database error", f"Could not create workbook: {exc}", parent=self)
+            return
+
+        self._workbook_filter_tag_ids.setdefault(workbook.id, [])
+        self._switch_workbook(workbook.id)
+
     def _on_sort_mode_changed(self, _event: tk.Event) -> None:
         self._update_sort_controls()
         self.refresh_entries()
@@ -525,6 +646,7 @@ class MainWindow(tk.Tk):
             filter_tag_ids=self.active_filter_tag_ids,
             filter_match_mode="all",
             target_language_code=self.target_language_code,
+            workbook_id=self.current_workbook_id,
         )
 
         for entry, test_count, error_count, tier in entries_with_stats:
@@ -542,7 +664,7 @@ class MainWindow(tk.Tk):
             self._entry_stats_by_id[entry.id] = (test_count, error_count, tier)
 
         if self.active_filter_tag_ids:
-            total_count = self.repository.count_entries()
+            total_count = self.repository.count_entries(workbook_id=self.current_workbook_id)
             self.count_label.configure(text=f"Visible vocabularies: {len(entries_with_stats)} / {total_count}")
         else:
             self.count_label.configure(text=f"Total vocabularies: {len(entries_with_stats)}")
@@ -622,7 +744,10 @@ class MainWindow(tk.Tk):
         return 4
 
     def _refresh_activity_grid(self) -> None:
-        counts_by_date = self.repository.get_daily_unique_practice_counts(days_back=180)
+        counts_by_date = self.repository.get_daily_unique_practice_counts(
+            days_back=180,
+            workbook_id=self.current_workbook_id,
+        )
         active_days = sum(1 for count in counts_by_date.values() if count > 0)
         unique_total = sum(counts_by_date.values())
         self.activity_summary_label.configure(
@@ -3410,6 +3535,91 @@ class EntryDialog(tk.Toplevel):
             return
 
         self.on_saved()
+        self.destroy()
+
+
+class WorkbookCreationDialog(tk.Toplevel):
+    def __init__(self, parent: tk.Tk, text_font: tkfont.Font) -> None:
+        super().__init__(parent)
+        self.result: tuple[str, str, str] | None = None
+
+        self.name_var = tk.StringVar(value="")
+        self.target_language_var = tk.StringVar(value="JP")
+        self.preset_var = tk.StringVar(value="generic")
+
+        self.title("Create workbook")
+        self.transient(parent)
+        self.grab_set()
+        self.resizable(False, False)
+
+        frame = ttk.Frame(self, padding=14)
+        frame.grid(row=0, column=0, sticky="nsew")
+        frame.columnconfigure(1, weight=1)
+
+        ttk.Label(frame, text="Workbook name *", style="App.TLabel").grid(row=0, column=0, sticky="w")
+        self.name_entry = ttk.Entry(frame, textvariable=self.name_var, style="App.TEntry", width=32)
+        self.name_entry.grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=(0, 8))
+
+        ttk.Label(frame, text="Target language", style="App.TLabel").grid(row=1, column=0, sticky="w")
+        target_combo = ttk.Combobox(
+            frame,
+            state="readonly",
+            values=("JP", "EN"),
+            textvariable=self.target_language_var,
+            width=8,
+            font=text_font,
+        )
+        target_combo.grid(row=1, column=1, sticky="w", padx=(8, 0), pady=(0, 8))
+
+        ttk.Label(frame, text="Preset", style="App.TLabel").grid(row=2, column=0, sticky="w")
+        preset_combo = ttk.Combobox(
+            frame,
+            state="readonly",
+            values=("generic", "japanese"),
+            textvariable=self.preset_var,
+            width=12,
+            font=text_font,
+        )
+        preset_combo.grid(row=2, column=1, sticky="w", padx=(8, 0), pady=(0, 10))
+
+        ttk.Label(
+            frame,
+            text="Japanese preset enables JP-focused defaults (kana behavior and predefined tags).",
+            style="Status.TLabel",
+            wraplength=420,
+            justify="left",
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(0, 12))
+
+        actions = ttk.Frame(frame)
+        actions.grid(row=4, column=0, columnspan=2, sticky="e")
+        ttk.Button(actions, text="Cancel", command=self.destroy, style="App.TButton").grid(
+            row=0,
+            column=0,
+            padx=(0, 8),
+        )
+        ttk.Button(actions, text="Create", command=self._save, style="App.TButton").grid(row=0, column=1)
+
+        self.bind("<Escape>", lambda _event: self.destroy())
+        self.bind("<Return>", lambda _event: self._save())
+        self.name_entry.focus_set()
+
+    def _save(self) -> None:
+        workbook_name = self.name_var.get().strip()
+        if not workbook_name:
+            messagebox.showerror("Validation error", "Workbook name is required.", parent=self)
+            return
+
+        target_language_code = self.target_language_var.get().strip().upper()
+        preset_key = self.preset_var.get().strip().lower() or "generic"
+        if preset_key == "japanese" and target_language_code != "JP":
+            messagebox.showerror(
+                "Validation error",
+                "Japanese preset is only available for JP workbooks.",
+                parent=self,
+            )
+            return
+
+        self.result = (workbook_name, target_language_code, preset_key)
         self.destroy()
 
 

@@ -11,3 +11,12 @@ class VocabEntry:
     part_of_speech: Optional[str]
     details_markdown: Optional[str]
     created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class Workbook:
+    id: int
+    name: str
+    target_language_code: str
+    preset_key: str
+    created_at: str

@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 from typing import Iterable
 
-from .models import VocabEntry
+from .models import VocabEntry, Workbook
 from .validators import (
     ValidationError,
     normalize_optional_markdown,
@@ -42,6 +42,7 @@ class VocabRepository:
                 """
                 CREATE TABLE IF NOT EXISTS vocab_entries (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    workbook_id INTEGER NOT NULL DEFAULT 1,
                     japanese_text TEXT NOT NULL CHECK (trim(japanese_text) <> ''),
                     kana_text TEXT NULL,
                     english_text TEXT NOT NULL CHECK (trim(english_text) <> ''),
@@ -68,6 +69,18 @@ class VocabRepository:
                 CREATE TABLE IF NOT EXISTS app_settings (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS workbooks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL COLLATE NOCASE,
+                    target_language_code TEXT NOT NULL,
+                    preset_key TEXT NOT NULL DEFAULT 'generic',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (name)
                 )
                 """
             )
@@ -135,8 +148,10 @@ class VocabRepository:
             connection.execute("CREATE INDEX IF NOT EXISTS idx_tags_tag_type_id ON tags(tag_type_id)")
 
             # Backward-compatible migrations for existing databases.
+            self._ensure_column(connection, "vocab_entries", "workbook_id", "INTEGER NULL")
             self._ensure_column(connection, "vocab_entries", "part_of_speech", "TEXT NULL")
             self._ensure_column(connection, "vocab_entries", "details_markdown", "TEXT NULL")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_vocab_entries_workbook_id ON vocab_entries(workbook_id)")
 
             connection.execute(
                 """
@@ -153,7 +168,35 @@ class VocabRepository:
                 """
             )
 
-            target_language_code = self._read_target_language_from_connection(connection)
+            default_workbook_id = self._ensure_default_workbook(connection)
+            connection.execute(
+                """
+                UPDATE vocab_entries
+                SET workbook_id = ?
+                WHERE workbook_id IS NULL
+                """,
+                (default_workbook_id,),
+            )
+            connection.execute(
+                """
+                INSERT INTO app_settings (key, value)
+                VALUES ('current_workbook_id', ?)
+                ON CONFLICT(key) DO NOTHING
+                """,
+                (str(default_workbook_id),),
+            )
+
+            current_workbook_id = self._read_current_workbook_id_from_connection(connection, default_workbook_id)
+            target_language_code = self._read_workbook_target_language_from_connection(connection, current_workbook_id)
+            connection.execute(
+                """
+                INSERT INTO app_settings (key, value)
+                VALUES ('target_language', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (target_language_code,),
+            )
+
             self._ensure_predefined_tags(connection, target_language_code)
             self._migrate_legacy_part_of_speech_tags(connection, target_language_code)
             connection.commit()
@@ -184,6 +227,126 @@ class VocabRepository:
         except ValidationError:
             return "JP"
 
+    def _ensure_default_workbook(self, connection: sqlite3.Connection) -> int:
+        existing = connection.execute(
+            """
+            SELECT id
+            FROM workbooks
+            ORDER BY id ASC
+            LIMIT 1
+            """
+        ).fetchone()
+        if existing is not None:
+            return int(existing[0])
+
+        target_language_code = self._read_target_language_from_connection(connection)
+        preset_key = "japanese" if target_language_code == "JP" else "generic"
+        cursor = connection.execute(
+            """
+            INSERT INTO workbooks (name, target_language_code, preset_key)
+            VALUES (?, ?, ?)
+            """,
+            ("Default", target_language_code, preset_key),
+        )
+        return int(cursor.lastrowid)
+
+    def _read_current_workbook_id_from_connection(
+        self,
+        connection: sqlite3.Connection,
+        fallback_workbook_id: int,
+    ) -> int:
+        row = connection.execute(
+            """
+            SELECT value
+            FROM app_settings
+            WHERE key = 'current_workbook_id'
+            """
+        ).fetchone()
+        if row is None or row[0] is None:
+            return int(fallback_workbook_id)
+
+        try:
+            workbook_id = int(str(row[0]))
+        except (TypeError, ValueError):
+            return int(fallback_workbook_id)
+
+        exists = connection.execute(
+            """
+            SELECT 1
+            FROM workbooks
+            WHERE id = ?
+            """,
+            (workbook_id,),
+        ).fetchone()
+        if exists is None:
+            return int(fallback_workbook_id)
+        return workbook_id
+
+    def _read_workbook_target_language_from_connection(
+        self,
+        connection: sqlite3.Connection,
+        workbook_id: int,
+    ) -> str:
+        row = connection.execute(
+            """
+            SELECT target_language_code
+            FROM workbooks
+            WHERE id = ?
+            """,
+            (workbook_id,),
+        ).fetchone()
+        if row is None or row[0] is None:
+            return self._read_target_language_from_connection(connection)
+
+        try:
+            return validate_language_code(str(row[0]), "Target language")
+        except ValidationError:
+            return self._read_target_language_from_connection(connection)
+
+    def _read_workbook_preset_key_from_connection(self, connection: sqlite3.Connection, workbook_id: int) -> str:
+        row = connection.execute(
+            """
+            SELECT preset_key
+            FROM workbooks
+            WHERE id = ?
+            """,
+            (workbook_id,),
+        ).fetchone()
+        if row is None or row[0] is None:
+            return "generic"
+
+        preset_key = str(row[0]).strip().lower()
+        return preset_key or "generic"
+
+    def _resolve_workbook_id_from_connection(
+        self,
+        connection: sqlite3.Connection,
+        workbook_id: int | None,
+    ) -> int:
+        if workbook_id is not None:
+            resolved_workbook_id = int(workbook_id)
+            exists = connection.execute(
+                """
+                SELECT 1
+                FROM workbooks
+                WHERE id = ?
+                """,
+                (resolved_workbook_id,),
+            ).fetchone()
+            if exists is None:
+                raise LookupError(f"Workbook with id {resolved_workbook_id} was not found.")
+            return resolved_workbook_id
+
+        fallback_workbook_id = self._ensure_default_workbook(connection)
+        return self._read_current_workbook_id_from_connection(connection, fallback_workbook_id)
+
+    def _resolve_workbook_id(self, workbook_id: int | None = None) -> int:
+        connection = sqlite3.connect(self.db_path)
+        try:
+            return self._resolve_workbook_id_from_connection(connection, workbook_id)
+        finally:
+            connection.close()
+
     @staticmethod
     def _normalize_tag_name(value: str, label: str) -> str:
         normalized = value.strip()
@@ -193,8 +356,12 @@ class VocabRepository:
 
     def _resolve_target_language_code(self, target_language_code: str | None) -> str:
         if target_language_code is None:
-            current_target, _assistant = self.get_language_settings()
-            return current_target
+            connection = sqlite3.connect(self.db_path)
+            try:
+                workbook_id = self._resolve_workbook_id_from_connection(connection, None)
+                return self._read_workbook_target_language_from_connection(connection, workbook_id)
+            finally:
+                connection.close()
         return validate_language_code(target_language_code, "Target language")
 
     def _get_tag_type_id_by_name(
@@ -429,6 +596,137 @@ class VocabRepository:
         finally:
             connection.close()
 
+    @staticmethod
+    def _normalize_workbook_name(name: str) -> str:
+        normalized = name.strip()
+        if not normalized:
+            raise ValidationError("Workbook name is required.")
+        return normalized
+
+    def list_workbooks(self) -> list[Workbook]:
+        connection = sqlite3.connect(self.db_path)
+        try:
+            rows = connection.execute(
+                """
+                SELECT id, name, target_language_code, preset_key, created_at
+                FROM workbooks
+                ORDER BY id ASC
+                """
+            ).fetchall()
+            return [
+                Workbook(
+                    id=int(row[0]),
+                    name=str(row[1]),
+                    target_language_code=validate_language_code(str(row[2]), "Target language"),
+                    preset_key=str(row[3]) if row[3] is not None else "generic",
+                    created_at=str(row[4]),
+                )
+                for row in rows
+            ]
+        finally:
+            connection.close()
+
+    def get_workbook(self, workbook_id: int) -> Workbook:
+        connection = sqlite3.connect(self.db_path)
+        try:
+            row = connection.execute(
+                """
+                SELECT id, name, target_language_code, preset_key, created_at
+                FROM workbooks
+                WHERE id = ?
+                """,
+                (int(workbook_id),),
+            ).fetchone()
+        finally:
+            connection.close()
+
+        if row is None:
+            raise LookupError(f"Workbook with id {int(workbook_id)} was not found.")
+
+        return Workbook(
+            id=int(row[0]),
+            name=str(row[1]),
+            target_language_code=validate_language_code(str(row[2]), "Target language"),
+            preset_key=str(row[3]) if row[3] is not None else "generic",
+            created_at=str(row[4]),
+        )
+
+    def create_workbook(self, name: str, target_language_code: str, preset_key: str = "generic") -> Workbook:
+        normalized_name = self._normalize_workbook_name(name)
+        target_language = validate_language_code(target_language_code, "Target language")
+        normalized_preset_key = preset_key.strip().lower() or "generic"
+        if normalized_preset_key not in {"generic", "japanese"}:
+            raise ValidationError("Preset must be one of: generic, japanese.")
+        if normalized_preset_key == "japanese" and target_language != "JP":
+            raise ValidationError("Japanese preset is only available for JP workbooks.")
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            cursor = connection.execute(
+                """
+                INSERT INTO workbooks (name, target_language_code, preset_key)
+                VALUES (?, ?, ?)
+                """,
+                (normalized_name, target_language, normalized_preset_key),
+            )
+            workbook_id = int(cursor.lastrowid)
+
+            if normalized_preset_key == "japanese":
+                self._ensure_predefined_tags(connection, "JP")
+
+            connection.commit()
+        except sqlite3.IntegrityError as exc:
+            raise ValidationError(f"Workbook '{normalized_name}' already exists.") from exc
+        finally:
+            connection.close()
+
+        return self.get_workbook(workbook_id)
+
+    def get_current_workbook_id(self) -> int:
+        connection = sqlite3.connect(self.db_path)
+        try:
+            fallback_workbook_id = self._ensure_default_workbook(connection)
+            workbook_id = self._read_current_workbook_id_from_connection(connection, fallback_workbook_id)
+            connection.execute(
+                """
+                INSERT INTO app_settings (key, value)
+                VALUES ('current_workbook_id', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (str(workbook_id),),
+            )
+            connection.commit()
+            return workbook_id
+        finally:
+            connection.close()
+
+    def set_current_workbook_id(self, workbook_id: int) -> Workbook:
+        resolved_workbook = self.get_workbook(workbook_id)
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            connection.execute(
+                """
+                INSERT INTO app_settings (key, value)
+                VALUES ('current_workbook_id', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (str(resolved_workbook.id),),
+            )
+            connection.execute(
+                """
+                INSERT INTO app_settings (key, value)
+                VALUES ('target_language', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (resolved_workbook.target_language_code,),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        return resolved_workbook
+
     def get_language_settings(self) -> tuple[str, str]:
         target_raw = self.get_setting("target_language", "JP") or "JP"
         assistant_raw = self.get_setting("assistant_language", "EN") or "EN"
@@ -480,7 +778,8 @@ class VocabRepository:
 
         return target, assistant
 
-    def list_entries(self) -> list[VocabEntry]:
+    def list_entries(self, workbook_id: int | None = None) -> list[VocabEntry]:
+        resolved_workbook_id = self._resolve_workbook_id(workbook_id)
         connection = sqlite3.connect(self.db_path)
         try:
             connection.row_factory = sqlite3.Row
@@ -488,21 +787,26 @@ class VocabRepository:
                 """
                 SELECT id, japanese_text, kana_text, english_text, part_of_speech, details_markdown, created_at
                 FROM vocab_entries
+                WHERE workbook_id = ?
                 ORDER BY id ASC
-                """
+                """,
+                (resolved_workbook_id,),
             )
             return [self._map_row(row) for row in rows]
         finally:
             connection.close()
 
-    def count_entries(self) -> int:
+    def count_entries(self, workbook_id: int | None = None) -> int:
+        resolved_workbook_id = self._resolve_workbook_id(workbook_id)
         connection = sqlite3.connect(self.db_path)
         try:
             row = connection.execute(
                 """
                 SELECT COUNT(*)
                 FROM vocab_entries
-                """
+                WHERE workbook_id = ?
+                """,
+                (resolved_workbook_id,),
             ).fetchone()
             if row is None:
                 return 0
@@ -510,7 +814,8 @@ class VocabRepository:
         finally:
             connection.close()
 
-    def count_distinct_english_meanings(self) -> int:
+    def count_distinct_english_meanings(self, workbook_id: int | None = None) -> int:
+        resolved_workbook_id = self._resolve_workbook_id(workbook_id)
         connection = sqlite3.connect(self.db_path)
         try:
             row = connection.execute(
@@ -519,9 +824,11 @@ class VocabRepository:
                 FROM (
                     SELECT DISTINCT LOWER(TRIM(english_text)) AS normalized_english
                     FROM vocab_entries
-                    WHERE TRIM(english_text) <> ''
+                    WHERE workbook_id = ?
+                      AND TRIM(english_text) <> ''
                 )
-                """
+                """,
+                (resolved_workbook_id,),
             ).fetchone()
             if row is None:
                 return 0
@@ -529,10 +836,12 @@ class VocabRepository:
         finally:
             connection.close()
 
-    def get_random_entries(self, count: int) -> list[VocabEntry]:
+    def get_random_entries(self, count: int, workbook_id: int | None = None) -> list[VocabEntry]:
         requested = max(int(count), 0)
         if requested == 0:
             return []
+
+        resolved_workbook_id = self._resolve_workbook_id(workbook_id)
 
         connection = sqlite3.connect(self.db_path)
         try:
@@ -541,10 +850,11 @@ class VocabRepository:
                 """
                 SELECT id, japanese_text, kana_text, english_text, part_of_speech, details_markdown, created_at
                 FROM vocab_entries
+                WHERE workbook_id = ?
                 ORDER BY RANDOM()
                 LIMIT ?
                 """,
-                (requested,),
+                (resolved_workbook_id, requested),
             )
             return [self._map_row(row) for row in rows]
         finally:
@@ -557,7 +867,9 @@ class VocabRepository:
         filter_tag_ids: Iterable[int] | None = None,
         filter_match_mode: str = "all",
         target_language_code: str | None = None,
+        workbook_id: int | None = None,
     ) -> list[tuple[VocabEntry, int, int, str]]:
+        resolved_workbook_id = self._resolve_workbook_id(workbook_id)
         resolved_target_language_code = self._resolve_target_language_code(target_language_code)
         order_by = "ORDER BY e.id DESC"
         order_params: list[object] = []
@@ -593,15 +905,15 @@ class VocabRepository:
         if normalized_match_mode not in {"all", "any"}:
             normalized_match_mode = "all"
 
-        where_clause = ""
-        params: list[object] = []
+        where_clauses = ["e.workbook_id = ?"]
+        params: list[object] = [resolved_workbook_id]
         if unique_filter_tag_ids:
             placeholders = ",".join("?" for _ in unique_filter_tag_ids)
-            params.extend([resolved_target_language_code, *unique_filter_tag_ids])
+            tag_filter_params: list[object] = [resolved_target_language_code, *unique_filter_tag_ids]
 
             if normalized_match_mode == "all":
-                where_clause = (
-                    "WHERE e.id IN ("
+                where_clauses.append(
+                    "e.id IN ("
                     "SELECT et.entry_id "
                     "FROM entry_tags AS et "
                     "INNER JOIN tags AS t ON t.id = et.tag_id "
@@ -612,10 +924,10 @@ class VocabRepository:
                     "HAVING COUNT(DISTINCT et.tag_id) = ?"
                     ")"
                 )
-                params.append(len(unique_filter_tag_ids))
+                tag_filter_params.append(len(unique_filter_tag_ids))
             else:
-                where_clause = (
-                    "WHERE e.id IN ("
+                where_clauses.append(
+                    "e.id IN ("
                     "SELECT et.entry_id "
                     "FROM entry_tags AS et "
                     "INNER JOIN tags AS t ON t.id = et.tag_id "
@@ -624,6 +936,10 @@ class VocabRepository:
                     f"AND et.tag_id IN ({placeholders})"
                     ")"
                 )
+
+            params.extend(tag_filter_params)
+
+        where_clause = f"WHERE {' AND '.join(where_clauses)}"
 
         connection = sqlite3.connect(self.db_path)
         try:
@@ -943,13 +1259,24 @@ class VocabRepository:
         finally:
             connection.close()
 
-    def get_test_entries_by_preference(self, count: int, strategy: str = "strict") -> list[VocabEntry]:
+    def get_test_entries_by_preference(
+        self,
+        count: int,
+        strategy: str = "strict",
+        workbook_id: int | None = None,
+    ) -> list[VocabEntry]:
         requested = max(int(count), 0)
         if requested == 0:
             return []
 
+        resolved_workbook_id = self._resolve_workbook_id(workbook_id)
+
         if strategy == "weighted":
-            entries_with_stats = self.list_entries_with_stats(sort_mode="time", time_order="newest")
+            entries_with_stats = self.list_entries_with_stats(
+                sort_mode="time",
+                time_order="newest",
+                workbook_id=resolved_workbook_id,
+            )
             if not entries_with_stats:
                 return []
 
@@ -962,7 +1289,7 @@ class VocabRepository:
                 ordered.append(weighted_pool.pop(selected_index))
             return [entry for entry, _, _, _ in ordered]
 
-        entries_with_stats = self._list_entries_with_stats_for_selection()
+        entries_with_stats = self._list_entries_with_stats_for_selection(workbook_id=resolved_workbook_id)
         if not entries_with_stats:
             return []
 
@@ -989,7 +1316,11 @@ class VocabRepository:
         sliced = ordered_strict[:requested]
         return [entry for entry, _, _, _, _ in sliced]
 
-    def _list_entries_with_stats_for_selection(self) -> list[tuple[VocabEntry, int, int, str, str | None]]:
+    def _list_entries_with_stats_for_selection(
+        self,
+        workbook_id: int | None = None,
+    ) -> list[tuple[VocabEntry, int, int, str, str | None]]:
+        resolved_workbook_id = self._resolve_workbook_id(workbook_id)
         connection = sqlite3.connect(self.db_path)
         try:
             connection.row_factory = sqlite3.Row
@@ -1009,7 +1340,9 @@ class VocabRepository:
                 FROM vocab_entries AS e
                 LEFT JOIN vocab_stats AS s
                     ON s.entry_id = e.id
-                """
+                WHERE e.workbook_id = ?
+                """,
+                (resolved_workbook_id,),
             )
 
             result: list[tuple[VocabEntry, int, int, str, str | None]] = []
@@ -1024,8 +1357,14 @@ class VocabRepository:
         finally:
             connection.close()
 
-    def get_english_options_for_entry(self, entry_id: int, max_options: int = 4) -> list[str]:
+    def get_english_options_for_entry(
+        self,
+        entry_id: int,
+        max_options: int = 4,
+        workbook_id: int | None = None,
+    ) -> list[str]:
         max_count = max(int(max_options), 2)
+        resolved_workbook_id = self._resolve_workbook_id(workbook_id)
 
         connection = sqlite3.connect(self.db_path)
         try:
@@ -1034,8 +1373,9 @@ class VocabRepository:
                 SELECT english_text
                 FROM vocab_entries
                 WHERE id = ?
+                  AND workbook_id = ?
                 """,
-                (entry_id,),
+                (entry_id, resolved_workbook_id),
             ).fetchone()
             if row is None:
                 raise LookupError(f"Vocabulary entry with id {entry_id} was not found.")
@@ -1047,12 +1387,13 @@ class VocabRepository:
                 SELECT DISTINCT TRIM(english_text) AS english_text
                 FROM vocab_entries
                 WHERE id <> ?
+                                    AND workbook_id = ?
                   AND TRIM(english_text) <> ''
                   AND LOWER(TRIM(english_text)) <> LOWER(TRIM(?))
                 ORDER BY RANDOM()
                 LIMIT ?
                 """,
-                (entry_id, correct_english, max_count - 1),
+                                (entry_id, resolved_workbook_id, correct_english, max_count - 1),
             ).fetchall()
 
             options = [correct_english]
@@ -1212,21 +1553,29 @@ class VocabRepository:
         finally:
             connection.close()
 
-    def get_daily_unique_practice_counts(self, days_back: int = 180) -> dict[str, int]:
+    def get_daily_unique_practice_counts(
+        self,
+        days_back: int = 180,
+        workbook_id: int | None = None,
+    ) -> dict[str, int]:
         range_days = max(int(days_back), 1)
         start_date = (date.today() - timedelta(days=range_days - 1)).isoformat()
+        resolved_workbook_id = self._resolve_workbook_id(workbook_id)
 
         connection = sqlite3.connect(self.db_path)
         try:
             rows = connection.execute(
                 """
-                SELECT practice_date, COUNT(*) AS unique_count
-                FROM practice_daily_unique
-                WHERE practice_date >= ?
-                GROUP BY practice_date
+                SELECT pdu.practice_date, COUNT(*) AS unique_count
+                FROM practice_daily_unique AS pdu
+                INNER JOIN vocab_entries AS e
+                    ON e.id = pdu.entry_id
+                WHERE pdu.practice_date >= ?
+                  AND e.workbook_id = ?
+                GROUP BY pdu.practice_date
                 ORDER BY practice_date ASC
                 """,
-                (start_date,),
+                (start_date, resolved_workbook_id),
             ).fetchall()
 
             return {str(row[0]): int(row[1]) for row in rows}
@@ -1296,13 +1645,21 @@ class VocabRepository:
         kana_text: str,
         english_text: str,
         part_of_speech: str = "",
+        workbook_id: int | None = None,
     ) -> VocabEntry:
-        created = self.add_entries([(japanese_text, kana_text, english_text, part_of_speech)])
+        created = self.add_entries(
+            [(japanese_text, kana_text, english_text, part_of_speech)],
+            workbook_id=workbook_id,
+        )
         if not created:
             raise RuntimeError("Could not load inserted entry.")
         return created[0]
 
-    def add_entries(self, entries: Iterable[tuple[str, str, str] | tuple[str, str, str, str]]) -> list[VocabEntry]:
+    def add_entries(
+        self,
+        entries: Iterable[tuple[str, str, str] | tuple[str, str, str, str]],
+        workbook_id: int | None = None,
+    ) -> list[VocabEntry]:
         normalized_entries: list[tuple[str, str | None, str, str | None, str | None]] = []
         for entry in entries:
             if len(entry) == 3:
@@ -1324,17 +1681,27 @@ class VocabRepository:
         connection = sqlite3.connect(self.db_path)
         try:
             connection.row_factory = sqlite3.Row
-            target_language_code = self._read_target_language_from_connection(connection)
-            self._ensure_predefined_tags(connection, target_language_code)
+            resolved_workbook_id = self._resolve_workbook_id_from_connection(connection, workbook_id)
+            target_language_code = self._read_workbook_target_language_from_connection(connection, resolved_workbook_id)
+            preset_key = self._read_workbook_preset_key_from_connection(connection, resolved_workbook_id)
+            if preset_key == "japanese":
+                self._ensure_predefined_tags(connection, target_language_code)
 
             inserted_ids: list[int] = []
             for japanese, kana, english, part_of_speech, details_markdown in normalized_entries:
                 cursor = connection.execute(
                     """
-                    INSERT INTO vocab_entries (japanese_text, kana_text, english_text, part_of_speech, details_markdown)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO vocab_entries (
+                        workbook_id,
+                        japanese_text,
+                        kana_text,
+                        english_text,
+                        part_of_speech,
+                        details_markdown
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (japanese, kana, english, part_of_speech, details_markdown),
+                    (resolved_workbook_id, japanese, kana, english, part_of_speech, details_markdown),
                 )
                 inserted_ids.append(int(cursor.lastrowid))
 
@@ -1406,8 +1773,20 @@ class VocabRepository:
         row: sqlite3.Row | None = None
         try:
             connection.row_factory = sqlite3.Row
-            target_language_code = self._read_target_language_from_connection(connection)
-            self._ensure_predefined_tags(connection, target_language_code)
+            workbook_row = connection.execute(
+                """
+                SELECT e.workbook_id, w.target_language_code
+                FROM vocab_entries AS e
+                INNER JOIN workbooks AS w
+                    ON w.id = e.workbook_id
+                WHERE e.id = ?
+                """,
+                (entry_id,),
+            ).fetchone()
+            if workbook_row is None:
+                raise LookupError(f"Vocabulary entry with id {entry_id} was not found.")
+
+            target_language_code = validate_language_code(str(workbook_row[1]), "Target language")
 
             cursor = connection.execute(
                 """

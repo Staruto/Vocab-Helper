@@ -27,9 +27,9 @@ def normalize_optional_markdown(value: str) -> Optional[str]:
 
 
 def validate_vocab_fields(japanese_text: str, english_text: str) -> tuple[str, str]:
-    japanese = validate_required_text("Japanese writing", japanese_text)
-    english = validate_required_text("English meaning", english_text)
-    return japanese, english
+    target_text = validate_required_text("Target text", japanese_text)
+    meaning_text = validate_required_text("Meaning", english_text)
+    return target_text, meaning_text
 
 
 def validate_language_code(value: str, field_name: str = "Language") -> str:
