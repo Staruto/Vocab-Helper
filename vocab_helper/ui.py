@@ -3249,14 +3249,25 @@ class BulkAddDialog(tk.Toplevel):
         actions = ttk.Frame(frame, padding=(0, 10, 0, 0))
         actions.grid(row=3, column=0, sticky="e")
 
+        action_column = 0
+        if self._show_kana:
+            ttk.Button(
+                actions,
+                text="Fill kana",
+                command=self._auto_fill_missing_kana,
+                style="App.TButton",
+            ).grid(row=0, column=action_column, padx=(0, 8))
+            action_column += 1
+
         ttk.Button(actions, text="Cancel", command=self.destroy, style="App.TButton").grid(
             row=0,
-            column=0,
+            column=action_column,
             padx=(0, 8),
         )
+        action_column += 1
         ttk.Button(actions, text="Add entries", command=self._save, style="App.TButton").grid(
             row=0,
-            column=1,
+            column=action_column,
         )
 
         self.bind("<Escape>", lambda _event: self.destroy())
@@ -3325,6 +3336,53 @@ class BulkAddDialog(tk.Toplevel):
             raise ValidationError("Add at least one non-empty line.")
 
         return parsed_entries
+
+    def _auto_fill_missing_kana(self) -> None:
+        if not self._show_kana:
+            return
+
+        japanese_lines = self.jp_text.get("1.0", "end-1c").splitlines()
+        kana_lines = self.kana_text.get("1.0", "end-1c").splitlines()
+        line_count = max(len(japanese_lines), len(kana_lines))
+        if line_count <= 0:
+            messagebox.showinfo("Kana fill", "Enter target text lines first.", parent=self)
+            return
+
+        updated_count = 0
+        unresolved_count = 0
+        merged_kana_lines: list[str] = []
+
+        for index in range(line_count):
+            target_text = japanese_lines[index].strip() if index < len(japanese_lines) else ""
+            existing_kana = kana_lines[index].strip() if index < len(kana_lines) else ""
+
+            if existing_kana or not target_text:
+                merged_kana_lines.append(existing_kana)
+                continue
+
+            suggested_kana, reliable, _message = suggest_hiragana(target_text)
+            if reliable and suggested_kana:
+                merged_kana_lines.append(suggested_kana)
+                updated_count += 1
+            else:
+                merged_kana_lines.append("")
+                unresolved_count += 1
+
+        self.kana_text.delete("1.0", "end")
+        self.kana_text.insert("1.0", "\n".join(merged_kana_lines))
+
+        if updated_count == 0 and unresolved_count == 0:
+            messagebox.showinfo("Kana fill", "No empty kana rows were found.", parent=self)
+            return
+        if unresolved_count == 0:
+            messagebox.showinfo("Kana fill", f"Filled kana for {updated_count} rows.", parent=self)
+            return
+
+        messagebox.showwarning(
+            "Kana fill",
+            f"Filled kana for {updated_count} rows. Could not infer kana for {unresolved_count} rows.",
+            parent=self,
+        )
 
     def _save(self) -> None:
         try:
