@@ -5,20 +5,20 @@ Simple vocabulary memorization helper with a desktop GUI.
 ## Features
 
 - Lists vocabulary in two columns: target text, assistant meaning
-- Supports global language settings for target and assistant languages (default: target JP, assistant EN)
+- Supports workbook-specific target/meaning labels so each workbook can represent any text-to-text mapping
 - Adds new entries through a bottom "+" button
-- Supports bulk add in a dedicated 3-column line editor (Japanese, kana, English)
+- Supports bulk add in a dedicated line editor with dynamic columns (2 columns by default, 3 when kana is enabled)
 - Edits and deletes entries from a right-click context menu
 - Supports opening a full vocabulary detail page via double-click or right-click -> View details
 - Supports multi-select delete from the vocabulary list
 - Splits the UI into tabs:
 	- `Home` for vocabularies
 	- `Profile` for the practice activity grid
-- Supports keyboard shortcuts: Ctrl+N (add), Ctrl+Shift+N (bulk add), Ctrl+T (EN->JP test), Enter (edit selected row), Delete (remove selected rows)
+- Supports keyboard shortcuts: Ctrl+N (add), Ctrl+Shift+N (bulk add), Ctrl+T (meaning->target test), Enter (edit selected row), Delete (remove selected rows)
 - Includes three test modes with immediate per-question judgment:
-	- English -> Japanese (fill-in)
-	- Japanese -> Kana (fill-in)
-	- Japanese -> English (single-choice)
+	- Meaning -> Target (fill-in)
+	- Target -> Kana (fill-in, when kana is enabled)
+	- Target -> Meaning (single-choice)
 - Tracks per-entry test stats (test count and error count)
 - Classifies entries into priority tiers: gray, green, yellow, red
 - Supports tier color highlighting in the list view (enabled by default, toggleable)
@@ -36,9 +36,9 @@ Simple vocabulary memorization helper with a desktop GUI.
 - Supports editable markdown details for each vocabulary with in-app display mode
 - Tracks latest practice date per vocabulary
 - Shows a GitHub-style contributions grid for daily practice activity (last 180 days)
-- Requires target text and assistant meaning
+- Requires target text and meaning text for every entry
 - Treats kana as optional
-- Suggests kana offline using pykakasi and lets users edit before save
+- Suggests kana offline using pykakasi when the workbook preset enables kana
 - Shows a global count at the bottom: total number of vocabularies
 - Stores data locally in SQLite
 
@@ -70,10 +70,27 @@ python -m unittest discover -s tests -p "test_*.py"
 
 ## Bulk add input format
 
-- Three columns from left to right: Japanese writing, kana, English meaning
+- Two columns by default: target label and meaning label
+- Three columns when kana is enabled: target label, kana, meaning label
 - One entry per line (same row index across the three columns)
-- Japanese and English are required, kana is optional
+- Target and meaning columns are required, kana is optional
 - A row where all three fields are empty is ignored
+
+## Workbook creation and presets
+
+- Workbook creation supports target-side configuration as either:
+	- A supported language (`JP`, `EN`) with automatic label, or
+	- A custom target label text
+- Meaning label supports:
+	- Default `Meaning`
+	- Supported language label (`JP`, `EN`)
+	- Custom text label
+- Preset selection is a boolean toggle (`Enable preset`) instead of choosing a preset name
+- Preset controls are shown only when a preset is available for the selected supported target language
+- Current preset support:
+	- `JP` preset adds kana behavior and predefined difficulty tags
+	- `EN` currently has no language-specific preset behavior
+- Workbook labels can be edited later from `Settings` -> `Workbook columns` -> `Edit labels`
 
 ## Language settings
 
@@ -119,18 +136,18 @@ python -m unittest discover -s tests -p "test_*.py"
 	- Bold/italic/code inline styling
 	- Code blocks fenced with triple backticks
 
-## Test mode (English -> Japanese)
+## Test mode (Meaning -> Target)
 
-- Click `Test EN->JP` (or press `Ctrl+T`) to open the test dialog
+- Click the meaning->target test button (or press `Ctrl+T`) to open the test dialog
 - Default questions per test: 15
 - You can set a custom positive integer for questions per test
 - You can choose pick preference strategy:
 	- `strict` (default): pick by tier order gray -> red -> yellow -> green, then by oldest latest-practice date within the same tier
 	- `weighted`: probabilistic pick favoring higher-priority tiers while still sampling all tiers
 - If requested count is larger than available vocabularies, the test uses all available entries
-- Given an English meaning, type the Japanese writing and submit
-- Judgement rule: exact Japanese-writing match after trimming surrounding spaces
-- For incorrect answers, feedback shows the correct Japanese writing and kana when available
+- Given a meaning prompt, type the target text and submit
+- Judgement rule: exact target-text match after trimming surrounding spaces
+- For incorrect answers, feedback shows the correct target text and kana when available
 - For incorrect answers, a `View details` button appears to jump directly to that vocabulary detail page
 - After the initial cycle, any incorrectly answered vocabularies are retried until each is answered correctly
 - Final score/success-rate remains based on the initial cycle only (`initial correct / initial count`)
@@ -142,16 +159,16 @@ python -m unittest discover -s tests -p "test_*.py"
 		- At most one `error_count` decrease per vocabulary per day
 		- If that vocabulary has any wrong answer on that day, no decrease is allowed for the rest of that day
 
-## Test mode (Japanese -> Kana)
+## Test mode (Target -> Kana)
 
-- Click `Test JP->Kana` to open the test dialog
+- Click the target->kana test button to open the test dialog
 - Uses the same settings and behavior style as EN->JP:
 	- Default questions per test: 15
 	- Positive-integer question count validation
 	- Same pick preference strategy (`strict` or `weighted`)
 	- Same score/result flow
 - Questions only use entries that have kana
-- Prompt is Japanese writing; answer is kana
+- Prompt is target text; answer is kana
 - Judgement rule: exact kana match after trimming surrounding spaces
 - For incorrect answers, a `View details` button appears to jump directly to that vocabulary detail page
 - After the initial cycle, any incorrectly answered vocabularies are retried until each is answered correctly
@@ -159,12 +176,12 @@ python -m unittest discover -s tests -p "test_*.py"
 - Each submitted answer updates stats with the same rule as EN->JP
 	- Includes the same chance-based `error_count` recovery rule and daily restrictions as EN->JP
 
-## Test mode (Japanese -> English)
+## Test mode (Target -> Meaning)
 
-- Click `Test JP->EN` to open the test dialog
-- Prompt is Japanese writing; answer format is single choice
+- Click the target->meaning test button to open the test dialog
+- Prompt is target text; answer format is single choice
 - For each question, the app builds options as:
-	- Correct English meaning
+	- Correct meaning
 	- Up to 3 random distractor meanings
 - Option fallback behavior:
 	- Shows as many options as available when fewer than 4 distinct options exist

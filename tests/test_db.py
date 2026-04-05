@@ -168,6 +168,54 @@ class VocabRepositoryTests(unittest.TestCase):
         self.assertTrue(visibility_by_key["meaning"])
         self.assertTrue(visibility_by_key["kana"])
 
+    def test_create_workbook_supports_custom_schema_and_labels(self) -> None:
+        workbook = self.repository.create_workbook(
+            "French basics",
+            "CUSTOM_AB12EF34CD",
+            preset_key="generic",
+            target_label="French",
+            meaning_label="English",
+        )
+
+        self.assertEqual(workbook.target_language_code, "CUSTOM_AB12EF34CD")
+        self.assertEqual(workbook.target_label, "French")
+        self.assertEqual(workbook.meaning_label, "English")
+
+        properties = self.repository.list_language_properties("CUSTOM_AB12EF34CD")
+        property_keys = {key for _property_id, key, _label, _is_predefined, _is_required in properties}
+        self.assertIn("target_text", property_keys)
+        self.assertIn("meaning", property_keys)
+        self.assertNotIn("kana", property_keys)
+
+    def test_jp_generic_workbook_hides_kana_by_default(self) -> None:
+        workbook = self.repository.create_workbook(
+            "Japanese no preset",
+            "JP_GENERIC",
+            preset_key="generic",
+            target_label="Japanese",
+            meaning_label="Meaning",
+        )
+
+        visibility_rows = self.repository.get_workbook_visible_properties(workbook.id)
+        visibility_by_key = {
+            key: is_visible
+            for _property_id, key, _label, _is_predefined, _is_required, is_visible, _display_order in visibility_rows
+        }
+        self.assertTrue(visibility_by_key["target_text"])
+        self.assertTrue(visibility_by_key["meaning"])
+        self.assertFalse(visibility_by_key.get("kana", False))
+
+    def test_update_workbook_labels_persists(self) -> None:
+        workbook = self.repository.create_workbook("Notebook", "EN", preset_key="generic")
+
+        updated = self.repository.update_workbook_labels(workbook.id, "English word", "JP translation")
+        self.assertEqual(updated.target_label, "English word")
+        self.assertEqual(updated.meaning_label, "JP translation")
+
+        reloaded = self.repository.get_workbook(workbook.id)
+        self.assertEqual(reloaded.target_label, "English word")
+        self.assertEqual(reloaded.meaning_label, "JP translation")
+
     def test_language_property_crud_and_required_property_protection(self) -> None:
         property_id = self.repository.add_language_property("JP", "example_note", "Example note")
         jp_keys = {

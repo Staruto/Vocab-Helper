@@ -19,4 +19,6 @@ class Workbook:
     name: str
     target_language_code: str
     preset_key: str
+    target_label: str
+    meaning_label: str
     created_at: str

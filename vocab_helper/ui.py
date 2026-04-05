@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+import hashlib
 import sqlite3
 import tkinter as tk
 import tkinter.font as tkfont
@@ -199,7 +200,8 @@ class MainWindow(tk.Tk):
         )
         self.target_language_code = self.current_workbook.target_language_code if self.current_workbook else "JP"
         self.assistant_language_code = "EN"
-        self.settings_language_code_var = tk.StringVar(value=self.target_language_code)
+        initial_settings_language = self.target_language_code if self.target_language_code in LANGUAGE_NAMES else "JP"
+        self.settings_language_code_var = tk.StringVar(value=initial_settings_language)
         self._settings_workbook_display_to_id: dict[str, int] = {}
         self._settings_column_vars: dict[int, tk.BooleanVar] = {}
         self._table_column_keys: list[str] = ["target_text", "kana", "meaning"]
@@ -253,11 +255,24 @@ class MainWindow(tk.Tk):
     def _language_display_name(self, code: str) -> str:
         return LANGUAGE_NAMES.get(code.upper(), code.upper())
 
+    def _current_target_label(self) -> str:
+        if self.current_workbook is None:
+            return "Target text"
+        return self.current_workbook.target_label
+
+    def _current_meaning_label(self) -> str:
+        if self.current_workbook is None:
+            return "Meaning"
+        return self.current_workbook.meaning_label
+
+    def _workbook_supports_kana(self) -> bool:
+        return self.current_workbook is not None and self.current_workbook.preset_key == "japanese"
+
     def _target_field_label(self) -> str:
-        return f"Target text ({self._language_display_name(self.target_language_code)})"
+        return self._current_target_label()
 
     def _assistant_field_label(self) -> str:
-        return "Meaning"
+        return self._current_meaning_label()
 
     def _refresh_language_labels(self) -> None:
         if self.current_workbook_id is None:
@@ -279,7 +294,9 @@ class MainWindow(tk.Tk):
             property_rows = []
 
         visible_rows = [
-            row for row in property_rows if row[5] or row[1] == "target_text"
+            row
+            for row in property_rows
+            if (row[5] or row[1] == "target_text") and (row[1] != "kana" or self._workbook_supports_kana())
         ]
         if not visible_rows:
             visible_rows = [
@@ -636,6 +653,12 @@ class MainWindow(tk.Tk):
             command=self._save_selected_workbook_column_visibility,
             style="App.TButton",
         ).grid(row=2, column=0, sticky="e", pady=(8, 0))
+        ttk.Button(
+            visibility_section,
+            text="Edit labels",
+            command=self._edit_selected_workbook_labels,
+            style="App.TButton",
+        ).grid(row=3, column=0, sticky="e", pady=(8, 0))
 
         language_section = ttk.LabelFrame(root, text="Language schema", padding=10)
         language_section.grid(row=1, column=0, columnspan=2, sticky="nsew")
@@ -712,7 +735,7 @@ class MainWindow(tk.Tk):
 
         selected_index = 0
         for index, workbook in enumerate(self.workbook_rows):
-            display = f"{workbook.name} ({self._language_display_name(workbook.target_language_code)})"
+            display = f"{workbook.name} ({workbook.target_label})"
             self.settings_workbook_listbox.insert("end", display)
             self._settings_workbook_display_to_id[display] = workbook.id
             if workbook.id == self.current_workbook_id:
@@ -793,6 +816,51 @@ class MainWindow(tk.Tk):
         if self.current_workbook_id == selected_workbook_id:
             self._refresh_table_columns()
             self.refresh_entries()
+
+    def _edit_selected_workbook_labels(self) -> None:
+        selected_workbook_id = self._selected_settings_workbook_id()
+        if selected_workbook_id is None:
+            messagebox.showwarning("No workbook", "Select a workbook first.", parent=self)
+            return
+
+        try:
+            workbook = self.repository.get_workbook(selected_workbook_id)
+        except (LookupError, sqlite3.Error) as exc:
+            messagebox.showerror("Workbook error", f"Could not load workbook labels: {exc}", parent=self)
+            return
+
+        dialog = WorkbookLabelsDialog(
+            self,
+            workbook=workbook,
+            text_font=self.fonts["latin"],
+        )
+        self.wait_window(dialog)
+        if dialog.result is None:
+            return
+
+        try:
+            updated_workbook = self.repository.update_workbook_labels(
+                selected_workbook_id,
+                dialog.result[0],
+                dialog.result[1],
+            )
+        except (ValidationError, LookupError) as exc:
+            messagebox.showerror("Validation error", str(exc), parent=self)
+            return
+        except sqlite3.Error as exc:
+            messagebox.showerror("Database error", f"Could not save workbook labels: {exc}", parent=self)
+            return
+
+        if self.current_workbook_id == selected_workbook_id:
+            self.current_workbook = updated_workbook
+            self.target_language_code = updated_workbook.target_language_code
+            self._refresh_language_labels()
+            self._refresh_test_button_labels()
+            self._refresh_table_columns()
+            self.refresh_entries()
+
+        self._refresh_workbook_selector(select_workbook_id=self.current_workbook_id)
+        self._refresh_settings_page()
 
     def _refresh_settings_language_properties(self) -> None:
         language_code = self.settings_language_code_var.get().strip().upper() or "JP"
@@ -956,7 +1024,7 @@ class MainWindow(tk.Tk):
 
         display_values: list[str] = []
         for workbook in self.workbook_rows:
-            display = f"{workbook.name} ({self._language_display_name(workbook.target_language_code)})"
+            display = f"{workbook.name} ({workbook.target_label})"
             display_values.append(display)
             self._workbook_display_to_id[display] = workbook.id
 
@@ -971,7 +1039,7 @@ class MainWindow(tk.Tk):
 
         desired_id = select_workbook_id if select_workbook_id is not None else self.current_workbook_id
         selected_workbook = next((workbook for workbook in self.workbook_rows if workbook.id == desired_id), self.workbook_rows[0])
-        selected_display = f"{selected_workbook.name} ({self._language_display_name(selected_workbook.target_language_code)})"
+        selected_display = f"{selected_workbook.name} ({selected_workbook.target_label})"
         self.workbook_selection_var.set(selected_display)
 
     def _refresh_test_button_labels(self) -> None:
@@ -981,13 +1049,14 @@ class MainWindow(tk.Tk):
             self.target_to_kana_test_button.grid_remove()
             return
 
-        language_name = self._language_display_name(self.target_language_code)
-        self.meaning_to_target_test_button.configure(text=f"Test Meaning -> {language_name}")
-        self.target_to_meaning_test_button.configure(text=f"Test {language_name} -> Meaning")
+        target_label = self._target_field_label()
+        meaning_label = self._assistant_field_label()
+        self.meaning_to_target_test_button.configure(text=f"Test {meaning_label} -> {target_label}")
+        self.target_to_meaning_test_button.configure(text=f"Test {target_label} -> {meaning_label}")
 
-        if self.target_language_code == "JP":
+        if self._workbook_supports_kana():
             self.target_to_kana_test_button.grid()
-            self.target_to_kana_test_button.configure(text="Test JP -> Kana", state="normal")
+            self.target_to_kana_test_button.configure(text=f"Test {target_label} -> Kana", state="normal")
         else:
             self.target_to_kana_test_button.grid_remove()
 
@@ -1037,12 +1106,14 @@ class MainWindow(tk.Tk):
         if dialog.result is None:
             return
 
-        workbook_name, target_language_code, preset_key = dialog.result
+        workbook_name, target_schema_code, preset_key, target_label, meaning_label = dialog.result
         try:
             workbook = self.repository.create_workbook(
                 workbook_name,
-                target_language_code,
+                target_schema_code,
                 preset_key=preset_key,
+                target_label=target_label,
+                meaning_label=meaning_label,
             )
         except ValidationError as exc:
             messagebox.showerror("Validation error", str(exc), parent=self)
@@ -1440,7 +1511,7 @@ class MainWindow(tk.Tk):
             target_label=self._target_field_label(),
             assistant_label=self._assistant_field_label(),
             target_language_code=self.target_language_code,
-            enable_kana_suggest=self.target_language_code == "JP",
+            enable_kana_suggest=self._workbook_supports_kana(),
         )
         self.wait_window(dialog)
 
@@ -1454,7 +1525,9 @@ class MainWindow(tk.Tk):
             repository=self.repository,
             on_saved=self.refresh_entries,
             text_font=self.fonts["latin"],
-            target_language_code=self.target_language_code,
+            target_label=self._target_field_label(),
+            assistant_label=self._assistant_field_label(),
+            show_kana=self._workbook_supports_kana(),
         )
         self.wait_window(dialog)
 
@@ -1475,6 +1548,13 @@ class MainWindow(tk.Tk):
     def _open_jp_to_kana_test_dialog(self) -> None:
         if self.current_workbook_id is None:
             messagebox.showwarning("No workbook", "Create or select a workbook first.", parent=self)
+            return
+        if not self._workbook_supports_kana():
+            messagebox.showinfo(
+                "Kana test unavailable",
+                "This workbook does not have kana-enabled preset features.",
+                parent=self,
+            )
             return
 
         dialog = JapaneseToKanaTestDialog(
@@ -1560,7 +1640,7 @@ class MainWindow(tk.Tk):
             target_label=self._target_field_label(),
             assistant_label=self._assistant_field_label(),
             target_language_code=self.target_language_code,
-            enable_kana_suggest=self.target_language_code == "JP",
+            enable_kana_suggest=self._workbook_supports_kana(),
         )
         self.wait_window(dialog)
 
@@ -1582,7 +1662,7 @@ class MainWindow(tk.Tk):
             target_label=self._target_field_label(),
             assistant_label=self._assistant_field_label(),
             target_language_code=self.target_language_code,
-            enable_kana_suggest=self.target_language_code == "JP",
+            enable_kana_suggest=self._workbook_supports_kana(),
             on_saved=self.refresh_entries,
         )
         self.wait_window(dialog)
@@ -1843,9 +1923,12 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
         super().__init__(parent)
         self.repository = repository
         self.text_font = text_font
-        self.target_language_code = str(getattr(parent, "target_language_code", "JP")).upper()
-        self.target_language_name = LANGUAGE_NAMES.get(self.target_language_code, self.target_language_code)
-        self._show_kana_hint = self.target_language_code == "JP"
+        target_label_getter = getattr(parent, "_target_field_label", None)
+        meaning_label_getter = getattr(parent, "_assistant_field_label", None)
+        supports_kana_getter = getattr(parent, "_workbook_supports_kana", None)
+        self.target_label = target_label_getter() if callable(target_label_getter) else "Target text"
+        self.meaning_label = meaning_label_getter() if callable(meaning_label_getter) else "Meaning"
+        self._show_kana_hint = bool(supports_kana_getter()) if callable(supports_kana_getter) else False
 
         self.questions: list[VocabEntry] = []
         self.current_index = 0
@@ -1870,7 +1953,7 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
         self.result_var = tk.StringVar(value="")
         self.pick_strategy_var = tk.StringVar(value=pick_strategy if pick_strategy in {"strict", "weighted"} else "strict")
 
-        self.title(f"Test mode: Meaning -> {self.target_language_name}")
+        self.title(f"Test mode: {self.meaning_label} -> {self.target_label}")
         self.transient(parent)
         self.grab_set()
         self.resizable(False, False)
@@ -1892,7 +1975,7 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
 
         ttk.Label(
             self.start_frame,
-            text=f"Meaning -> {self.target_language_name} test",
+            text=f"{self.meaning_label} -> {self.target_label} test",
             style="App.TLabel",
         ).grid(row=0, column=0, sticky="w")
 
@@ -1945,7 +2028,7 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
         ttk.Label(header_row, textvariable=self.progress_var, style="App.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(header_row, textvariable=self.score_var, style="App.TLabel").grid(row=0, column=1, sticky="e")
 
-        ttk.Label(self.test_frame, text="Meaning", style="App.TLabel").grid(row=1, column=0, sticky="w")
+        ttk.Label(self.test_frame, text=self.meaning_label, style="App.TLabel").grid(row=1, column=0, sticky="w")
         self.prompt_label = ttk.Label(
             self.test_frame,
             textvariable=self.prompt_var,
@@ -1957,7 +2040,7 @@ class EnglishToJapaneseTestDialog(tk.Toplevel):
 
         ttk.Label(
             self.test_frame,
-            text=f"Your {self.target_language_name} answer",
+            text=f"Your {self.target_label} answer",
             style="App.TLabel",
         ).grid(row=3, column=0, sticky="w")
         self.answer_entry = ttk.Entry(self.test_frame, textvariable=self.answer_var, width=38, style="Japanese.TEntry")
@@ -2257,6 +2340,8 @@ class JapaneseToKanaTestDialog(tk.Toplevel):
         super().__init__(parent)
         self.repository = repository
         self.text_font = text_font
+        target_label_getter = getattr(parent, "_target_field_label", None)
+        self.target_label = target_label_getter() if callable(target_label_getter) else "Target text"
 
         self.questions: list[VocabEntry] = []
         self.current_index = 0
@@ -2281,7 +2366,7 @@ class JapaneseToKanaTestDialog(tk.Toplevel):
         self.result_var = tk.StringVar(value="")
         self.pick_strategy_var = tk.StringVar(value=pick_strategy if pick_strategy in {"strict", "weighted"} else "strict")
 
-        self.title("Test mode: Japanese -> Kana")
+        self.title(f"Test mode: {self.target_label} -> Kana")
         self.transient(parent)
         self.grab_set()
         self.resizable(False, False)
@@ -2303,7 +2388,7 @@ class JapaneseToKanaTestDialog(tk.Toplevel):
 
         ttk.Label(
             self.start_frame,
-            text="Japanese -> Kana test",
+            text=f"{self.target_label} -> Kana test",
             style="App.TLabel",
         ).grid(row=0, column=0, sticky="w")
 
@@ -2356,7 +2441,7 @@ class JapaneseToKanaTestDialog(tk.Toplevel):
         ttk.Label(header_row, textvariable=self.progress_var, style="App.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(header_row, textvariable=self.score_var, style="App.TLabel").grid(row=0, column=1, sticky="e")
 
-        ttk.Label(self.test_frame, text="Japanese writing", style="App.TLabel").grid(row=1, column=0, sticky="w")
+        ttk.Label(self.test_frame, text=self.target_label, style="App.TLabel").grid(row=1, column=0, sticky="w")
         self.prompt_label = ttk.Label(
             self.test_frame,
             textvariable=self.prompt_var,
@@ -2493,7 +2578,7 @@ class JapaneseToKanaTestDialog(tk.Toplevel):
         if not eligible_questions:
             messagebox.showerror(
                 "No eligible vocabularies",
-                "Add vocabularies with kana before starting a JP->Kana test.",
+                f"Add vocabularies with kana before starting a {self.target_label}->Kana test.",
                 parent=self,
             )
             return
@@ -2674,8 +2759,10 @@ class JapaneseToEnglishChoiceTestDialog(tk.Toplevel):
         super().__init__(parent)
         self.repository = repository
         self.text_font = text_font
-        self.target_language_code = str(getattr(parent, "target_language_code", "JP")).upper()
-        self.target_language_name = LANGUAGE_NAMES.get(self.target_language_code, self.target_language_code)
+        target_label_getter = getattr(parent, "_target_field_label", None)
+        meaning_label_getter = getattr(parent, "_assistant_field_label", None)
+        self.target_label = target_label_getter() if callable(target_label_getter) else "Target text"
+        self.meaning_label = meaning_label_getter() if callable(meaning_label_getter) else "Meaning"
 
         self.questions: list[VocabEntry] = []
         self.options_by_question: list[list[str]] = []
@@ -2700,7 +2787,7 @@ class JapaneseToEnglishChoiceTestDialog(tk.Toplevel):
         self.result_var = tk.StringVar(value="")
         self.pick_strategy_var = tk.StringVar(value=pick_strategy if pick_strategy in {"strict", "weighted"} else "strict")
 
-        self.title(f"Test mode: {self.target_language_name} -> Meaning")
+        self.title(f"Test mode: {self.target_label} -> {self.meaning_label}")
         self.transient(parent)
         self.grab_set()
         self.resizable(False, False)
@@ -2722,7 +2809,7 @@ class JapaneseToEnglishChoiceTestDialog(tk.Toplevel):
 
         ttk.Label(
             self.start_frame,
-            text=f"{self.target_language_name} -> Meaning test (single choice)",
+            text=f"{self.target_label} -> {self.meaning_label} test (single choice)",
             style="App.TLabel",
         ).grid(row=0, column=0, sticky="w")
 
@@ -2777,7 +2864,7 @@ class JapaneseToEnglishChoiceTestDialog(tk.Toplevel):
 
         ttk.Label(
             self.test_frame,
-            text=f"{self.target_language_name} text",
+            text=self.target_label,
             style="App.TLabel",
         ).grid(row=1, column=0, sticky="w")
         self.prompt_label = ttk.Label(
@@ -2789,7 +2876,7 @@ class JapaneseToEnglishChoiceTestDialog(tk.Toplevel):
         )
         self.prompt_label.grid(row=2, column=0, sticky="w", pady=(4, 12))
 
-        ttk.Label(self.test_frame, text="Choose the correct meaning", style="App.TLabel").grid(
+        ttk.Label(self.test_frame, text=f"Choose the correct {self.meaning_label.lower()}", style="App.TLabel").grid(
             row=3,
             column=0,
             sticky="w",
@@ -3149,13 +3236,16 @@ class BulkAddDialog(tk.Toplevel):
         repository: VocabRepository,
         on_saved: Callable[[], None],
         text_font: tkfont.Font,
-        target_language_code: str,
+        target_label: str,
+        assistant_label: str,
+        show_kana: bool,
     ) -> None:
         super().__init__(parent)
         self.repository = repository
         self.on_saved = on_saved
-        self.target_language_code = target_language_code
-        self._show_kana = self.target_language_code == "JP"
+        self.target_label = target_label
+        self.assistant_label = assistant_label
+        self._show_kana = show_kana
 
         self.title("Bulk add vocabulary")
         self.transient(parent)
@@ -3172,9 +3262,12 @@ class BulkAddDialog(tk.Toplevel):
         frame.rowconfigure(2, weight=1)
 
         if self._show_kana:
-            help_text = "One entry per line, aligned across 3 columns: Japanese, Kana (optional), English."
+            help_text = (
+                f"One entry per line, aligned across 3 columns: {self.target_label}, "
+                f"Kana (optional), {self.assistant_label}."
+            )
         else:
-            help_text = "One entry per line, aligned across 2 columns: Target text and Meaning."
+            help_text = f"One entry per line, aligned across 2 columns: {self.target_label} and {self.assistant_label}."
         ttk.Label(frame, text=help_text, style="App.TLabel", wraplength=820).grid(
             row=0,
             column=0,
@@ -3189,8 +3282,7 @@ class BulkAddDialog(tk.Toplevel):
         labels_row.columnconfigure(2, weight=1)
         labels_row.columnconfigure(3, weight=0)
 
-        target_label = "Japanese writing *" if self._show_kana else "Target text *"
-        ttk.Label(labels_row, text=target_label, style="App.TLabel").grid(
+        ttk.Label(labels_row, text=f"{self.target_label} *", style="App.TLabel").grid(
             row=0,
             column=0,
             sticky="w",
@@ -3203,8 +3295,7 @@ class BulkAddDialog(tk.Toplevel):
                 sticky="w",
                 padx=(0, 8),
             )
-        assistant_label = "English meaning *" if self._show_kana else "Meaning *"
-        ttk.Label(labels_row, text=assistant_label, style="App.TLabel").grid(
+        ttk.Label(labels_row, text=f"{self.assistant_label} *", style="App.TLabel").grid(
             row=0,
             column=2 if self._show_kana else 1,
             sticky="w",
@@ -3308,29 +3399,29 @@ class BulkAddDialog(tk.Toplevel):
             text_widget.yview_scroll(1, "units")
         return "break"
 
-    def _parse_entries(self, japanese_raw: str, kana_raw: str, english_raw: str) -> list[tuple[str, str, str]]:
-        japanese_lines = japanese_raw.splitlines()
+    def _parse_entries(self, target_raw: str, kana_raw: str, meaning_raw: str) -> list[tuple[str, str, str]]:
+        target_lines = target_raw.splitlines()
         kana_lines = kana_raw.splitlines() if self._show_kana else []
-        english_lines = english_raw.splitlines()
+        meaning_lines = meaning_raw.splitlines()
 
-        line_count = max(len(japanese_lines), len(kana_lines), len(english_lines))
+        line_count = max(len(target_lines), len(kana_lines), len(meaning_lines))
         parsed_entries: list[tuple[str, str, str]] = []
 
         for index in range(line_count):
             line_number = index + 1
-            japanese_text = japanese_lines[index].strip() if index < len(japanese_lines) else ""
+            target_text = target_lines[index].strip() if index < len(target_lines) else ""
             kana_text = kana_lines[index].strip() if index < len(kana_lines) else ""
-            english_text = english_lines[index].strip() if index < len(english_lines) else ""
+            meaning_text = meaning_lines[index].strip() if index < len(meaning_lines) else ""
 
-            if not japanese_text and not kana_text and not english_text:
+            if not target_text and not kana_text and not meaning_text:
                 continue
 
-            if not japanese_text or not english_text:
+            if not target_text or not meaning_text:
                 raise ValidationError(
-                    f"Line {line_number}: Japanese writing and English meaning are required."
+                    f"Line {line_number}: {self.target_label} and {self.assistant_label} are required."
                 )
 
-            parsed_entries.append((japanese_text, kana_text, english_text))
+            parsed_entries.append((target_text, kana_text, meaning_text))
 
         if not parsed_entries:
             raise ValidationError("Add at least one non-empty line.")
@@ -3341,11 +3432,11 @@ class BulkAddDialog(tk.Toplevel):
         if not self._show_kana:
             return
 
-        japanese_lines = self.jp_text.get("1.0", "end-1c").splitlines()
+        target_lines = self.jp_text.get("1.0", "end-1c").splitlines()
         kana_lines = self.kana_text.get("1.0", "end-1c").splitlines()
-        line_count = max(len(japanese_lines), len(kana_lines))
+        line_count = max(len(target_lines), len(kana_lines))
         if line_count <= 0:
-            messagebox.showinfo("Kana fill", "Enter target text lines first.", parent=self)
+            messagebox.showinfo("Kana fill", f"Enter {self.target_label} lines first.", parent=self)
             return
 
         updated_count = 0
@@ -3353,7 +3444,7 @@ class BulkAddDialog(tk.Toplevel):
         merged_kana_lines: list[str] = []
 
         for index in range(line_count):
-            target_text = japanese_lines[index].strip() if index < len(japanese_lines) else ""
+            target_text = target_lines[index].strip() if index < len(target_lines) else ""
             existing_kana = kana_lines[index].strip() if index < len(kana_lines) else ""
 
             if existing_kana or not target_text:
@@ -3997,7 +4088,7 @@ class EntryDialog(tk.Toplevel):
         self.tags_summary_var = tk.StringVar(value="")
         default_status = "Kana is optional. You can edit any suggestion."
         if not self.enable_kana_suggest:
-            default_status = "Kana is optional. Automatic kana suggestion is only available when target language is Japanese."
+            default_status = "Kana is optional. Automatic kana suggestion is available only when the workbook preset enables kana."
         self.status_var = tk.StringVar(value=default_status)
 
         self.title(title)
@@ -4024,7 +4115,7 @@ class EntryDialog(tk.Toplevel):
         self.japanese_entry = ttk.Entry(frame, textvariable=self.japanese_var, width=48, style="Japanese.TEntry")
         self.japanese_entry.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
 
-        if self.target_language_code == "JP":
+        if self.enable_kana_suggest:
             ttk.Label(frame, text="Kana (optional)", style="App.TLabel").grid(row=2, column=0, sticky="w")
             self.kana_entry = ttk.Entry(frame, textvariable=self.kana_var, width=48, style="Japanese.TEntry")
             self.kana_entry.grid(row=3, column=0, sticky="ew", pady=(0, 10))
@@ -4186,11 +4277,21 @@ class EntryDialog(tk.Toplevel):
 class WorkbookCreationDialog(tk.Toplevel):
     def __init__(self, parent: tk.Tk, text_font: tkfont.Font) -> None:
         super().__init__(parent)
-        self.result: tuple[str, str, str] | None = None
+        self.result: tuple[str, str, str, str, str] | None = None
 
         self.name_var = tk.StringVar(value="")
+        self.target_mode_var = tk.StringVar(value="supported")
         self.target_language_var = tk.StringVar(value="JP")
-        self.preset_var = tk.StringVar(value="generic")
+        self.target_custom_label_var = tk.StringVar(value="")
+
+        self.meaning_mode_var = tk.StringVar(value="default")
+        self.meaning_language_var = tk.StringVar(value="EN")
+        self.meaning_custom_label_var = tk.StringVar(value="")
+
+        self.enable_preset_var = tk.BooleanVar(value=True)
+        self.preset_info_var = tk.StringVar(
+            value="Japanese preset adds kana support and predefined JP difficulty tags."
+        )
 
         self.title("Create workbook")
         self.transient(parent)
@@ -4205,38 +4306,116 @@ class WorkbookCreationDialog(tk.Toplevel):
         self.name_entry = ttk.Entry(frame, textvariable=self.name_var, style="App.TEntry", width=32)
         self.name_entry.grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=(0, 8))
 
-        ttk.Label(frame, text="Target language", style="App.TLabel").grid(row=1, column=0, sticky="w")
-        target_combo = ttk.Combobox(
-            frame,
+        ttk.Label(frame, text="Target label source", style="App.TLabel").grid(row=1, column=0, sticky="w")
+        target_mode_row = ttk.Frame(frame)
+        target_mode_row.grid(row=1, column=1, sticky="w", padx=(8, 0), pady=(0, 8))
+        ttk.Radiobutton(
+            target_mode_row,
+            text="Supported language",
+            value="supported",
+            variable=self.target_mode_var,
+            command=self._refresh_mode_rows,
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Radiobutton(
+            target_mode_row,
+            text="Custom label",
+            value="custom",
+            variable=self.target_mode_var,
+            command=self._refresh_mode_rows,
+        ).grid(row=0, column=1, sticky="w", padx=(8, 0))
+
+        self.target_supported_row = ttk.Frame(frame)
+        self.target_supported_row.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        ttk.Label(self.target_supported_row, text="Target language", style="App.TLabel").grid(row=0, column=0, sticky="w")
+        self.target_combo = ttk.Combobox(
+            self.target_supported_row,
             state="readonly",
             values=("JP", "EN"),
             textvariable=self.target_language_var,
             width=8,
             font=text_font,
         )
-        target_combo.grid(row=1, column=1, sticky="w", padx=(8, 0), pady=(0, 8))
+        self.target_combo.grid(row=0, column=1, sticky="w", padx=(8, 0))
+        self.target_combo.bind("<<ComboboxSelected>>", lambda _event: self._refresh_mode_rows())
 
-        ttk.Label(frame, text="Preset", style="App.TLabel").grid(row=2, column=0, sticky="w")
-        preset_combo = ttk.Combobox(
-            frame,
+        self.target_custom_row = ttk.Frame(frame)
+        self.target_custom_row.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        self.target_custom_row.columnconfigure(1, weight=1)
+        ttk.Label(self.target_custom_row, text="Target label *", style="App.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Entry(
+            self.target_custom_row,
+            textvariable=self.target_custom_label_var,
+            style="App.TEntry",
+            width=28,
+        ).grid(row=0, column=1, sticky="ew", padx=(8, 0))
+
+        ttk.Separator(frame, orient="horizontal").grid(row=4, column=0, columnspan=2, sticky="ew", pady=(2, 10))
+
+        ttk.Label(frame, text="Meaning label", style="App.TLabel").grid(row=5, column=0, sticky="w")
+        meaning_mode_row = ttk.Frame(frame)
+        meaning_mode_row.grid(row=5, column=1, sticky="w", padx=(8, 0), pady=(0, 8))
+        ttk.Radiobutton(
+            meaning_mode_row,
+            text="Default",
+            value="default",
+            variable=self.meaning_mode_var,
+            command=self._refresh_mode_rows,
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Radiobutton(
+            meaning_mode_row,
+            text="Supported language",
+            value="supported",
+            variable=self.meaning_mode_var,
+            command=self._refresh_mode_rows,
+        ).grid(row=0, column=1, sticky="w", padx=(8, 0))
+        ttk.Radiobutton(
+            meaning_mode_row,
+            text="Custom label",
+            value="custom",
+            variable=self.meaning_mode_var,
+            command=self._refresh_mode_rows,
+        ).grid(row=0, column=2, sticky="w", padx=(8, 0))
+
+        self.meaning_supported_row = ttk.Frame(frame)
+        self.meaning_supported_row.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        ttk.Label(self.meaning_supported_row, text="Meaning language", style="App.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Combobox(
+            self.meaning_supported_row,
             state="readonly",
-            values=("generic", "japanese"),
-            textvariable=self.preset_var,
-            width=12,
+            values=("JP", "EN"),
+            textvariable=self.meaning_language_var,
+            width=8,
             font=text_font,
-        )
-        preset_combo.grid(row=2, column=1, sticky="w", padx=(8, 0), pady=(0, 10))
+        ).grid(row=0, column=1, sticky="w", padx=(8, 0))
 
+        self.meaning_custom_row = ttk.Frame(frame)
+        self.meaning_custom_row.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        self.meaning_custom_row.columnconfigure(1, weight=1)
+        ttk.Label(self.meaning_custom_row, text="Meaning label *", style="App.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Entry(
+            self.meaning_custom_row,
+            textvariable=self.meaning_custom_label_var,
+            style="App.TEntry",
+            width=28,
+        ).grid(row=0, column=1, sticky="ew", padx=(8, 0))
+
+        self.preset_section = ttk.Frame(frame)
+        self.preset_section.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        ttk.Checkbutton(
+            self.preset_section,
+            text="Enable preset for selected target language",
+            variable=self.enable_preset_var,
+        ).grid(row=0, column=0, sticky="w")
         ttk.Label(
-            frame,
-            text="Japanese preset enables JP-focused defaults (kana behavior and predefined tags).",
+            self.preset_section,
+            textvariable=self.preset_info_var,
             style="Status.TLabel",
-            wraplength=420,
+            wraplength=430,
             justify="left",
-        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(0, 12))
+        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
 
         actions = ttk.Frame(frame)
-        actions.grid(row=4, column=0, columnspan=2, sticky="e")
+        actions.grid(row=9, column=0, columnspan=2, sticky="e")
         ttk.Button(actions, text="Cancel", command=self.destroy, style="App.TButton").grid(
             row=0,
             column=0,
@@ -4248,23 +4427,146 @@ class WorkbookCreationDialog(tk.Toplevel):
         self.bind("<Return>", lambda _event: self._save())
         self.name_entry.focus_set()
 
+        self._refresh_mode_rows()
+
+    def _target_has_available_preset(self) -> bool:
+        return self.target_mode_var.get() == "supported" and self.target_language_var.get().strip().upper() == "JP"
+
+    def _refresh_mode_rows(self) -> None:
+        if self.target_mode_var.get() == "supported":
+            self.target_supported_row.grid()
+            self.target_custom_row.grid_remove()
+        else:
+            self.target_supported_row.grid_remove()
+            self.target_custom_row.grid()
+
+        meaning_mode = self.meaning_mode_var.get()
+        if meaning_mode == "supported":
+            self.meaning_supported_row.grid()
+            self.meaning_custom_row.grid_remove()
+        elif meaning_mode == "custom":
+            self.meaning_supported_row.grid_remove()
+            self.meaning_custom_row.grid()
+        else:
+            self.meaning_supported_row.grid_remove()
+            self.meaning_custom_row.grid_remove()
+
+        if self._target_has_available_preset():
+            self.preset_section.grid()
+            self.preset_info_var.set("Japanese preset adds kana support and predefined JP difficulty tags.")
+        else:
+            self.preset_section.grid_remove()
+
     def _save(self) -> None:
         workbook_name = self.name_var.get().strip()
         if not workbook_name:
             messagebox.showerror("Validation error", "Workbook name is required.", parent=self)
             return
 
-        target_language_code = self.target_language_var.get().strip().upper()
-        preset_key = self.preset_var.get().strip().lower() or "generic"
-        if preset_key == "japanese" and target_language_code != "JP":
-            messagebox.showerror(
-                "Validation error",
-                "Japanese preset is only available for JP workbooks.",
-                parent=self,
-            )
+        if self.target_mode_var.get() == "supported":
+            selected_target_language = self.target_language_var.get().strip().upper()
+            if selected_target_language not in LANGUAGE_NAMES:
+                messagebox.showerror("Validation error", "Select a supported target language.", parent=self)
+                return
+
+            target_label = LANGUAGE_NAMES[selected_target_language]
+            target_schema_code = selected_target_language
+            if selected_target_language == "JP" and not self.enable_preset_var.get():
+                target_schema_code = "JP_GENERIC"
+            preset_key = "japanese" if self._target_has_available_preset() and self.enable_preset_var.get() else "generic"
+        else:
+            target_label = self.target_custom_label_var.get().strip()
+            if not target_label:
+                messagebox.showerror("Validation error", "Target label is required.", parent=self)
+                return
+            custom_hash = hashlib.sha1(target_label.encode("utf-8")).hexdigest()[:10].upper()
+            target_schema_code = f"CUSTOM_{custom_hash}"
+            preset_key = "generic"
+
+        meaning_mode = self.meaning_mode_var.get()
+        if meaning_mode == "supported":
+            selected_meaning_language = self.meaning_language_var.get().strip().upper()
+            if selected_meaning_language not in LANGUAGE_NAMES:
+                messagebox.showerror("Validation error", "Select a supported meaning language.", parent=self)
+                return
+            meaning_label = LANGUAGE_NAMES[selected_meaning_language]
+        elif meaning_mode == "custom":
+            meaning_label = self.meaning_custom_label_var.get().strip()
+            if not meaning_label:
+                messagebox.showerror("Validation error", "Meaning label is required.", parent=self)
+                return
+        else:
+            meaning_label = "Meaning"
+
+        self.result = (workbook_name, target_schema_code, preset_key, target_label, meaning_label)
+        self.destroy()
+
+
+class WorkbookLabelsDialog(tk.Toplevel):
+    def __init__(self, parent: tk.Tk, workbook: Workbook, text_font: tkfont.Font) -> None:
+        super().__init__(parent)
+        self.result: tuple[str, str] | None = None
+
+        self.target_label_var = tk.StringVar(value=workbook.target_label)
+        self.meaning_label_var = tk.StringVar(value=workbook.meaning_label)
+
+        self.title("Edit workbook labels")
+        self.transient(parent)
+        self.grab_set()
+        self.resizable(False, False)
+
+        frame = ttk.Frame(self, padding=14)
+        frame.grid(row=0, column=0, sticky="nsew")
+        frame.columnconfigure(1, weight=1)
+
+        ttk.Label(frame, text="Workbook", style="Status.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(frame, text=workbook.name, style="App.TLabel").grid(row=0, column=1, sticky="w", padx=(8, 0), pady=(0, 8))
+
+        ttk.Label(frame, text="Target label *", style="App.TLabel").grid(row=1, column=0, sticky="w")
+        ttk.Entry(frame, textvariable=self.target_label_var, style="App.TEntry", width=32, font=text_font).grid(
+            row=1,
+            column=1,
+            sticky="ew",
+            padx=(8, 0),
+            pady=(0, 8),
+        )
+
+        ttk.Label(frame, text="Meaning label", style="App.TLabel").grid(row=2, column=0, sticky="w")
+        ttk.Entry(frame, textvariable=self.meaning_label_var, style="App.TEntry", width=32, font=text_font).grid(
+            row=2,
+            column=1,
+            sticky="ew",
+            padx=(8, 0),
+            pady=(0, 10),
+        )
+
+        ttk.Label(
+            frame,
+            text="Leave meaning label empty to use the default 'Meaning'.",
+            style="Status.TLabel",
+            wraplength=420,
+            justify="left",
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(0, 12))
+
+        actions = ttk.Frame(frame)
+        actions.grid(row=4, column=0, columnspan=2, sticky="e")
+        ttk.Button(actions, text="Cancel", command=self.destroy, style="App.TButton").grid(row=0, column=0, padx=(0, 8))
+        ttk.Button(actions, text="Save", command=self._save, style="App.TButton").grid(row=0, column=1)
+
+        self.bind("<Escape>", lambda _event: self.destroy())
+        self.bind("<Return>", lambda _event: self._save())
+
+    def _save(self) -> None:
+        target_label = self.target_label_var.get().strip()
+        if not target_label:
+            messagebox.showerror("Validation error", "Target label is required.", parent=self)
             return
 
-        self.result = (workbook_name, target_language_code, preset_key)
+        meaning_label = self.meaning_label_var.get().strip()
+        if not meaning_label:
+            meaning_label = "Meaning"
+
+        self.result = (target_label, meaning_label)
         self.destroy()
 
 

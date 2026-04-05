@@ -12,6 +12,7 @@ from .validators import (
     normalize_optional_markdown,
     normalize_optional_text,
     validate_language_code,
+    validate_target_schema_code,
     validate_vocab_fields,
 )
 
@@ -90,6 +91,8 @@ class VocabRepository:
                     name TEXT NOT NULL COLLATE NOCASE,
                     target_language_code TEXT NOT NULL,
                     preset_key TEXT NOT NULL DEFAULT 'generic',
+                    target_label TEXT NOT NULL DEFAULT 'Target text',
+                    meaning_label TEXT NOT NULL DEFAULT 'Meaning',
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE (name)
                 )
@@ -202,6 +205,8 @@ class VocabRepository:
             self._ensure_column(connection, "vocab_entries", "workbook_id", "INTEGER NULL")
             self._ensure_column(connection, "vocab_entries", "part_of_speech", "TEXT NULL")
             self._ensure_column(connection, "vocab_entries", "details_markdown", "TEXT NULL")
+            self._ensure_column(connection, "workbooks", "target_label", "TEXT NULL")
+            self._ensure_column(connection, "workbooks", "meaning_label", "TEXT NULL")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_vocab_entries_workbook_id ON vocab_entries(workbook_id)")
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_language_properties_language_key "
@@ -219,6 +224,8 @@ class VocabRepository:
                 "CREATE INDEX IF NOT EXISTS idx_workbook_visible_properties_workbook_id "
                 "ON workbook_visible_properties(workbook_id)"
             )
+
+            self._backfill_workbook_labels(connection)
 
             connection.execute(
                 """
@@ -297,6 +304,59 @@ class VocabRepository:
         connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
 
     @staticmethod
+    def _default_target_label_for_schema(target_schema_code: str) -> str:
+        normalized = target_schema_code.strip().upper()
+        if normalized == "JP":
+            return "Japanese"
+        if normalized == "EN":
+            return "English"
+        return normalized
+
+    @staticmethod
+    def _normalize_workbook_label(raw_value: str | None, field_name: str, fallback: str) -> str:
+        cleaned = (raw_value or "").strip()
+        if cleaned:
+            return cleaned
+        fallback_clean = fallback.strip()
+        if fallback_clean:
+            return fallback_clean
+        raise ValidationError(f"{field_name} is required.")
+
+    def _backfill_workbook_labels(self, connection: sqlite3.Connection) -> None:
+        rows = connection.execute(
+            """
+            SELECT id, target_language_code, target_label, meaning_label
+            FROM workbooks
+            ORDER BY id ASC
+            """
+        ).fetchall()
+        for row in rows:
+            workbook_id = int(row[0])
+            try:
+                target_schema_code = validate_target_schema_code(str(row[1]), "Target schema")
+            except ValidationError:
+                target_schema_code = "JP"
+            target_label = self._normalize_workbook_label(
+                str(row[2]) if row[2] is not None else None,
+                "Target label",
+                self._default_target_label_for_schema(target_schema_code),
+            )
+            meaning_label = self._normalize_workbook_label(
+                str(row[3]) if row[3] is not None else None,
+                "Meaning label",
+                "Meaning",
+            )
+            connection.execute(
+                """
+                UPDATE workbooks
+                SET target_label = ?,
+                    meaning_label = ?
+                WHERE id = ?
+                """,
+                (target_label, meaning_label, workbook_id),
+            )
+
+    @staticmethod
     def _read_target_language_from_connection(connection: sqlite3.Connection) -> str:
         row = connection.execute(
             """
@@ -327,12 +387,13 @@ class VocabRepository:
         target_language_code = self._read_target_language_from_connection(connection)
         preset_key = "japanese" if target_language_code == "JP" else "generic"
         default_name = "JP" if target_language_code == "JP" else "Default"
+        target_label = self._default_target_label_for_schema(target_language_code)
         cursor = connection.execute(
             """
-            INSERT INTO workbooks (name, target_language_code, preset_key)
-            VALUES (?, ?, ?)
+            INSERT INTO workbooks (name, target_language_code, preset_key, target_label, meaning_label)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (default_name, target_language_code, preset_key),
+            (default_name, target_language_code, preset_key, target_label, "Meaning"),
         )
         return int(cursor.lastrowid)
 
@@ -440,7 +501,7 @@ class VocabRepository:
             return self._read_target_language_from_connection(connection)
 
         try:
-            return validate_language_code(str(row[0]), "Target language")
+            return validate_target_schema_code(str(row[0]), "Target schema")
         except ValidationError:
             return self._read_target_language_from_connection(connection)
 
@@ -458,6 +519,47 @@ class VocabRepository:
 
         preset_key = str(row[0]).strip().lower()
         return preset_key or "generic"
+
+    @staticmethod
+    def _supports_preset(target_schema_code: str, preset_key: str) -> bool:
+        return preset_key == "japanese" and target_schema_code == "JP"
+
+    @staticmethod
+    def _supports_kana_for_preset(preset_key: str) -> bool:
+        return preset_key == "japanese"
+
+    def _ensure_language_properties_for_schema(
+        self,
+        connection: sqlite3.Connection,
+        target_schema_code: str,
+        include_kana: bool,
+    ) -> None:
+        properties: list[tuple[str, str, bool]] = [
+            ("target_text", "Target text", True),
+            ("meaning", "Meaning", True),
+        ]
+        if include_kana:
+            properties.append(("kana", "Kana", False))
+
+        for key, label, is_required in properties:
+            connection.execute(
+                """
+                INSERT INTO language_properties (
+                    target_language_code,
+                    key,
+                    label,
+                    is_predefined,
+                    is_required
+                )
+                VALUES (?, ?, ?, 1, ?)
+                ON CONFLICT(target_language_code, key)
+                DO UPDATE SET
+                    label = excluded.label,
+                    is_predefined = 1,
+                    is_required = excluded.is_required
+                """,
+                (target_schema_code, key, label, 1 if is_required else 0),
+            )
 
     def _resolve_workbook_id_from_connection(
         self,
@@ -512,6 +614,11 @@ class VocabRepository:
             self._ensure_predefined_tags(connection, target_language_code)
             self._migrate_legacy_part_of_speech_tags(connection, target_language_code)
             self._ensure_predefined_language_properties(connection)
+            self._ensure_language_properties_for_schema(
+                connection,
+                target_language_code,
+                include_kana=self._supports_kana_for_preset(self._read_workbook_preset_key_from_connection(connection, resolved_workbook_id)),
+            )
             self._migrate_legacy_entry_property_values(connection)
             self._initialize_workbook_visible_properties(connection, resolved_workbook_id)
             connection.commit()
@@ -529,25 +636,30 @@ class VocabRepository:
 
     def _ensure_predefined_language_properties(self, connection: sqlite3.Connection) -> None:
         for target_language_code, properties in self.PREDEFINED_LANGUAGE_PROPERTIES.items():
-            for key, label, is_required in properties:
-                connection.execute(
-                    """
-                    INSERT INTO language_properties (
-                        target_language_code,
-                        key,
-                        label,
-                        is_predefined,
-                        is_required
-                    )
-                    VALUES (?, ?, ?, 1, ?)
-                    ON CONFLICT(target_language_code, key)
-                    DO UPDATE SET
-                        label = excluded.label,
-                        is_predefined = 1,
-                        is_required = excluded.is_required
-                    """,
-                    (target_language_code, key, label, 1 if is_required else 0),
-                )
+            include_kana = any(key == "kana" for key, _label, _is_required in properties)
+            self._ensure_language_properties_for_schema(
+                connection,
+                target_language_code,
+                include_kana=include_kana,
+            )
+
+        workbook_rows = connection.execute(
+            """
+            SELECT target_language_code, preset_key
+            FROM workbooks
+            """
+        ).fetchall()
+        for row in workbook_rows:
+            try:
+                target_schema_code = validate_target_schema_code(str(row[0]), "Target schema")
+            except ValidationError:
+                continue
+            preset_key = str(row[1]).strip().lower() if row[1] is not None else "generic"
+            self._ensure_language_properties_for_schema(
+                connection,
+                target_schema_code,
+                include_kana=self._supports_kana_for_preset(preset_key),
+            )
 
     def _migrate_legacy_entry_property_values(self, connection: sqlite3.Connection) -> None:
         rows = connection.execute(
@@ -578,7 +690,7 @@ class VocabRepository:
 
         for row in rows:
             entry_id = int(row[0])
-            target_language_code = validate_language_code(str(row[1]), "Target language")
+            target_language_code = validate_target_schema_code(str(row[1]), "Target schema")
             japanese_text = str(row[2])
             english_text = str(row[3])
             kana_text = normalize_optional_text(str(row[4])) if row[4] is not None else None
@@ -680,7 +792,9 @@ class VocabRepository:
         ).fetchone()
         if workbook_row is None:
             return
-        target_language_code = validate_language_code(str(workbook_row[0]), "Target language")
+        target_language_code = validate_target_schema_code(str(workbook_row[0]), "Target schema")
+        preset_key = self._read_workbook_preset_key_from_connection(connection, workbook_id)
+        supports_kana = self._supports_kana_for_preset(preset_key)
 
         property_rows = connection.execute(
             """
@@ -694,7 +808,9 @@ class VocabRepository:
         for order_index, row in enumerate(property_rows):
             property_id = int(row[0])
             property_key = str(row[1])
-            is_visible = 1 if property_key in {"target_text", "meaning", "kana"} else 0
+            is_visible = 1 if property_key in {"target_text", "meaning"} else 0
+            if property_key == "kana" and supports_kana:
+                is_visible = 1
             connection.execute(
                 """
                 INSERT INTO workbook_visible_properties (workbook_id, property_id, is_visible, display_order)
@@ -740,7 +856,7 @@ class VocabRepository:
                 return self._read_workbook_target_language_from_connection(connection, workbook_id)
             finally:
                 connection.close()
-        return validate_language_code(target_language_code, "Target language")
+        return validate_target_schema_code(target_language_code, "Target schema")
 
     def _get_tag_type_id_by_name(
         self,
@@ -998,7 +1114,7 @@ class VocabRepository:
         try:
             rows = connection.execute(
                 """
-                SELECT id, name, target_language_code, preset_key, created_at
+                SELECT id, name, target_language_code, preset_key, target_label, meaning_label, created_at
                 FROM workbooks
                 ORDER BY id ASC
                 """
@@ -1007,9 +1123,19 @@ class VocabRepository:
                 Workbook(
                     id=int(row[0]),
                     name=str(row[1]),
-                    target_language_code=validate_language_code(str(row[2]), "Target language"),
+                    target_language_code=validate_target_schema_code(str(row[2]), "Target schema"),
                     preset_key=str(row[3]) if row[3] is not None else "generic",
-                    created_at=str(row[4]),
+                    target_label=self._normalize_workbook_label(
+                        str(row[4]) if row[4] is not None else None,
+                        "Target label",
+                        self._default_target_label_for_schema(str(row[2])),
+                    ),
+                    meaning_label=self._normalize_workbook_label(
+                        str(row[5]) if row[5] is not None else None,
+                        "Meaning label",
+                        "Meaning",
+                    ),
+                    created_at=str(row[6]),
                 )
                 for row in rows
             ]
@@ -1021,7 +1147,7 @@ class VocabRepository:
         try:
             row = connection.execute(
                 """
-                SELECT id, name, target_language_code, preset_key, created_at
+                SELECT id, name, target_language_code, preset_key, target_label, meaning_label, created_at
                 FROM workbooks
                 WHERE id = ?
                 """,
@@ -1036,19 +1162,47 @@ class VocabRepository:
         return Workbook(
             id=int(row[0]),
             name=str(row[1]),
-            target_language_code=validate_language_code(str(row[2]), "Target language"),
+            target_language_code=validate_target_schema_code(str(row[2]), "Target schema"),
             preset_key=str(row[3]) if row[3] is not None else "generic",
-            created_at=str(row[4]),
+            target_label=self._normalize_workbook_label(
+                str(row[4]) if row[4] is not None else None,
+                "Target label",
+                self._default_target_label_for_schema(str(row[2])),
+            ),
+            meaning_label=self._normalize_workbook_label(
+                str(row[5]) if row[5] is not None else None,
+                "Meaning label",
+                "Meaning",
+            ),
+            created_at=str(row[6]),
         )
 
-    def create_workbook(self, name: str, target_language_code: str, preset_key: str = "generic") -> Workbook:
+    def create_workbook(
+        self,
+        name: str,
+        target_language_code: str,
+        preset_key: str = "generic",
+        target_label: str | None = None,
+        meaning_label: str | None = None,
+    ) -> Workbook:
         normalized_name = self._normalize_workbook_name(name)
-        target_language = validate_language_code(target_language_code, "Target language")
+        target_schema_code = validate_target_schema_code(target_language_code, "Target schema")
         normalized_preset_key = preset_key.strip().lower() or "generic"
         if normalized_preset_key not in {"generic", "japanese"}:
             raise ValidationError("Preset must be one of: generic, japanese.")
-        if normalized_preset_key == "japanese" and target_language != "JP":
+        if normalized_preset_key == "japanese" and not self._supports_preset(target_schema_code, normalized_preset_key):
             raise ValidationError("Japanese preset is only available for JP workbooks.")
+
+        resolved_target_label = self._normalize_workbook_label(
+            target_label,
+            "Target label",
+            self._default_target_label_for_schema(target_schema_code),
+        )
+        resolved_meaning_label = self._normalize_workbook_label(
+            meaning_label,
+            "Meaning label",
+            "Meaning",
+        )
 
         connection = sqlite3.connect(self.db_path)
         try:
@@ -1058,10 +1212,16 @@ class VocabRepository:
             )
             cursor = connection.execute(
                 """
-                INSERT INTO workbooks (name, target_language_code, preset_key)
-                VALUES (?, ?, ?)
+                INSERT INTO workbooks (name, target_language_code, preset_key, target_label, meaning_label)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (normalized_name, target_language, normalized_preset_key),
+                (
+                    normalized_name,
+                    target_schema_code,
+                    normalized_preset_key,
+                    resolved_target_label,
+                    resolved_meaning_label,
+                ),
             )
             workbook_id = int(cursor.lastrowid)
 
@@ -1069,6 +1229,11 @@ class VocabRepository:
                 self._ensure_predefined_tags(connection, "JP")
 
             self._ensure_predefined_language_properties(connection)
+            self._ensure_language_properties_for_schema(
+                connection,
+                target_schema_code,
+                include_kana=self._supports_kana_for_preset(normalized_preset_key),
+            )
             self._initialize_workbook_visible_properties(connection, workbook_id)
 
             if had_current_workbook_id is None:
@@ -1086,7 +1251,7 @@ class VocabRepository:
                     VALUES ('target_language', ?)
                     ON CONFLICT(key) DO UPDATE SET value = excluded.value
                     """,
-                    (target_language,),
+                    (target_schema_code,),
                 )
 
             connection.commit()
@@ -1096,6 +1261,49 @@ class VocabRepository:
             connection.close()
 
         return self.get_workbook(workbook_id)
+
+    def update_workbook_labels(self, workbook_id: int, target_label: str, meaning_label: str) -> Workbook:
+        resolved_workbook_id = int(workbook_id)
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            row = connection.execute(
+                """
+                SELECT target_language_code
+                FROM workbooks
+                WHERE id = ?
+                """,
+                (resolved_workbook_id,),
+            ).fetchone()
+            if row is None:
+                raise LookupError(f"Workbook with id {resolved_workbook_id} was not found.")
+
+            target_schema_code = validate_target_schema_code(str(row[0]), "Target schema")
+            resolved_target_label = self._normalize_workbook_label(
+                target_label,
+                "Target label",
+                self._default_target_label_for_schema(target_schema_code),
+            )
+            resolved_meaning_label = self._normalize_workbook_label(
+                meaning_label,
+                "Meaning label",
+                "Meaning",
+            )
+
+            connection.execute(
+                """
+                UPDATE workbooks
+                SET target_label = ?,
+                    meaning_label = ?
+                WHERE id = ?
+                """,
+                (resolved_target_label, resolved_meaning_label, resolved_workbook_id),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        return self.get_workbook(resolved_workbook_id)
 
     def get_current_workbook_id(self) -> int | None:
         connection = sqlite3.connect(self.db_path)
@@ -1269,7 +1477,7 @@ class VocabRepository:
         self,
         target_language_code: str,
     ) -> list[tuple[int, str, str, bool, bool]]:
-        resolved_target_language_code = validate_language_code(target_language_code, "Target language")
+        resolved_target_language_code = validate_target_schema_code(target_language_code, "Target schema")
         connection = sqlite3.connect(self.db_path)
         try:
             rows = connection.execute(
@@ -1289,7 +1497,7 @@ class VocabRepository:
             connection.close()
 
     def add_language_property(self, target_language_code: str, key: str, label: str) -> int:
-        resolved_target_language_code = validate_language_code(target_language_code, "Target language")
+        resolved_target_language_code = validate_target_schema_code(target_language_code, "Target schema")
         normalized_key = self._normalize_property_key(key)
         normalized_label = self._normalize_tag_name(label, "Property label")
         if normalized_key in {"target_text", "meaning", "kana"}:
@@ -1402,7 +1610,7 @@ class VocabRepository:
             ).fetchone()
             if workbook_row is None:
                 raise LookupError(f"Workbook with id {resolved_workbook_id} was not found.")
-            target_language_code = validate_language_code(str(workbook_row[0]), "Target language")
+            target_language_code = validate_target_schema_code(str(workbook_row[0]), "Target schema")
 
             self._initialize_workbook_visible_properties(connection, resolved_workbook_id)
 
@@ -1457,7 +1665,7 @@ class VocabRepository:
             ).fetchone()
             if workbook_row is None:
                 raise LookupError(f"Workbook with id {resolved_workbook_id} was not found.")
-            target_language_code = validate_language_code(str(workbook_row[0]), "Target language")
+            target_language_code = validate_target_schema_code(str(workbook_row[0]), "Target schema")
 
             self._initialize_workbook_visible_properties(connection, resolved_workbook_id)
 
@@ -1515,7 +1723,7 @@ class VocabRepository:
             if entry_row is None:
                 raise LookupError(f"Vocabulary entry with id {resolved_entry_id} was not found.")
 
-            target_language_code = validate_language_code(str(entry_row[1]), "Target language")
+            target_language_code = validate_target_schema_code(str(entry_row[1]), "Target schema")
             rows = connection.execute(
                 """
                 SELECT lp.key, epv.value
@@ -1551,7 +1759,7 @@ class VocabRepository:
             if entry_row is None:
                 raise LookupError(f"Vocabulary entry with id {resolved_entry_id} was not found.")
 
-            target_language_code = validate_language_code(str(entry_row[1]), "Target language")
+            target_language_code = validate_target_schema_code(str(entry_row[1]), "Target schema")
             property_rows = connection.execute(
                 """
                 SELECT id, key, is_required
@@ -2694,7 +2902,7 @@ class VocabRepository:
             if workbook_row is None:
                 raise LookupError(f"Vocabulary entry with id {entry_id} was not found.")
 
-            target_language_code = validate_language_code(str(workbook_row[1]), "Target language")
+            target_language_code = validate_target_schema_code(str(workbook_row[1]), "Target schema")
 
             cursor = connection.execute(
                 """

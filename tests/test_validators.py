@@ -1,6 +1,11 @@
 import unittest
 
-from vocab_helper.validators import ValidationError, normalize_optional_text, validate_vocab_fields
+from vocab_helper.validators import (
+    ValidationError,
+    normalize_optional_text,
+    validate_target_schema_code,
+    validate_vocab_fields,
+)
 
 
 class ValidatorsTests(unittest.TestCase):
@@ -20,6 +25,13 @@ class ValidatorsTests(unittest.TestCase):
     def test_optional_text_normalizes_blank_to_none(self) -> None:
         self.assertIsNone(normalize_optional_text("   "))
         self.assertEqual(normalize_optional_text("  かな  "), "かな")
+
+    def test_validate_target_schema_code_accepts_non_language_keys(self) -> None:
+        self.assertEqual(validate_target_schema_code(" custom_hash_001 "), "CUSTOM_HASH_001")
+
+    def test_validate_target_schema_code_rejects_blank(self) -> None:
+        with self.assertRaises(ValidationError):
+            validate_target_schema_code("   ")
 
 
 if __name__ == "__main__":

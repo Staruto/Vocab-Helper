@@ -38,3 +38,10 @@ def validate_language_code(value: str, field_name: str = "Language") -> str:
         allowed = ", ".join(sorted(SUPPORTED_LANGUAGE_CODES))
         raise ValidationError(f"{field_name} must be one of: {allowed}.")
     return code
+
+
+def validate_target_schema_code(value: str, field_name: str = "Target schema") -> str:
+    code = value.strip().upper()
+    if not code:
+        raise ValidationError(f"{field_name} is required.")
+    return code
