@@ -39,8 +39,6 @@ Simple vocabulary memorization helper with a desktop GUI.
 - Requires target text and assistant meaning
 - Treats kana as optional
 - Suggests kana offline using pykakasi and lets users edit before save
-- Uses larger UI typography for readability (base size 12)
-- Prefers Yu Gothic for Japanese text when available
 - Shows a global count at the bottom: total number of vocabularies
 - Stores data locally in SQLite
 
