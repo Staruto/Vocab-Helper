@@ -378,6 +378,21 @@ class VocabRepositoryTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             self.repository.set_language_settings("JP", "JP")
 
+    def test_theme_mode_defaults_and_updates(self) -> None:
+        self.assertEqual(self.repository.get_theme_mode(), "light")
+
+        updated_mode = self.repository.set_theme_mode("dark")
+        self.assertEqual(updated_mode, "dark")
+        self.assertEqual(self.repository.get_theme_mode(), "dark")
+
+    def test_theme_mode_rejects_invalid_values(self) -> None:
+        with self.assertRaises(ValidationError):
+            self.repository.set_theme_mode("auto")
+
+    def test_theme_mode_getter_falls_back_for_invalid_stored_value(self) -> None:
+        self.repository.set_setting("theme_mode", "unknown")
+        self.assertEqual(self.repository.get_theme_mode(), "light")
+
     def test_predefined_tag_types_and_tags_are_seeded_for_target_language(self) -> None:
         self.repository.create_workbook("JP", "JP", preset_key="japanese")
 
