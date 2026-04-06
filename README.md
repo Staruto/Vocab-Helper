@@ -15,6 +15,7 @@ Simple vocabulary memorization helper with a desktop GUI.
 	- `Home` for vocabularies
 	- `Profile` for the practice activity grid
 - Supports keyboard shortcuts: Ctrl+N (add), Ctrl+Shift+N (bulk add), Ctrl+T (meaning->target test), Enter (edit selected row), Delete (remove selected rows)
+- Supports dark mode with a settings toggle and persisted preference
 - Includes three test modes with immediate per-question judgment:
 	- Meaning -> Target (fill-in)
 	- Target -> Kana (fill-in, when kana is enabled)
@@ -102,6 +103,12 @@ python -m unittest discover -s tests -p "test_*.py"
 - Target and assistant languages must be different
 - List column headers and entry/detail forms update to match current language settings
 - Tag catalogs are scoped by target language
+
+## Appearance
+
+- Open `Settings` tab -> `Appearance` -> `Enable dark mode`
+- Theme changes apply immediately without restarting the app
+- Preference is saved and restored on next launch
 
 ## Tags and filtering
 
