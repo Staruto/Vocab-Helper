@@ -3677,8 +3677,18 @@ class TagSelectionDialog(tk.Toplevel):
         self.tag_canvas.configure(scrollregion=self.tag_canvas.bbox("all"))
 
     def _on_mousewheel(self, event: tk.Event) -> str:
-        event_num = int(getattr(event, "num", 0))
-        event_delta = int(getattr(event, "delta", 0))
+        raw_event_num = getattr(event, "num", 0)
+        raw_event_delta = getattr(event, "delta", 0)
+
+        try:
+            event_num = int(raw_event_num)
+        except (TypeError, ValueError):
+            event_num = 0
+
+        try:
+            event_delta = int(raw_event_delta)
+        except (TypeError, ValueError):
+            event_delta = 0
 
         if event_num == 5 or event_delta < 0:
             self.tag_canvas.yview_scroll(1, "units")
