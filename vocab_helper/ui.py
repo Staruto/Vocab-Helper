@@ -3602,8 +3602,10 @@ class TagSelectionDialog(tk.Toplevel):
         self.title(title)
         self.transient(parent)
         self.grab_set()
-        self.geometry("920x580")
-        self.minsize(680, 400)
+        self.geometry("1050x650")
+        self.minsize(760, 500)
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
 
         frame = ttk.Frame(self, padding=12)
         frame.grid(row=0, column=0, sticky="nsew")
@@ -3640,9 +3642,10 @@ class TagSelectionDialog(tk.Toplevel):
         )
         self.tag_canvas.bind("<Configure>", self._on_canvas_configure)
         self.tag_content_frame.bind("<Configure>", self._on_content_configure)
-        self.tag_canvas.bind("<MouseWheel>", self._on_mousewheel)
-        self.tag_canvas.bind("<Button-4>", self._on_mousewheel)
-        self.tag_canvas.bind("<Button-5>", self._on_mousewheel)
+        # Bind at dialog level so wheel scrolling works over tag chips and controls.
+        self.bind("<MouseWheel>", self._on_mousewheel, add="+")
+        self.bind("<Button-4>", self._on_mousewheel, add="+")
+        self.bind("<Button-5>", self._on_mousewheel, add="+")
 
         actions = ttk.Frame(frame, padding=(0, 10, 0, 0))
         actions.grid(row=2, column=0, sticky="e")
@@ -3673,12 +3676,16 @@ class TagSelectionDialog(tk.Toplevel):
     def _on_content_configure(self, _event: tk.Event) -> None:
         self.tag_canvas.configure(scrollregion=self.tag_canvas.bbox("all"))
 
-    def _on_mousewheel(self, event: tk.Event) -> None:
-        if event.num == 5 or event.delta < 0:
+    def _on_mousewheel(self, event: tk.Event) -> str:
+        event_num = int(getattr(event, "num", 0))
+        event_delta = int(getattr(event, "delta", 0))
+
+        if event_num == 5 or event_delta < 0:
             self.tag_canvas.yview_scroll(1, "units")
-            return
-        if event.num == 4 or event.delta > 0:
+            return "break"
+        if event_num == 4 or event_delta > 0:
             self.tag_canvas.yview_scroll(-1, "units")
+        return "break"
 
     @staticmethod
     def _display_type_name(type_name: str) -> str:
