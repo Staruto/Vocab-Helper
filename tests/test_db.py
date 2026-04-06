@@ -485,6 +485,78 @@ class VocabRepositoryTests(unittest.TestCase):
         sorted_ids = [entry.id for entry, _test_count, _error_count, _tier in rows]
         self.assertEqual(sorted_ids, [third_id, first_id, second_id])
 
+    def test_list_entries_with_stats_searches_target_and_meaning_case_insensitively(self) -> None:
+        created = self.repository.add_entries(
+            [
+                ("Sakura", "", "Cherry Blossom"),
+                ("Maple", "", "Autumn leaf"),
+                ("Pine", "", "Evergreen"),
+            ]
+        )
+        sakura_id, maple_id, _pine_id = [entry.id for entry in created]
+
+        target_match_rows = self.repository.list_entries_with_stats(
+            search_query="sAk",
+            target_language_code="JP",
+        )
+        target_match_ids = {entry.id for entry, _test_count, _error_count, _tier in target_match_rows}
+        self.assertEqual(target_match_ids, {sakura_id})
+
+        meaning_match_rows = self.repository.list_entries_with_stats(
+            search_query="AUTUMN",
+            target_language_code="JP",
+        )
+        meaning_match_ids = {entry.id for entry, _test_count, _error_count, _tier in meaning_match_rows}
+        self.assertEqual(meaning_match_ids, {maple_id})
+
+    def test_list_entries_with_stats_search_combines_with_tag_filters(self) -> None:
+        created = self.repository.add_entries(
+            [
+                ("読む", "よむ", "to read", "verb"),
+                ("読書", "どくしょ", "reading", "noun"),
+                ("見る", "みる", "to watch", "verb"),
+            ]
+        )
+        read_id, reading_id, watch_id = [entry.id for entry in created]
+
+        topic_type_id = self.repository.add_tag_type("topic")
+        study_tag_id = self.repository.add_tag(topic_type_id, "study")
+        self.repository.set_entry_tags(read_id, [study_tag_id])
+        self.repository.set_entry_tags(watch_id, [study_tag_id])
+
+        filtered_rows = self.repository.list_entries_with_stats(
+            search_query="read",
+            filter_tag_ids=[study_tag_id],
+            filter_match_mode="all",
+            target_language_code="JP",
+        )
+        filtered_ids = {entry.id for entry, _test_count, _error_count, _tier in filtered_rows}
+        self.assertEqual(filtered_ids, {read_id})
+        self.assertNotIn(reading_id, filtered_ids)
+
+    def test_list_entries_with_stats_search_is_scoped_to_requested_workbook(self) -> None:
+        first_workbook = self.repository.create_workbook("First", "JP", preset_key="japanese")
+        second_workbook = self.repository.create_workbook("Second", "JP", preset_key="japanese")
+
+        first_entry = self.repository.add_entry("語A", "ごえー", "Alpha meaning", workbook_id=first_workbook.id)
+        second_entry = self.repository.add_entry("語B", "ごびー", "Alpha secondary", workbook_id=second_workbook.id)
+
+        first_rows = self.repository.list_entries_with_stats(
+            workbook_id=first_workbook.id,
+            search_query="alpha",
+            target_language_code="JP",
+        )
+        first_ids = {entry.id for entry, _test_count, _error_count, _tier in first_rows}
+        self.assertEqual(first_ids, {first_entry.id})
+
+        second_rows = self.repository.list_entries_with_stats(
+            workbook_id=second_workbook.id,
+            search_query="alpha",
+            target_language_code="JP",
+        )
+        second_ids = {entry.id for entry, _test_count, _error_count, _tier in second_rows}
+        self.assertEqual(second_ids, {second_entry.id})
+
     def test_part_of_speech_field_syncs_to_part_of_speech_tags(self) -> None:
         entry = self.repository.add_entry("考える", "かんがえる", "to think", "verb")
         part_of_speech_tags = self.repository.get_entry_tags(entry.id)
