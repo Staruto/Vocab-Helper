@@ -213,6 +213,7 @@ class MainWindow(tk.Tk):
         self.active_filter_tag_ids: list[int] = []
         self._workbook_filter_tag_ids: dict[int, list[int]] = {}
         self.tag_filter_summary_var = tk.StringVar(value="Tag filter: All")
+        self.search_query_var = tk.StringVar(value="")
         self.workbook_selection_var = tk.StringVar(value="")
 
         self.title("Vocabulary Workbook Helper")
@@ -224,6 +225,7 @@ class MainWindow(tk.Tk):
 
         self._configure_styles()
         self._build_widgets()
+        self.search_query_var.trace_add("write", self._on_search_query_changed)
         self._refresh_workbook_selector(select_workbook_id=self.current_workbook_id)
         self._refresh_test_button_labels()
         self._refresh_table_columns()
@@ -513,7 +515,7 @@ class MainWindow(tk.Tk):
 
         filter_row = ttk.Frame(home_page, padding=(0, 6, 0, 0))
         filter_row.grid(row=3, column=0, sticky="ew")
-        filter_row.columnconfigure(2, weight=1)
+        filter_row.columnconfigure(4, weight=1)
 
         self.filter_tags_button = ttk.Button(
             filter_row,
@@ -535,6 +537,16 @@ class MainWindow(tk.Tk):
             sticky="w",
             padx=(12, 0),
         )
+        ttk.Label(filter_row, text="Search", style="App.TLabel").grid(row=0, column=3, sticky="e", padx=(12, 6))
+        self.search_entry = ttk.Entry(filter_row, textvariable=self.search_query_var, style="App.TEntry")
+        self.search_entry.grid(row=0, column=4, sticky="ew")
+        self.clear_search_button = ttk.Button(
+            filter_row,
+            text="Clear search",
+            command=self._clear_search_query,
+            style="App.TButton",
+        )
+        self.clear_search_button.grid(row=0, column=5, sticky="e", padx=(8, 0))
 
         self._update_sort_controls()
         self._refresh_language_labels()
@@ -719,6 +731,8 @@ class MainWindow(tk.Tk):
         self.home_tags_button.configure(state=state)
         self.filter_tags_button.configure(state=state)
         self.clear_filter_button.configure(state=state)
+        self.search_entry.configure(state=state)
+        self.clear_search_button.configure(state=state)
         self.sort_mode_combo.configure(state="readonly" if enabled else "disabled")
         self.time_order_combo.configure(state="readonly" if enabled else "disabled")
         self.test_pick_combo.configure(state="readonly" if enabled else "disabled")
@@ -1163,6 +1177,16 @@ class MainWindow(tk.Tk):
         self._delete_selected_entry()
         return "break"
 
+    def _on_search_query_changed(self, *_args: object) -> None:
+        if self.current_workbook_id is None:
+            return
+        self.refresh_entries()
+
+    def _clear_search_query(self) -> None:
+        if not self.search_query_var.get().strip():
+            return
+        self.search_query_var.set("")
+
     def refresh_entries(self) -> None:
         for item in self.tree.get_children():
             self.tree.delete(item)
@@ -1181,6 +1205,7 @@ class MainWindow(tk.Tk):
             time_order=self.time_order_var.get(),
             filter_tag_ids=self.active_filter_tag_ids,
             filter_match_mode="all",
+            search_query=self.search_query_var.get(),
             target_language_code=self.target_language_code,
             workbook_id=self.current_workbook_id,
         )
@@ -1214,7 +1239,8 @@ class MainWindow(tk.Tk):
             self._tree_entry_ids[item_id] = entry.id
             self._entry_stats_by_id[entry.id] = (test_count, error_count, tier)
 
-        if self.active_filter_tag_ids:
+        has_search_query = bool(self.search_query_var.get().strip())
+        if self.active_filter_tag_ids or has_search_query:
             total_count = self.repository.count_entries(workbook_id=self.current_workbook_id)
             self.count_label.configure(text=f"Visible vocabularies: {len(entries_with_stats)} / {total_count}")
         else:

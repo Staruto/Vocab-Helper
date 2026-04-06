@@ -1972,6 +1972,7 @@ class VocabRepository:
         time_order: str = "newest",
         filter_tag_ids: Iterable[int] | None = None,
         filter_match_mode: str = "all",
+        search_query: str | None = None,
         target_language_code: str | None = None,
         workbook_id: int | None = None,
     ) -> list[tuple[VocabEntry, int, int, str]]:
@@ -2013,6 +2014,22 @@ class VocabRepository:
 
         where_clauses = ["e.workbook_id = ?"]
         params: list[object] = [resolved_workbook_id]
+
+        normalized_search_query = (search_query or "").strip().lower()
+        if normalized_search_query:
+            escaped_query = (
+                normalized_search_query
+                .replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            )
+            like_pattern = f"%{escaped_query}%"
+            where_clauses.append(
+                "(LOWER(COALESCE(e.japanese_text, '')) LIKE ? ESCAPE '\\' "
+                "OR LOWER(COALESCE(e.english_text, '')) LIKE ? ESCAPE '\\')"
+            )
+            params.extend([like_pattern, like_pattern])
+
         if unique_filter_tag_ids:
             placeholders = ",".join("?" for _ in unique_filter_tag_ids)
             tag_filter_params: list[object] = [resolved_target_language_code, *unique_filter_tag_ids]
