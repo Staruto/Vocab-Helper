@@ -155,6 +155,13 @@ class VocabRepositoryTests(unittest.TestCase):
         self.assertIn("meaning", en_keys)
         self.assertNotIn("kana", en_keys)
 
+        for language_code in ("ZH", "KO", "ES", "FR", "DE"):
+            properties = self.repository.list_language_properties(language_code)
+            keys = {key for _property_id, key, _label, _is_predefined, _is_required in properties}
+            self.assertIn("target_text", keys)
+            self.assertIn("meaning", keys)
+            self.assertNotIn("kana", keys)
+
     def test_workbook_visibility_defaults_exist(self) -> None:
         workbook = self.repository.create_workbook("JP", "JP", preset_key="japanese")
         workbook_id = workbook.id
@@ -362,8 +369,11 @@ class VocabRepositoryTests(unittest.TestCase):
         updated_target, updated_assistant = self.repository.set_language_settings("EN", "JP")
         self.assertEqual((updated_target, updated_assistant), ("EN", "JP"))
 
+        updated_target, updated_assistant = self.repository.set_language_settings("FR", "DE")
+        self.assertEqual((updated_target, updated_assistant), ("FR", "DE"))
+
         target_after, assistant_after = self.repository.get_language_settings()
-        self.assertEqual((target_after, assistant_after), ("EN", "JP"))
+        self.assertEqual((target_after, assistant_after), ("FR", "DE"))
 
         with self.assertRaises(ValidationError):
             self.repository.set_language_settings("JP", "JP")
@@ -603,6 +613,9 @@ class VocabRepositoryTests(unittest.TestCase):
     def test_non_jp_cannot_create_difficulty_tag_type(self) -> None:
         with self.assertRaises(ValidationError):
             self.repository.add_tag_type("difficulty", target_language_code="EN")
+
+        with self.assertRaises(ValidationError):
+            self.repository.add_tag_type("difficulty", target_language_code="ZH")
 
     def test_count_distinct_english_meanings_normalizes_case_and_spaces(self) -> None:
         self.repository.add_entries(

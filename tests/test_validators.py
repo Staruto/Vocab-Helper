@@ -3,6 +3,7 @@ import unittest
 from vocab_helper.validators import (
     ValidationError,
     normalize_optional_text,
+    validate_language_code,
     validate_target_schema_code,
     validate_vocab_fields,
 )
@@ -32,6 +33,14 @@ class ValidatorsTests(unittest.TestCase):
     def test_validate_target_schema_code_rejects_blank(self) -> None:
         with self.assertRaises(ValidationError):
             validate_target_schema_code("   ")
+
+    def test_validate_language_code_accepts_new_predefined_languages(self) -> None:
+        for code in ("JP", "EN", "ZH", "KO", "ES", "FR", "DE"):
+            self.assertEqual(validate_language_code(code), code)
+
+    def test_validate_language_code_rejects_unknown_code(self) -> None:
+        with self.assertRaises(ValidationError):
+            validate_language_code("IT")
 
 
 if __name__ == "__main__":
