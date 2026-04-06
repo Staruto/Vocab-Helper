@@ -80,17 +80,17 @@ python -m unittest discover -s tests -p "test_*.py"
 ## Workbook creation and presets
 
 - Workbook creation supports target-side configuration as either:
-	- A supported language (`JP`, `EN`) with automatic label, or
+	- A supported language (`JP`, `EN`, `ZH`, `KO`, `ES`, `FR`, `DE`) with automatic label, or
 	- A custom target label text
 - Meaning label supports:
 	- Default `Meaning`
-	- Supported language label (`JP`, `EN`)
+	- Supported language label (`JP`, `EN`, `ZH`, `KO`, `ES`, `FR`, `DE`)
 	- Custom text label
 - Preset selection is a boolean toggle (`Enable preset`) instead of choosing a preset name
 - Preset controls are shown only when a preset is available for the selected supported target language
 - Current preset support:
 	- `JP` preset adds kana behavior and predefined difficulty tags
-	- `EN` currently has no language-specific preset behavior
+	- Other supported languages currently use generic behavior (no additional language-specific preset)
 - Workbook labels can be edited later from `Settings` -> `Workbook columns` -> `Edit labels`
 
 ## Language settings
