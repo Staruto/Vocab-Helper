@@ -1,7 +1,8 @@
 from typing import Optional
 
+from .languages import PREDEFINED_LANGUAGE_CODE_SET
 
-SUPPORTED_LANGUAGE_CODES = {"JP", "EN"}
+SUPPORTED_LANGUAGE_CODES = set(PREDEFINED_LANGUAGE_CODE_SET)
 
 
 class ValidationError(ValueError):

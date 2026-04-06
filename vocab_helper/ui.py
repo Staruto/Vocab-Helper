@@ -10,6 +10,7 @@ from typing import Callable
 
 from .db import VocabRepository
 from .kana import suggest_hiragana
+from .languages import PREDEFINED_LANGUAGE_CODES, PREDEFINED_LANGUAGE_NAMES
 from .models import VocabEntry, Workbook
 from .validators import ValidationError
 
@@ -38,10 +39,7 @@ TIER_BG_COLORS = {
     "red": "#fde7e7",
 }
 
-LANGUAGE_NAMES = {
-    "JP": "Japanese",
-    "EN": "English",
-}
+LANGUAGE_NAMES = PREDEFINED_LANGUAGE_NAMES
 
 PART_OF_SPEECH_OPTIONS = (
     "",
@@ -4373,7 +4371,7 @@ class WorkbookCreationDialog(tk.Toplevel):
         self.target_combo = ttk.Combobox(
             self.target_supported_row,
             state="readonly",
-            values=("JP", "EN"),
+            values=PREDEFINED_LANGUAGE_CODES,
             textvariable=self.target_language_var,
             width=8,
             font=text_font,
@@ -4425,7 +4423,7 @@ class WorkbookCreationDialog(tk.Toplevel):
         ttk.Combobox(
             self.meaning_supported_row,
             state="readonly",
-            values=("JP", "EN"),
+            values=PREDEFINED_LANGUAGE_CODES,
             textvariable=self.meaning_language_var,
             width=8,
             font=text_font,

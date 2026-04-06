@@ -6,6 +6,7 @@ import sqlite3
 from pathlib import Path
 from typing import Iterable, Mapping
 
+from .languages import PREDEFINED_LANGUAGE_NAMES, PREDEFINED_LANGUAGE_PROPERTY_PROFILES
 from .models import VocabEntry, Workbook
 from .validators import (
     ValidationError,
@@ -30,17 +31,7 @@ class VocabRepository:
         "other",
     )
     PREDEFINED_DIFFICULTY_TAGS = ("N5", "N4", "N3", "N2", "N1")
-    PREDEFINED_LANGUAGE_PROPERTIES: dict[str, tuple[tuple[str, str, bool], ...]] = {
-        "JP": (
-            ("target_text", "Target text", True),
-            ("meaning", "Meaning", True),
-            ("kana", "Kana", False),
-        ),
-        "EN": (
-            ("target_text", "Target text", True),
-            ("meaning", "Meaning", True),
-        ),
-    }
+    PREDEFINED_LANGUAGE_PROPERTIES: dict[str, tuple[tuple[str, str, bool], ...]] = PREDEFINED_LANGUAGE_PROPERTY_PROFILES
 
     def __init__(self, db_path: Path | str) -> None:
         self.db_path = Path(db_path)
@@ -306,11 +297,7 @@ class VocabRepository:
     @staticmethod
     def _default_target_label_for_schema(target_schema_code: str) -> str:
         normalized = target_schema_code.strip().upper()
-        if normalized == "JP":
-            return "Japanese"
-        if normalized == "EN":
-            return "English"
-        return normalized
+        return PREDEFINED_LANGUAGE_NAMES.get(normalized, normalized)
 
     @staticmethod
     def _normalize_workbook_label(raw_value: str | None, field_name: str, fallback: str) -> str:
