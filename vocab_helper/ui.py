@@ -313,7 +313,9 @@ class MainWindow(tk.Tk):
         self._workbook_filter_tag_ids: dict[int, list[int]] = {}
         self.tag_filter_summary_var = tk.StringVar(value="Tag filter: All")
         self.search_query_var = tk.StringVar(value="")
-        self.dark_mode_var = tk.BooleanVar(value=self.repository.get_theme_mode() == "dark")
+        initial_theme_mode = self.repository.get_theme_mode()
+        self.dark_mode_var = tk.BooleanVar(value=initial_theme_mode == "dark")
+        self.light_mode_var = tk.BooleanVar(value=initial_theme_mode == "light")
         self.workbook_selection_var = tk.StringVar(value="")
         self._activity_legend_swatches: list[tk.Canvas] = []
 
@@ -350,12 +352,14 @@ class MainWindow(tk.Tk):
         entry_fg = str(palette["entry_fg"])
         selection_bg = str(palette["selection_bg"])
         selection_fg = str(palette["selection_fg"])
+        notebook_tab_font = (
+            self.fonts["latin"].cget("family"),
+            self.fonts["latin"].cget("size") + 1,
+            "bold",
+        )
+        notebook_tab_padding = (18, 10)
 
         style = ttk.Style(self)
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
 
         self.configure(background=str(palette["bg_root"]))
 
@@ -397,17 +401,15 @@ class MainWindow(tk.Tk):
             "App.TNotebook.Tab",
             background=surface_bg,
             foreground=fg,
-            font=(
-                self.fonts["latin"].cget("family"),
-                self.fonts["latin"].cget("size") + 1,
-                "bold",
-            ),
-            padding=(18, 10),
+            font=notebook_tab_font,
+            padding=notebook_tab_padding,
         )
         style.map(
             "App.TNotebook.Tab",
             background=[("selected", selection_bg)],
             foreground=[("selected", selection_fg)],
+            font=[("selected", notebook_tab_font), ("!selected", notebook_tab_font)],
+            padding=[("selected", notebook_tab_padding), ("!selected", notebook_tab_padding)],
         )
 
     def _configure_tier_tags(self) -> None:
@@ -473,13 +475,24 @@ class MainWindow(tk.Tk):
 
     def _on_dark_mode_toggled(self) -> None:
         requested_mode = "dark" if self.dark_mode_var.get() else "light"
+        self._set_theme_mode(requested_mode)
+
+    def _on_light_mode_toggled(self) -> None:
+        requested_mode = "light" if self.light_mode_var.get() else "dark"
+        self._set_theme_mode(requested_mode)
+
+    def _set_theme_mode(self, requested_mode: str) -> None:
         try:
             self.repository.set_theme_mode(requested_mode)
         except ValidationError as exc:
             messagebox.showerror("Theme error", str(exc), parent=self)
-            self.dark_mode_var.set(self.repository.get_theme_mode() == "dark")
+            active_mode = self.repository.get_theme_mode()
+            self.dark_mode_var.set(active_mode == "dark")
+            self.light_mode_var.set(active_mode == "light")
             return
 
+        self.dark_mode_var.set(requested_mode == "dark")
+        self.light_mode_var.set(requested_mode == "light")
         self._apply_theme()
 
     def _language_display_name(self, code: str) -> str:
@@ -965,18 +978,25 @@ class MainWindow(tk.Tk):
 
         ttk.Checkbutton(
             appearance_section,
+            text="Enable light mode",
+            variable=self.light_mode_var,
+            command=self._on_light_mode_toggled,
+        ).grid(row=0, column=0, sticky="w")
+
+        ttk.Checkbutton(
+            appearance_section,
             text="Enable dark mode",
             variable=self.dark_mode_var,
             command=self._on_dark_mode_toggled,
-        ).grid(row=0, column=0, sticky="w")
+        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
 
         ttk.Label(
             appearance_section,
-            text="Dark mode is applied immediately and remembered for next launch.",
+            text="Theme changes apply immediately and are remembered for next launch.",
             style="Status.TLabel",
             wraplength=620,
             justify="left",
-        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
+        ).grid(row=2, column=0, sticky="w", pady=(6, 0))
 
     def _set_home_action_enabled(self, enabled: bool) -> None:
         state = "normal" if enabled else "disabled"
