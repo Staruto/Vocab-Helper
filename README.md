@@ -106,7 +106,8 @@ python -m unittest discover -s tests -p "test_*.py"
 
 ## Appearance
 
-- Open `Settings` tab -> `Appearance` -> `Enable dark mode`
+- Open `Settings` tab -> `Appearance`
+- Choose either `Enable light mode` or `Enable dark mode`
 - Theme changes apply immediately without restarting the app
 - Preference is saved and restored on next launch
 
