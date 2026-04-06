@@ -33,6 +33,7 @@ Simple vocabulary memorization helper with a desktop GUI.
 - Includes predefined tag types: `part_of_speech` and `difficulty` (`N5`, `N4`, `N3`, `N2`, `N1`)
 - Supports per-target-language tag scopes (each target language keeps its own tag catalog)
 - Supports tag filtering in Home with ALL-match semantics across selected tags
+- Supports live search in Home across target text and meaning (case-insensitive contains)
 - Supports editable markdown details for each vocabulary with in-app display mode
 - Tracks latest practice date per vocabulary
 - Shows a GitHub-style contributions grid for daily practice activity (last 180 days)
@@ -117,6 +118,8 @@ python -m unittest discover -s tests -p "test_*.py"
 - Use `Filter tags` in Home to select filter tags
 - Filter behavior is `ALL`: a vocabulary must contain every selected tag to be shown
 - `Clear filter` removes all active tag filtering
+- Use `Search` in Home to filter by target text or meaning with case-insensitive partial matching
+- Search is applied live while typing and is combined with active tag filters
 
 ## Entry metadata and detail page
 
