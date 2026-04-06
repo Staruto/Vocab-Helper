@@ -20,6 +20,7 @@ from .validators import (
 
 class VocabRepository:
     ERROR_COUNT_RECOVERY_CHANCE = 0.35
+    THEME_MODES = ("light", "dark")
     PREDEFINED_PART_OF_SPEECH_TAGS = (
         "noun",
         "verb",
@@ -1088,6 +1089,20 @@ class VocabRepository:
             connection.commit()
         finally:
             connection.close()
+
+    def get_theme_mode(self) -> str:
+        raw = (self.get_setting("theme_mode", "light") or "light").strip().lower()
+        if raw not in self.THEME_MODES:
+            return "light"
+        return raw
+
+    def set_theme_mode(self, theme_mode: str) -> str:
+        normalized = theme_mode.strip().lower()
+        if normalized not in self.THEME_MODES:
+            allowed = ", ".join(self.THEME_MODES)
+            raise ValidationError(f"Theme mode must be one of: {allowed}.")
+        self.set_setting("theme_mode", normalized)
+        return normalized
 
     @staticmethod
     def _normalize_workbook_name(name: str) -> str:

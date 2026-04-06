@@ -6,7 +6,7 @@ import sqlite3
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import messagebox, simpledialog, ttk
-from typing import Callable
+from typing import Callable, Mapping
 
 from .db import VocabRepository
 from .kana import suggest_hiragana
@@ -32,11 +32,99 @@ LATIN_FONT_CANDIDATES = (
     "DejaVu Sans",
 )
 
-TIER_BG_COLORS = {
-    "gray": "#efefef",
-    "green": "#e7f7ea",
-    "yellow": "#fff5cf",
-    "red": "#fde7e7",
+THEME_PALETTES: dict[str, dict[str, object]] = {
+    "light": {
+        "bg_root": "#f3f3f3",
+        "surface_bg": "#ffffff",
+        "fg": "#1f2933",
+        "fg_muted": "#666666",
+        "status_fg": "#444444",
+        "border_subtle": "#d0d0d0",
+        "legend_border": "#cccccc",
+        "entry_bg": "#ffffff",
+        "entry_fg": "#1f2933",
+        "insert_color": "#1f2933",
+        "menu_bg": "#ffffff",
+        "menu_fg": "#1f2933",
+        "menu_active_bg": "#dbeeff",
+        "menu_active_fg": "#0f1720",
+        "code_inline_bg": "#f3f3f3",
+        "code_block_bg": "#f7f7f7",
+        "chip_unselected_bg": "#e3e3e3",
+        "chip_unselected_active_bg": "#d5d5d5",
+        "chip_text": "#1f2933",
+        "chip_secondary_text": "#667085",
+        "selection_bg": "#dbeafe",
+        "selection_fg": "#0f1720",
+        "tier_colors": {
+            "gray": "#efefef",
+            "green": "#e7f7ea",
+            "yellow": "#fff5cf",
+            "red": "#fde7e7",
+        },
+        "activity_colors": (
+            "#ebedf0",
+            "#c6e48b",
+            "#7bc96f",
+            "#239a3b",
+            "#196127",
+        ),
+        "tag_type_palette": (
+            ("#dff4ff", "#cdeaff"),
+            ("#e8f8e1", "#d8efcf"),
+            ("#fff1dc", "#ffe5c4"),
+            ("#fde8ef", "#f8d8e4"),
+            ("#f1e8ff", "#e7d9ff"),
+            ("#e7f7f4", "#d7f0eb"),
+            ("#f4efdf", "#ece4cd"),
+        ),
+    },
+    "dark": {
+        "bg_root": "#1b1d21",
+        "surface_bg": "#24272e",
+        "fg": "#e6e8eb",
+        "fg_muted": "#a9b0bb",
+        "status_fg": "#b8c0cc",
+        "border_subtle": "#4a505c",
+        "legend_border": "#596170",
+        "entry_bg": "#2c313a",
+        "entry_fg": "#e6e8eb",
+        "insert_color": "#e6e8eb",
+        "menu_bg": "#2a2e36",
+        "menu_fg": "#e6e8eb",
+        "menu_active_bg": "#3b4452",
+        "menu_active_fg": "#ffffff",
+        "code_inline_bg": "#333944",
+        "code_block_bg": "#2d333d",
+        "chip_unselected_bg": "#3a404b",
+        "chip_unselected_active_bg": "#4a5260",
+        "chip_text": "#e6e8eb",
+        "chip_secondary_text": "#a9b0bb",
+        "selection_bg": "#375a7f",
+        "selection_fg": "#f8fbff",
+        "tier_colors": {
+            "gray": "#30343b",
+            "green": "#20392a",
+            "yellow": "#453d1f",
+            "red": "#442426",
+        },
+        "activity_colors": (
+            "#2d3138",
+            "#355b45",
+            "#2f7a4f",
+            "#24915a",
+            "#16a34a",
+        ),
+        "tag_type_palette": (
+            ("#28465e", "#33566f"),
+            ("#28503a", "#326149"),
+            ("#5b4b26", "#6a5830"),
+            ("#5a2d41", "#6a3950"),
+            ("#43315f", "#53406f"),
+            ("#255352", "#306665"),
+            ("#575224", "#66612f"),
+        ),
+    },
 }
 
 LANGUAGE_NAMES = PREDEFINED_LANGUAGE_NAMES
@@ -53,13 +141,17 @@ PART_OF_SPEECH_OPTIONS = (
     "other",
 )
 
-ACTIVITY_COLORS = (
-    "#ebedf0",
-    "#c6e48b",
-    "#7bc96f",
-    "#239a3b",
-    "#196127",
-)
+def _resolve_theme_palette(widget: tk.Misc | None) -> Mapping[str, object]:
+    current = widget
+    while current is not None:
+        palette_getter = getattr(current, "_theme_palette", None)
+        if callable(palette_getter):
+            palette = palette_getter()
+            if isinstance(palette, Mapping):
+                return palette
+            break
+        current = getattr(current, "master", None)
+    return THEME_PALETTES["light"]
 
 
 def _pick_font_family(root: tk.Misc, candidates: tuple[str, ...]) -> str:
@@ -108,7 +200,16 @@ def _insert_markdown_inline(widget: tk.Text, text: str, tags: tuple[str, ...]) -
         index += 1
 
 
-def _render_markdown_to_text(widget: tk.Text, markdown_text: str, base_font: tkfont.Font, monospace_font: tkfont.Font) -> None:
+def _render_markdown_to_text(
+    widget: tk.Text,
+    markdown_text: str,
+    base_font: tkfont.Font,
+    monospace_font: tkfont.Font,
+    body_fg: str,
+    body_bg: str,
+    code_inline_bg: str,
+    code_block_bg: str,
+) -> None:
     heading1_font = base_font.copy()
     heading1_font.configure(size=base_font.cget("size") + 4, weight="bold")
     heading2_font = base_font.copy()
@@ -121,16 +222,16 @@ def _render_markdown_to_text(widget: tk.Text, markdown_text: str, base_font: tkf
     italic_font = base_font.copy()
     italic_font.configure(slant="italic")
 
-    widget.configure(state="normal")
+    widget.configure(state="normal", background=body_bg, foreground=body_fg, insertbackground=body_fg)
     widget.delete("1.0", "end")
-    widget.tag_configure("md_body", font=base_font)
-    widget.tag_configure("md_h1", font=heading1_font, spacing1=8, spacing3=4)
-    widget.tag_configure("md_h2", font=heading2_font, spacing1=6, spacing3=3)
-    widget.tag_configure("md_h3", font=heading3_font, spacing1=4, spacing3=2)
-    widget.tag_configure("md_bold", font=bold_font)
-    widget.tag_configure("md_italic", font=italic_font)
-    widget.tag_configure("md_code_inline", font=monospace_font, background="#f3f3f3")
-    widget.tag_configure("md_code_block", font=monospace_font, background="#f7f7f7", lmargin1=8, lmargin2=8)
+    widget.tag_configure("md_body", font=base_font, foreground=body_fg, background=body_bg)
+    widget.tag_configure("md_h1", font=heading1_font, foreground=body_fg, background=body_bg, spacing1=8, spacing3=4)
+    widget.tag_configure("md_h2", font=heading2_font, foreground=body_fg, background=body_bg, spacing1=6, spacing3=3)
+    widget.tag_configure("md_h3", font=heading3_font, foreground=body_fg, background=body_bg, spacing1=4, spacing3=2)
+    widget.tag_configure("md_bold", font=bold_font, foreground=body_fg, background=body_bg)
+    widget.tag_configure("md_italic", font=italic_font, foreground=body_fg, background=body_bg)
+    widget.tag_configure("md_code_inline", font=monospace_font, foreground=body_fg, background=code_inline_bg)
+    widget.tag_configure("md_code_block", font=monospace_font, foreground=body_fg, background=code_block_bg, lmargin1=8, lmargin2=8)
 
     in_code_block = False
     for raw_line in markdown_text.splitlines():
@@ -212,7 +313,9 @@ class MainWindow(tk.Tk):
         self._workbook_filter_tag_ids: dict[int, list[int]] = {}
         self.tag_filter_summary_var = tk.StringVar(value="Tag filter: All")
         self.search_query_var = tk.StringVar(value="")
+        self.dark_mode_var = tk.BooleanVar(value=self.repository.get_theme_mode() == "dark")
         self.workbook_selection_var = tk.StringVar(value="")
+        self._activity_legend_swatches: list[tk.Canvas] = []
 
         self.title("Vocabulary Workbook Helper")
         self.geometry("900x580")
@@ -223,6 +326,7 @@ class MainWindow(tk.Tk):
 
         self._configure_styles()
         self._build_widgets()
+        self._apply_theme(refresh_entries_now=False)
         self.search_query_var.trace_add("write", self._on_search_query_changed)
         self._refresh_workbook_selector(select_workbook_id=self.current_workbook_id)
         self._refresh_test_button_labels()
@@ -232,18 +336,67 @@ class MainWindow(tk.Tk):
         self._bind_shortcuts()
         self.refresh_entries()
 
+    def _theme_palette(self) -> Mapping[str, object]:
+        mode = "dark" if self.dark_mode_var.get() else "light"
+        return THEME_PALETTES[mode]
+
     def _configure_styles(self) -> None:
+        palette = self._theme_palette()
+        surface_bg = str(palette["surface_bg"])
+        fg = str(palette["fg"])
+        status_fg = str(palette["status_fg"])
+        border = str(palette["border_subtle"])
+        entry_bg = str(palette["entry_bg"])
+        entry_fg = str(palette["entry_fg"])
+        selection_bg = str(palette["selection_bg"])
+        selection_fg = str(palette["selection_fg"])
+
         style = ttk.Style(self)
-        style.configure("App.TLabel", font=self.fonts["latin"])
-        style.configure("Status.TLabel", font=self.fonts["latin"], foreground="#444444")
-        style.configure("App.TButton", font=self.fonts["latin"])
-        style.configure("App.TEntry", font=self.fonts["latin"])
-        style.configure("Japanese.TEntry", font=self.fonts["japanese"])
-        style.configure("Treeview", font=self.fonts["japanese"], rowheight=30)
-        style.configure("Treeview.Heading", font=self.fonts["tree_heading"])
-        style.configure("App.TNotebook", padding=2)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        self.configure(background=str(palette["bg_root"]))
+
+        style.configure("TFrame", background=surface_bg)
+        style.configure("TLabelframe", background=surface_bg, bordercolor=border)
+        style.configure("TLabelframe.Label", background=surface_bg, foreground=fg)
+        style.configure("TLabel", background=surface_bg, foreground=fg)
+        style.configure("TButton", background=surface_bg, foreground=fg)
+        style.map("TButton", background=[("active", surface_bg)], foreground=[("active", fg)])
+        style.configure("TCheckbutton", background=surface_bg, foreground=fg)
+        style.configure("TRadiobutton", background=surface_bg, foreground=fg)
+        style.configure("TCombobox", fieldbackground=entry_bg, background=surface_bg, foreground=entry_fg)
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", entry_bg)],
+            foreground=[("readonly", entry_fg)],
+            selectbackground=[("readonly", selection_bg)],
+            selectforeground=[("readonly", selection_fg)],
+        )
+
+        style.configure("App.TLabel", font=self.fonts["latin"], background=surface_bg, foreground=fg)
+        style.configure("Status.TLabel", font=self.fonts["latin"], background=surface_bg, foreground=status_fg)
+        style.configure("App.TButton", font=self.fonts["latin"], background=surface_bg, foreground=fg)
+        style.configure("App.TEntry", font=self.fonts["latin"], fieldbackground=entry_bg, foreground=entry_fg)
+        style.configure("Japanese.TEntry", font=self.fonts["japanese"], fieldbackground=entry_bg, foreground=entry_fg)
+        style.configure(
+            "Treeview",
+            font=self.fonts["japanese"],
+            rowheight=30,
+            background=surface_bg,
+            fieldbackground=surface_bg,
+            foreground=fg,
+            bordercolor=border,
+        )
+        style.map("Treeview", background=[("selected", selection_bg)], foreground=[("selected", selection_fg)])
+        style.configure("Treeview.Heading", font=self.fonts["tree_heading"], background=surface_bg, foreground=fg)
+        style.configure("App.TNotebook", padding=2, background=surface_bg, bordercolor=border)
         style.configure(
             "App.TNotebook.Tab",
+            background=surface_bg,
+            foreground=fg,
             font=(
                 self.fonts["latin"].cget("family"),
                 self.fonts["latin"].cget("size") + 1,
@@ -251,6 +404,83 @@ class MainWindow(tk.Tk):
             ),
             padding=(18, 10),
         )
+        style.map(
+            "App.TNotebook.Tab",
+            background=[("selected", selection_bg)],
+            foreground=[("selected", selection_fg)],
+        )
+
+    def _configure_tier_tags(self) -> None:
+        palette = self._theme_palette()
+        tier_colors = palette["tier_colors"]
+        if not isinstance(tier_colors, Mapping):
+            return
+        self.tree.tag_configure("tier_gray", background=str(tier_colors["gray"]))
+        self.tree.tag_configure("tier_green", background=str(tier_colors["green"]))
+        self.tree.tag_configure("tier_yellow", background=str(tier_colors["yellow"]))
+        self.tree.tag_configure("tier_red", background=str(tier_colors["red"]))
+
+    def _refresh_activity_legend(self) -> None:
+        palette = self._theme_palette()
+        activity_colors = palette["activity_colors"]
+        if not isinstance(activity_colors, tuple):
+            return
+        for index, swatch in enumerate(self._activity_legend_swatches):
+            swatch_color = str(activity_colors[index]) if index < len(activity_colors) else str(activity_colors[-1])
+            swatch.configure(
+                background=str(palette["surface_bg"]),
+                highlightbackground=str(palette["legend_border"]),
+            )
+            swatch.delete("all")
+            swatch.create_rectangle(0, 0, 10, 10, fill=swatch_color, outline=swatch_color)
+
+    def _apply_theme(self, refresh_entries_now: bool = True) -> None:
+        palette = self._theme_palette()
+        self.configure(background=str(palette["bg_root"]))
+        self._configure_styles()
+        self._configure_tier_tags()
+        self._refresh_activity_legend()
+
+        for listbox in (
+            getattr(self, "settings_workbook_listbox", None),
+            getattr(self, "settings_property_listbox", None),
+        ):
+            if isinstance(listbox, tk.Listbox):
+                listbox.configure(
+                    background=str(palette["entry_bg"]),
+                    foreground=str(palette["entry_fg"]),
+                    selectbackground=str(palette["selection_bg"]),
+                    selectforeground=str(palette["selection_fg"]),
+                    highlightbackground=str(palette["border_subtle"]),
+                )
+
+        if hasattr(self, "activity_canvas"):
+            self.activity_canvas.configure(background=str(palette["surface_bg"]))
+
+        if hasattr(self, "context_menu"):
+            try:
+                self.context_menu.configure(
+                    background=str(palette["menu_bg"]),
+                    foreground=str(palette["menu_fg"]),
+                    activebackground=str(palette["menu_active_bg"]),
+                    activeforeground=str(palette["menu_active_fg"]),
+                )
+            except tk.TclError:
+                pass
+
+        if refresh_entries_now:
+            self.refresh_entries()
+
+    def _on_dark_mode_toggled(self) -> None:
+        requested_mode = "dark" if self.dark_mode_var.get() else "light"
+        try:
+            self.repository.set_theme_mode(requested_mode)
+        except ValidationError as exc:
+            messagebox.showerror("Theme error", str(exc), parent=self)
+            self.dark_mode_var.set(self.repository.get_theme_mode() == "dark")
+            return
+
+        self._apply_theme()
 
     def _language_display_name(self, code: str) -> str:
         return LANGUAGE_NAMES.get(code.upper(), code.upper())
@@ -407,10 +637,7 @@ class MainWindow(tk.Tk):
         self.tree.bind("<Button-3>", self._show_context_menu)
         self.tree.bind("<Double-Button-1>", self._on_tree_double_click)
 
-        self.tree.tag_configure("tier_gray", background=TIER_BG_COLORS["gray"])
-        self.tree.tag_configure("tier_green", background=TIER_BG_COLORS["green"])
-        self.tree.tag_configure("tier_yellow", background=TIER_BG_COLORS["yellow"])
-        self.tree.tag_configure("tier_red", background=TIER_BG_COLORS["red"])
+        self._configure_tier_tags()
 
         button_row = ttk.Frame(home_page, padding=(0, 10, 0, 0))
         button_row.grid(row=1, column=0, sticky="ew")
@@ -571,18 +798,29 @@ class MainWindow(tk.Tk):
             activity_frame,
             height=140,
             highlightthickness=0,
-            background="#ffffff",
+            background=str(self._theme_palette()["surface_bg"]),
         )
         self.activity_canvas.grid(row=1, column=0, sticky="w")
 
         legend_frame = ttk.Frame(activity_frame)
         legend_frame.grid(row=2, column=0, sticky="w", pady=(6, 0))
         ttk.Label(legend_frame, text="Less", style="Status.TLabel").grid(row=0, column=0, padx=(0, 6))
-        for index, color in enumerate(ACTIVITY_COLORS):
-            swatch = tk.Canvas(legend_frame, width=10, height=10, highlightthickness=1, highlightbackground="#cccccc")
+        activity_colors = self._theme_palette()["activity_colors"]
+        if not isinstance(activity_colors, tuple):
+            activity_colors = ()
+        for index, color in enumerate(activity_colors):
+            swatch = tk.Canvas(
+                legend_frame,
+                width=10,
+                height=10,
+                highlightthickness=1,
+                highlightbackground=str(self._theme_palette()["legend_border"]),
+                background=str(self._theme_palette()["surface_bg"]),
+            )
             swatch.create_rectangle(0, 0, 10, 10, fill=color, outline=color)
             swatch.grid(row=0, column=index + 1, padx=(0, 4))
-        ttk.Label(legend_frame, text="More", style="Status.TLabel").grid(row=0, column=len(ACTIVITY_COLORS) + 1, padx=(2, 0))
+            self._activity_legend_swatches.append(swatch)
+        ttk.Label(legend_frame, text="More", style="Status.TLabel").grid(row=0, column=len(activity_colors) + 1, padx=(2, 0))
 
         self._build_settings_widgets(settings_page)
 
@@ -609,6 +847,7 @@ class MainWindow(tk.Tk):
         root.columnconfigure(1, weight=1)
         root.rowconfigure(0, weight=1)
         root.rowconfigure(1, weight=1)
+        root.rowconfigure(2, weight=0)
 
         workbook_section = ttk.LabelFrame(root, text="Workbooks", padding=10)
         workbook_section.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=(0, 6))
@@ -719,6 +958,25 @@ class MainWindow(tk.Tk):
         property_scroll = ttk.Scrollbar(property_frame, orient="vertical", command=self.settings_property_listbox.yview)
         property_scroll.grid(row=0, column=1, sticky="ns")
         self.settings_property_listbox.configure(yscrollcommand=property_scroll.set)
+
+        appearance_section = ttk.LabelFrame(root, text="Appearance", padding=10)
+        appearance_section.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        appearance_section.columnconfigure(0, weight=1)
+
+        ttk.Checkbutton(
+            appearance_section,
+            text="Enable dark mode",
+            variable=self.dark_mode_var,
+            command=self._on_dark_mode_toggled,
+        ).grid(row=0, column=0, sticky="w")
+
+        ttk.Label(
+            appearance_section,
+            text="Dark mode is applied immediately and remembered for next launch.",
+            style="Status.TLabel",
+            wraplength=620,
+            justify="left",
+        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
 
     def _set_home_action_enabled(self, enabled: bool) -> None:
         state = "normal" if enabled else "disabled"
@@ -1301,6 +1559,7 @@ class MainWindow(tk.Tk):
             include_part_of_speech=True,
             title="Filter by tags",
             text_font=self.fonts["latin"],
+            theme_palette=self._theme_palette(),
         )
         self.wait_window(dialog)
         if dialog.result is None:
@@ -1331,6 +1590,11 @@ class MainWindow(tk.Tk):
         return 4
 
     def _refresh_activity_grid(self) -> None:
+        palette = self._theme_palette()
+        activity_colors = palette["activity_colors"]
+        if not isinstance(activity_colors, tuple):
+            activity_colors = ()
+
         counts_by_date = self.repository.get_daily_unique_practice_counts(
             days_back=180,
             workbook_id=self.current_workbook_id,
@@ -1375,7 +1639,7 @@ class MainWindow(tk.Tk):
                 y_center,
                 text=label,
                 anchor="e",
-                fill="#666666",
+                fill=str(palette["fg_muted"]),
                 font=weekday_font,
             )
 
@@ -1384,7 +1648,7 @@ class MainWindow(tk.Tk):
             week_index = (current - grid_start).days // 7
             weekday_index = current.weekday()
             count = counts_by_date.get(current.isoformat(), 0)
-            color = ACTIVITY_COLORS[self._activity_level(count)]
+            color = str(activity_colors[self._activity_level(count)]) if activity_colors else str(palette["surface_bg"])
 
             x1 = grid_origin_x + week_index * (cell_size + gap)
             y1 = grid_origin_y + weekday_index * (cell_size + gap)
@@ -1397,7 +1661,7 @@ class MainWindow(tk.Tk):
                 x2,
                 y2,
                 fill=color,
-                outline="#d0d0d0",
+                outline=str(palette["border_subtle"]),
             )
             current += timedelta(days=1)
 
@@ -1426,7 +1690,7 @@ class MainWindow(tk.Tk):
                 month_y,
                 text=label_text,
                 anchor="w",
-                fill="#666666",
+                fill=str(palette["fg_muted"]),
                 font=month_font,
             )
             last_label_x = label_x
@@ -1815,6 +2079,7 @@ class MainWindow(tk.Tk):
             include_part_of_speech=True,
             title="Assign tags to selected entries",
             text_font=self.fonts["latin"],
+            theme_palette=self._theme_palette(),
         )
         self.wait_window(dialog)
         if dialog.result is None:
@@ -3270,6 +3535,7 @@ class BulkAddDialog(tk.Toplevel):
         self.target_label = target_label
         self.assistant_label = assistant_label
         self._show_kana = show_kana
+        self.theme_palette = dict(_resolve_theme_palette(parent))
 
         self.title("Bulk add vocabulary")
         self.transient(parent)
@@ -3279,6 +3545,7 @@ class BulkAddDialog(tk.Toplevel):
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
+        self.configure(background=str(self.theme_palette["bg_root"]))
 
         frame = ttk.Frame(self, padding=12)
         frame.grid(row=0, column=0, sticky="nsew")
@@ -3337,6 +3604,15 @@ class BulkAddDialog(tk.Toplevel):
         self.jp_text = tk.Text(columns_frame, width=26, height=14, wrap="none", font=text_font)
         self.kana_text = tk.Text(columns_frame, width=26, height=14, wrap="none", font=text_font)
         self.en_text = tk.Text(columns_frame, width=26, height=14, wrap="none", font=text_font)
+
+        for text_widget in (self.jp_text, self.kana_text, self.en_text):
+            text_widget.configure(
+                background=str(self.theme_palette["entry_bg"]),
+                foreground=str(self.theme_palette["entry_fg"]),
+                insertbackground=str(self.theme_palette["insert_color"]),
+                highlightbackground=str(self.theme_palette["border_subtle"]),
+                highlightcolor=str(self.theme_palette["selection_bg"]),
+            )
 
         self.jp_text.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         if self._show_kana:
@@ -3583,12 +3859,14 @@ class TagSelectionDialog(tk.Toplevel):
         include_part_of_speech: bool,
         title: str,
         text_font: tkfont.Font,
+        theme_palette: Mapping[str, object] | None = None,
     ) -> None:
         super().__init__(parent)
         self.repository = repository
         self.target_language_code = target_language_code
         self.include_part_of_speech = include_part_of_speech
         self.text_font = text_font
+        self.theme_palette = dict(theme_palette or _resolve_theme_palette(parent))
         self.result: list[int] | None = None
         self._selected_tag_ids: set[int] = set(selected_tag_ids)
         self._chip_vars: dict[int, tk.BooleanVar] = {}
@@ -3604,6 +3882,7 @@ class TagSelectionDialog(tk.Toplevel):
         self.minsize(760, 500)
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
+        self.configure(background=str(self.theme_palette["bg_root"]))
 
         frame = ttk.Frame(self, padding=12)
         frame.grid(row=0, column=0, sticky="nsew")
@@ -3624,15 +3903,15 @@ class TagSelectionDialog(tk.Toplevel):
         self.tag_canvas = tk.Canvas(
             list_frame,
             highlightthickness=1,
-            highlightbackground="#d0d0d0",
-            background="#ffffff",
+            highlightbackground=str(self.theme_palette["border_subtle"]),
+            background=str(self.theme_palette["surface_bg"]),
         )
         self.tag_canvas.grid(row=0, column=0, sticky="nsew")
         list_scroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.tag_canvas.yview)
         list_scroll.grid(row=0, column=1, sticky="ns")
         self.tag_canvas.configure(yscrollcommand=list_scroll.set)
 
-        self.tag_content_frame = tk.Frame(self.tag_canvas, background="#ffffff")
+        self.tag_content_frame = tk.Frame(self.tag_canvas, background=str(self.theme_palette["surface_bg"]))
         self._tag_content_window = self.tag_canvas.create_window(
             (0, 0),
             window=self.tag_content_frame,
@@ -3727,15 +4006,15 @@ class TagSelectionDialog(tk.Toplevel):
             button.configure(
                 background=selected_fill,
                 activebackground=selected_active_fill,
-                fg="#1f2933",
-                activeforeground="#1f2933",
+                fg=str(self.theme_palette["chip_text"]),
+                activeforeground=str(self.theme_palette["chip_text"]),
             )
         else:
             button.configure(
-                background="#e3e3e3",
-                activebackground="#d5d5d5",
-                fg="#1f2933",
-                activeforeground="#1f2933",
+                background=str(self.theme_palette["chip_unselected_bg"]),
+                activebackground=str(self.theme_palette["chip_unselected_active_bg"]),
+                fg=str(self.theme_palette["chip_text"]),
+                activeforeground=str(self.theme_palette["chip_text"]),
             )
 
     def _render_tag_sections(self) -> None:
@@ -3750,7 +4029,8 @@ class TagSelectionDialog(tk.Toplevel):
             tk.Label(
                 self.tag_content_frame,
                 text="No tags available.",
-                background="#ffffff",
+                background=str(self.theme_palette["surface_bg"]),
+                foreground=str(self.theme_palette["fg_muted"]),
                 anchor="w",
                 justify="left",
                 font=self.text_font,
@@ -3760,21 +4040,15 @@ class TagSelectionDialog(tk.Toplevel):
         heading_font = self.text_font.copy()
         heading_font.configure(weight="bold")
 
-        type_palette: tuple[tuple[str, str], ...] = (
-            ("#dff4ff", "#cdeaff"),
-            ("#e8f8e1", "#d8efcf"),
-            ("#fff1dc", "#ffe5c4"),
-            ("#fde8ef", "#f8d8e4"),
-            ("#f1e8ff", "#e7d9ff"),
-            ("#e7f7f4", "#d7f0eb"),
-            ("#f4efdf", "#ece4cd"),
-        )
+        type_palette = self.theme_palette["tag_type_palette"]
+        if not isinstance(type_palette, tuple):
+            type_palette = (("#dff4ff", "#cdeaff"),)
 
         sorted_type_names = sorted(self._tags_by_type)
         available_width = max(self.tag_canvas.winfo_width() - 34, 340)
 
         for type_index, type_name in enumerate(sorted_type_names):
-            section_frame = tk.Frame(self.tag_content_frame, background="#ffffff")
+            section_frame = tk.Frame(self.tag_content_frame, background=str(self.theme_palette["surface_bg"]))
             section_frame.pack(fill="x", anchor="w", padx=6, pady=(8, 2))
 
             selected_fill, selected_active_fill = type_palette[type_index % len(type_palette)]
@@ -3782,13 +4056,14 @@ class TagSelectionDialog(tk.Toplevel):
             tk.Label(
                 section_frame,
                 text=self._display_type_name(type_name),
-                background="#ffffff",
+                background=str(self.theme_palette["surface_bg"]),
+                foreground=str(self.theme_palette["fg"]),
                 anchor="w",
                 justify="left",
                 font=heading_font,
             ).pack(anchor="w")
 
-            chips_frame = tk.Frame(section_frame, background="#ffffff")
+            chips_frame = tk.Frame(section_frame, background=str(self.theme_palette["surface_bg"]))
             chips_frame.pack(fill="x", anchor="w", pady=(4, 0))
 
             sorted_tags = sorted(self._tags_by_type[type_name], key=lambda item: item[1].lower())
@@ -3878,6 +4153,7 @@ class TagManagerDialog(tk.Toplevel):
         self.repository = repository
         self.target_language_code = target_language_code
         self.text_font = text_font
+        self.theme_palette = dict(_resolve_theme_palette(parent))
         self.changed = False
 
         self._type_rows: list[tuple[int, str, bool]] = []
@@ -3888,6 +4164,7 @@ class TagManagerDialog(tk.Toplevel):
         self.grab_set()
         self.geometry("860x520")
         self.minsize(700, 420)
+        self.configure(background=str(self.theme_palette["bg_root"]))
 
         frame = ttk.Frame(self, padding=12)
         frame.grid(row=0, column=0, sticky="nsew")
@@ -3929,6 +4206,15 @@ class TagManagerDialog(tk.Toplevel):
         ttk.Button(actions, text="Add tag", command=self._add_tag, style="App.TButton").grid(row=0, column=2, padx=(0, 8))
         ttk.Button(actions, text="Delete tag", command=self._delete_tag, style="App.TButton").grid(row=0, column=3, padx=(0, 16))
         ttk.Button(actions, text="Close", command=self.destroy, style="App.TButton").grid(row=0, column=4)
+
+        for listbox in (self.type_listbox, self.tag_listbox):
+            listbox.configure(
+                background=str(self.theme_palette["entry_bg"]),
+                foreground=str(self.theme_palette["entry_fg"]),
+                selectbackground=str(self.theme_palette["selection_bg"]),
+                selectforeground=str(self.theme_palette["selection_fg"]),
+                highlightbackground=str(self.theme_palette["border_subtle"]),
+            )
 
         self._refresh_type_list(select_first=True)
 
@@ -4256,6 +4542,7 @@ class EntryDialog(tk.Toplevel):
             include_part_of_speech=False,
             title="Select tags",
             text_font=tkfont.nametofont("TkDefaultFont"),
+            theme_palette=_resolve_theme_palette(self),
         )
         self.wait_window(dialog)
         if dialog.result is None:
@@ -4701,6 +4988,7 @@ class VocabularyDetailDialog(tk.Toplevel):
         self.target_language_code = target_language_code
         self.enable_kana_suggest = enable_kana_suggest
         self.on_saved = on_saved
+        self.theme_palette = dict(_resolve_theme_palette(parent))
 
         self._auto_suggest_job: str | None = None
         self._updating_kana = False
@@ -4723,6 +5011,7 @@ class VocabularyDetailDialog(tk.Toplevel):
         self.grab_set()
         self.geometry("900x680")
         self.minsize(760, 560)
+        self.configure(background=str(self.theme_palette["bg_root"]))
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
@@ -4776,7 +5065,12 @@ class VocabularyDetailDialog(tk.Toplevel):
             column=0,
             sticky="w",
         )
-        self._tags_chip_area = tk.Frame(tag_actions, background="#ffffff", highlightthickness=0, borderwidth=0)
+        self._tags_chip_area = tk.Frame(
+            tag_actions,
+            background=str(self.theme_palette["surface_bg"]),
+            highlightthickness=0,
+            borderwidth=0,
+        )
         self._tags_chip_area.grid(row=0, column=1, sticky="w", padx=(8, 0))
 
         ttk.Label(header, textvariable=self.stats_var, style="Status.TLabel").grid(
@@ -4842,6 +5136,17 @@ class VocabularyDetailDialog(tk.Toplevel):
         self.details_editor.configure(yscrollcommand=editor_scroll.set)
         editor_frame.grid_remove()
 
+        self.details_preview.configure(
+            background=str(self.theme_palette["surface_bg"]),
+            foreground=str(self.theme_palette["fg"]),
+            insertbackground=str(self.theme_palette["insert_color"]),
+        )
+        self.details_editor.configure(
+            background=str(self.theme_palette["entry_bg"]),
+            foreground=str(self.theme_palette["entry_fg"]),
+            insertbackground=str(self.theme_palette["insert_color"]),
+        )
+
         self._details_preview_frame = preview_frame
         self._details_editor_frame = editor_frame
 
@@ -4892,6 +5197,10 @@ class VocabularyDetailDialog(tk.Toplevel):
             self.details_markdown,
             self.text_fonts["latin"],
             tkfont.Font(self, family="Consolas", size=BASE_FONT_SIZE),
+            body_fg=str(self.theme_palette["fg"]),
+            body_bg=str(self.theme_palette["surface_bg"]),
+            code_inline_bg=str(self.theme_palette["code_inline_bg"]),
+            code_block_bg=str(self.theme_palette["code_block_bg"]),
         )
 
     def _toggle_markdown_mode(self) -> None:
@@ -4909,6 +5218,10 @@ class VocabularyDetailDialog(tk.Toplevel):
             self.details_markdown,
             self.text_fonts["latin"],
             tkfont.Font(self, family="Consolas", size=BASE_FONT_SIZE),
+            body_fg=str(self.theme_palette["fg"]),
+            body_bg=str(self.theme_palette["surface_bg"]),
+            code_inline_bg=str(self.theme_palette["code_inline_bg"]),
+            code_block_bg=str(self.theme_palette["code_block_bg"]),
         )
         self._details_editor_frame.grid_remove()
         self._details_preview_frame.grid()
@@ -4961,6 +5274,7 @@ class VocabularyDetailDialog(tk.Toplevel):
             include_part_of_speech=True,
             title="Select tags",
             text_font=self.text_fonts["latin"],
+            theme_palette=_resolve_theme_palette(self),
         )
         self.wait_window(dialog)
         if dialog.result is None:
@@ -4977,22 +5291,16 @@ class VocabularyDetailDialog(tk.Toplevel):
             chip.destroy()
         self._tag_chip_labels = []
 
-        type_palette: tuple[tuple[str, str], ...] = (
-            ("#dff4ff", "#cdeaff"),
-            ("#e8f8e1", "#d8efcf"),
-            ("#fff1dc", "#ffe5c4"),
-            ("#fde8ef", "#f8d8e4"),
-            ("#f1e8ff", "#e7d9ff"),
-            ("#e7f7f4", "#d7f0eb"),
-            ("#f4efdf", "#ece4cd"),
-        )
+        type_palette = self.theme_palette["tag_type_palette"]
+        if not isinstance(type_palette, tuple):
+            type_palette = (("#dff4ff", "#cdeaff"),)
 
         if not self.selected_tag_ids:
             empty_label = tk.Label(
                 self._tags_chip_area,
                 text="No tags selected",
-                background="#ffffff",
-                foreground="#667085",
+                background=str(self.theme_palette["surface_bg"]),
+                foreground=str(self.theme_palette["chip_secondary_text"]),
                 anchor="w",
                 justify="left",
                 font=self.text_fonts["latin"],
@@ -5010,8 +5318,8 @@ class VocabularyDetailDialog(tk.Toplevel):
             fallback_label = tk.Label(
                 self._tags_chip_area,
                 text=f"{len(self.selected_tag_ids)} tags selected",
-                background="#ffffff",
-                foreground="#667085",
+                background=str(self.theme_palette["surface_bg"]),
+                foreground=str(self.theme_palette["chip_secondary_text"]),
                 anchor="w",
                 justify="left",
                 font=self.text_fonts["latin"],
@@ -5029,8 +5337,8 @@ class VocabularyDetailDialog(tk.Toplevel):
             fallback_label = tk.Label(
                 self._tags_chip_area,
                 text=f"{len(self.selected_tag_ids)} tags selected",
-                background="#ffffff",
-                foreground="#667085",
+                background=str(self.theme_palette["surface_bg"]),
+                foreground=str(self.theme_palette["chip_secondary_text"]),
                 anchor="w",
                 justify="left",
                 font=self.text_fonts["latin"],
@@ -5054,7 +5362,7 @@ class VocabularyDetailDialog(tk.Toplevel):
                 self._tags_chip_area,
                 text=f"{self._display_type_name(type_name)}: {tag_name}",
                 background=selected_fill,
-                foreground="#1f2933",
+                foreground=str(self.theme_palette["chip_text"]),
                 relief="solid",
                 borderwidth=1,
                 padx=8,
