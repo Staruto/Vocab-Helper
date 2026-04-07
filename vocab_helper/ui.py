@@ -141,6 +141,8 @@ PART_OF_SPEECH_OPTIONS = (
     "other",
 )
 
+THEME_MODE_VALUES = ("light", "dark")
+
 def _resolve_theme_palette(widget: tk.Misc | None) -> Mapping[str, object]:
     current = widget
     while current is not None:
@@ -314,8 +316,9 @@ class MainWindow(tk.Tk):
         self.tag_filter_summary_var = tk.StringVar(value="Tag filter: All")
         self.search_query_var = tk.StringVar(value="")
         initial_theme_mode = self.repository.get_theme_mode()
-        self.dark_mode_var = tk.BooleanVar(value=initial_theme_mode == "dark")
-        self.light_mode_var = tk.BooleanVar(value=initial_theme_mode == "light")
+        if initial_theme_mode not in THEME_MODE_VALUES:
+            initial_theme_mode = "light"
+        self.theme_mode_var = tk.StringVar(value=initial_theme_mode)
         self.workbook_selection_var = tk.StringVar(value="")
         self._activity_legend_swatches: list[tk.Canvas] = []
 
@@ -339,7 +342,9 @@ class MainWindow(tk.Tk):
         self.refresh_entries()
 
     def _theme_palette(self) -> Mapping[str, object]:
-        mode = "dark" if self.dark_mode_var.get() else "light"
+        mode = self.theme_mode_var.get().strip().lower()
+        if mode not in THEME_PALETTES:
+            mode = "light"
         return THEME_PALETTES[mode]
 
     def _configure_styles(self) -> None:
@@ -360,6 +365,14 @@ class MainWindow(tk.Tk):
         notebook_tab_padding = (18, 10)
 
         style = ttk.Style(self)
+        available_themes = set(style.theme_names())
+        for candidate in ("alt", "default"):
+            if candidate in available_themes:
+                try:
+                    style.theme_use(candidate)
+                except tk.TclError:
+                    continue
+                break
 
         self.configure(background=str(palette["bg_root"]))
 
@@ -368,9 +381,23 @@ class MainWindow(tk.Tk):
         style.configure("TLabelframe.Label", background=surface_bg, foreground=fg)
         style.configure("TLabel", background=surface_bg, foreground=fg)
         style.configure("TButton", background=surface_bg, foreground=fg)
-        style.map("TButton", background=[("active", surface_bg)], foreground=[("active", fg)])
+        style.map(
+            "TButton",
+            background=[("disabled", surface_bg), ("pressed", surface_bg), ("active", surface_bg), ("!disabled", surface_bg)],
+            foreground=[("disabled", status_fg), ("!disabled", fg)],
+        )
         style.configure("TCheckbutton", background=surface_bg, foreground=fg)
+        style.map(
+            "TCheckbutton",
+            background=[("active", surface_bg), ("!disabled", surface_bg)],
+            foreground=[("disabled", status_fg), ("!disabled", fg)],
+        )
         style.configure("TRadiobutton", background=surface_bg, foreground=fg)
+        style.map(
+            "TRadiobutton",
+            background=[("active", surface_bg), ("!disabled", surface_bg)],
+            foreground=[("disabled", status_fg), ("!disabled", fg)],
+        )
         style.configure("TCombobox", fieldbackground=entry_bg, background=surface_bg, foreground=entry_fg)
         style.map(
             "TCombobox",
@@ -379,10 +406,19 @@ class MainWindow(tk.Tk):
             selectbackground=[("readonly", selection_bg)],
             selectforeground=[("readonly", selection_fg)],
         )
+        self.option_add("*TCombobox*Listbox.background", entry_bg)
+        self.option_add("*TCombobox*Listbox.foreground", entry_fg)
+        self.option_add("*TCombobox*Listbox.selectBackground", selection_bg)
+        self.option_add("*TCombobox*Listbox.selectForeground", selection_fg)
 
         style.configure("App.TLabel", font=self.fonts["latin"], background=surface_bg, foreground=fg)
         style.configure("Status.TLabel", font=self.fonts["latin"], background=surface_bg, foreground=status_fg)
         style.configure("App.TButton", font=self.fonts["latin"], background=surface_bg, foreground=fg)
+        style.map(
+            "App.TButton",
+            background=[("disabled", surface_bg), ("pressed", surface_bg), ("active", surface_bg), ("!disabled", surface_bg)],
+            foreground=[("disabled", status_fg), ("!disabled", fg)],
+        )
         style.configure("App.TEntry", font=self.fonts["latin"], fieldbackground=entry_bg, foreground=entry_fg)
         style.configure("Japanese.TEntry", font=self.fonts["japanese"], fieldbackground=entry_bg, foreground=entry_fg)
         style.configure(
@@ -406,8 +442,8 @@ class MainWindow(tk.Tk):
         )
         style.map(
             "App.TNotebook.Tab",
-            background=[("selected", selection_bg)],
-            foreground=[("selected", selection_fg)],
+            background=[("selected", selection_bg), ("!selected", surface_bg)],
+            foreground=[("selected", selection_fg), ("!selected", fg)],
             font=[("selected", notebook_tab_font), ("!selected", notebook_tab_font)],
             padding=[("selected", notebook_tab_padding), ("!selected", notebook_tab_padding)],
         )
@@ -473,12 +509,10 @@ class MainWindow(tk.Tk):
         if refresh_entries_now:
             self.refresh_entries()
 
-    def _on_dark_mode_toggled(self) -> None:
-        requested_mode = "dark" if self.dark_mode_var.get() else "light"
-        self._set_theme_mode(requested_mode)
-
-    def _on_light_mode_toggled(self) -> None:
-        requested_mode = "light" if self.light_mode_var.get() else "dark"
+    def _on_theme_mode_selected(self, _event: tk.Event | None = None) -> None:
+        requested_mode = self.theme_mode_var.get().strip().lower()
+        if requested_mode not in THEME_MODE_VALUES:
+            requested_mode = "light"
         self._set_theme_mode(requested_mode)
 
     def _set_theme_mode(self, requested_mode: str) -> None:
@@ -487,12 +521,10 @@ class MainWindow(tk.Tk):
         except ValidationError as exc:
             messagebox.showerror("Theme error", str(exc), parent=self)
             active_mode = self.repository.get_theme_mode()
-            self.dark_mode_var.set(active_mode == "dark")
-            self.light_mode_var.set(active_mode == "light")
+            self.theme_mode_var.set(active_mode if active_mode in THEME_MODE_VALUES else "light")
             return
 
-        self.dark_mode_var.set(requested_mode == "dark")
-        self.light_mode_var.set(requested_mode == "light")
+        self.theme_mode_var.set(requested_mode)
         self._apply_theme()
 
     def _language_display_name(self, code: str) -> str:
@@ -974,21 +1006,19 @@ class MainWindow(tk.Tk):
 
         appearance_section = ttk.LabelFrame(root, text="Appearance", padding=10)
         appearance_section.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
-        appearance_section.columnconfigure(0, weight=1)
+        appearance_section.columnconfigure(1, weight=1)
 
-        ttk.Checkbutton(
+        ttk.Label(appearance_section, text="Theme", style="App.TLabel").grid(row=0, column=0, sticky="w")
+        self.theme_mode_combo = ttk.Combobox(
             appearance_section,
-            text="Enable light mode",
-            variable=self.light_mode_var,
-            command=self._on_light_mode_toggled,
-        ).grid(row=0, column=0, sticky="w")
-
-        ttk.Checkbutton(
-            appearance_section,
-            text="Enable dark mode",
-            variable=self.dark_mode_var,
-            command=self._on_dark_mode_toggled,
-        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
+            state="readonly",
+            values=THEME_MODE_VALUES,
+            textvariable=self.theme_mode_var,
+            width=12,
+            font=self.fonts["latin"],
+        )
+        self.theme_mode_combo.grid(row=0, column=1, sticky="w", padx=(8, 0))
+        self.theme_mode_combo.bind("<<ComboboxSelected>>", self._on_theme_mode_selected)
 
         ttk.Label(
             appearance_section,
@@ -996,7 +1026,7 @@ class MainWindow(tk.Tk):
             style="Status.TLabel",
             wraplength=620,
             justify="left",
-        ).grid(row=2, column=0, sticky="w", pady=(6, 0))
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
     def _set_home_action_enabled(self, enabled: bool) -> None:
         state = "normal" if enabled else "disabled"
