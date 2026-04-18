@@ -7,3 +7,4 @@ vocab.db
 build/
 dist/
 *.spec
+VocabHelper.exe
