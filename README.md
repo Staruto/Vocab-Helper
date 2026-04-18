@@ -93,8 +93,17 @@ Notes:
 
 - The script will use `.venv\\Scripts\\python.exe` when available; otherwise it falls back to `python`.
 - PyInstaller is installed automatically unless you pass `-SkipInstall`.
-- In frozen builds, the app stores `vocab.db` next to the generated `.exe` for easy sharing.
+- In frozen builds, DB resolution order is:
+	- `vocab.db` next to the `.exe`
+	- then parent folder `vocab.db` (useful when `.exe` is under `dist` and your existing data is at repo root)
+	- otherwise create/use `vocab.db` next to the `.exe`
 - Your friends can run the generated `VocabHelper.exe` directly (no Python install required).
+
+## Repository hygiene for package artifacts
+
+- Keep source files in Git.
+- Keep package outputs (`build/`, `dist/`, `*.spec`) out of Git using `.gitignore`.
+- Personal data file `vocab.db` is already ignored.
 
 ## Bulk add input format
 

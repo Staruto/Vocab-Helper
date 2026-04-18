@@ -1092,14 +1092,43 @@ class DefaultDbPathTests(unittest.TestCase):
         self.assertEqual(resolved.name, "vocab.db")
         self.assertEqual(resolved.parent.name, "VocabHelper")
 
-    def test_default_db_path_uses_executable_directory_in_frozen_mode(self) -> None:
-        fake_executable = Path(r"C:\\Users\\friend\\Desktop\\VocabHelper.exe")
-        with patch("vocab_helper.db.sys", autospec=True) as mock_sys:
-            mock_sys.frozen = True
-            mock_sys.executable = str(fake_executable)
-            resolved = default_db_path()
+    def test_default_db_path_prefers_adjacent_db_in_frozen_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            dist_dir = root / "dist"
+            dist_dir.mkdir()
+            executable = dist_dir / "VocabHelper.exe"
+            executable.touch()
 
-        self.assertEqual(resolved, fake_executable.parent / "vocab.db")
+            adjacent_db = dist_dir / "vocab.db"
+            adjacent_db.touch()
+            parent_db = root / "vocab.db"
+            parent_db.touch()
+
+            with patch("vocab_helper.db.sys", autospec=True) as mock_sys:
+                mock_sys.frozen = True
+                mock_sys.executable = str(executable)
+                resolved = default_db_path()
+
+            self.assertEqual(resolved, adjacent_db)
+
+    def test_default_db_path_uses_parent_db_when_adjacent_missing_in_frozen_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            dist_dir = root / "dist"
+            dist_dir.mkdir()
+            executable = dist_dir / "VocabHelper.exe"
+            executable.touch()
+
+            parent_db = root / "vocab.db"
+            parent_db.touch()
+
+            with patch("vocab_helper.db.sys", autospec=True) as mock_sys:
+                mock_sys.frozen = True
+                mock_sys.executable = str(executable)
+                resolved = default_db_path()
+
+            self.assertEqual(resolved, parent_db)
 
 
 if __name__ == "__main__":

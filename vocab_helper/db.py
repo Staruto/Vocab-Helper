@@ -3124,5 +3124,15 @@ class VocabRepository:
 
 def default_db_path() -> Path:
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent / "vocab.db"
+        executable_dir = Path(sys.executable).resolve().parent
+        adjacent_db = executable_dir / "vocab.db"
+        if adjacent_db.exists():
+            return adjacent_db
+
+        # If executable is under a dist folder, reuse the existing repo-root db first.
+        parent_db = executable_dir.parent / "vocab.db"
+        if parent_db.exists():
+            return parent_db
+
+        return adjacent_db
     return Path(__file__).resolve().parent.parent / "vocab.db"
