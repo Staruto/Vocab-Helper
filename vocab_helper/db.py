@@ -4,6 +4,7 @@ from datetime import date, timedelta
 import random
 import sqlite3
 from pathlib import Path
+import sys
 from typing import Iterable, Mapping
 
 from .languages import PREDEFINED_LANGUAGE_NAMES, PREDEFINED_LANGUAGE_PROPERTY_PROFILES
@@ -3122,4 +3123,6 @@ class VocabRepository:
 
 
 def default_db_path() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / "vocab.db"
     return Path(__file__).resolve().parent.parent / "vocab.db"

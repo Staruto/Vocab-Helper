@@ -15,7 +15,7 @@ Simple vocabulary memorization helper with a desktop GUI.
 	- `Home` for vocabularies
 	- `Profile` for the practice activity grid
 - Supports keyboard shortcuts: Ctrl+N (add), Ctrl+Shift+N (bulk add), Ctrl+T (meaning->target test), Enter (edit selected row), Delete (remove selected rows)
-- Supports dark mode with a settings toggle and persisted preference
+- Supports light/dark theme selection in Settings with persisted preference
 - Includes three test modes with immediate per-question judgment:
 	- Meaning -> Target (fill-in)
 	- Target -> Kana (fill-in, when kana is enabled)
@@ -69,6 +69,32 @@ python -m vocab_helper
 ```bash
 python -m unittest discover -s tests -p "test_*.py"
 ```
+
+## Build Windows .exe (PyInstaller)
+
+Use the provided build script from project root:
+
+```powershell
+./build_windows_exe.ps1
+```
+
+Output:
+
+- One-file build (default): `dist\\VocabHelper.exe`
+- One-folder build (optional):
+
+```powershell
+./build_windows_exe.ps1 -OneDir
+```
+
+- One-folder output: `dist\\VocabHelper\\VocabHelper.exe`
+
+Notes:
+
+- The script will use `.venv\\Scripts\\python.exe` when available; otherwise it falls back to `python`.
+- PyInstaller is installed automatically unless you pass `-SkipInstall`.
+- In frozen builds, the app stores `vocab.db` next to the generated `.exe` for easy sharing.
+- Your friends can run the generated `VocabHelper.exe` directly (no Python install required).
 
 ## Bulk add input format
 

@@ -3,8 +3,9 @@ import unittest
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
-from vocab_helper.db import VocabRepository
+from vocab_helper.db import VocabRepository, default_db_path
 from vocab_helper.validators import ValidationError
 
 
@@ -1080,6 +1081,25 @@ class VocabRepositoryTests(unittest.TestCase):
 
         with self.assertRaises(LookupError):
             self.repository.decrease_priority(9999)
+
+
+class DefaultDbPathTests(unittest.TestCase):
+    def test_default_db_path_uses_repository_root_in_normal_mode(self) -> None:
+        with patch("vocab_helper.db.sys", autospec=True) as mock_sys:
+            mock_sys.frozen = False
+            resolved = default_db_path()
+
+        self.assertEqual(resolved.name, "vocab.db")
+        self.assertEqual(resolved.parent.name, "VocabHelper")
+
+    def test_default_db_path_uses_executable_directory_in_frozen_mode(self) -> None:
+        fake_executable = Path(r"C:\\Users\\friend\\Desktop\\VocabHelper.exe")
+        with patch("vocab_helper.db.sys", autospec=True) as mock_sys:
+            mock_sys.frozen = True
+            mock_sys.executable = str(fake_executable)
+            resolved = default_db_path()
+
+        self.assertEqual(resolved, fake_executable.parent / "vocab.db")
 
 
 if __name__ == "__main__":
