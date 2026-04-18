@@ -1,8 +1,13 @@
 # VocabHelper
 
-Simple vocabulary memorization helper with a desktop GUI.
+Simple vocabulary memorization helper with a CLI-first workflow and an optional desktop GUI.
 
 ## Features
+
+- Runs in an interactive CLI by default with slash commands inspired by modern coding agents
+- Supports command history and autocompletion when Prompt Toolkit is available
+- Supports rich table/panel output when Rich is available
+- Supports launching the GUI explicitly when needed
 
 - Lists vocabulary in two columns: target text, assistant meaning
 - Supports workbook-specific target/meaning labels so each workbook can represent any text-to-text mapping
@@ -64,6 +69,29 @@ pip install -r requirements.txt
 python -m vocab_helper
 ```
 
+This starts the interactive CLI mode.
+
+Launch GUI mode explicitly:
+
+```bash
+python -m vocab_helper gui
+```
+
+Run one CLI command and exit:
+
+```bash
+python -m vocab_helper cli --command "/help"
+```
+
+### CLI quick start
+
+- `/help`
+- `/workbook create --name "JP" --target-code JP --preset japanese`
+- `/add --target "食べる" --kana "たべる" --meaning "to eat"`
+- `/list`
+- `/test start --mode meaning_to_target --count 10 --strategy strict`
+- `/gui` (exit CLI and launch desktop GUI)
+
 ## Test
 
 ```bash
@@ -80,14 +108,18 @@ Use the provided build script from project root:
 
 Output:
 
-- One-file build (default): `dist\\VocabHelper.exe`
+- One-file build (default):
+	- `dist\\VocabHelperGUI.exe`
+	- `dist\\VocabHelperCLI.exe`
 - One-folder build (optional):
 
 ```powershell
 ./build_windows_exe.ps1 -OneDir
 ```
 
-- One-folder output: `dist\\VocabHelper\\VocabHelper.exe`
+- One-folder output:
+	- `dist\\VocabHelperGUI\\VocabHelperGUI.exe`
+	- `dist\\VocabHelperCLI\\VocabHelperCLI.exe`
 
 Notes:
 
@@ -97,7 +129,7 @@ Notes:
 	- `vocab.db` next to the `.exe`
 	- then parent folder `vocab.db` (useful when `.exe` is under `dist` and your existing data is at repo root)
 	- otherwise create/use `vocab.db` next to the `.exe`
-- Your friends can run the generated `VocabHelper.exe` directly (no Python install required).
+- Share `VocabHelperGUI.exe` for desktop users and `VocabHelperCLI.exe` for terminal users (no Python install required).
 
 ## Repository hygiene for package artifacts
 

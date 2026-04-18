@@ -32,19 +32,34 @@ try {
         --noconfirm `
         --clean `
         --windowed `
-        --name VocabHelper `
+        --name VocabHelperGUI `
         $modeArg `
         --collect-data pykakasi `
-        run_vocab_helper.py
+        run_vocab_helper_gui.py
 
     if ($LASTEXITCODE -ne 0) {
-        throw "PyInstaller build failed."
+        throw "PyInstaller GUI build failed."
+    }
+
+    & $pythonExe -m PyInstaller `
+        --noconfirm `
+        --clean `
+        --console `
+        --name VocabHelperCLI `
+        $modeArg `
+        --collect-data pykakasi `
+        run_vocab_helper_cli.py
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "PyInstaller CLI build failed."
     }
 
     if ($OneDir) {
-        Write-Host "Build complete: dist\\VocabHelper\\VocabHelper.exe"
+        Write-Host "Build complete: dist\\VocabHelperGUI\\VocabHelperGUI.exe"
+        Write-Host "Build complete: dist\\VocabHelperCLI\\VocabHelperCLI.exe"
     } else {
-        Write-Host "Build complete: dist\\VocabHelper.exe"
+        Write-Host "Build complete: dist\\VocabHelperGUI.exe"
+        Write-Host "Build complete: dist\\VocabHelperCLI.exe"
     }
 } finally {
     Pop-Location
