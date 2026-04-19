@@ -115,7 +115,7 @@ class CliCommandDispatcher:
             "/tags list|types|add-type --name NAME|delete-type --id ID|add --type-id ID --name NAME|delete --id ID|set --entry-id ID --tag-ids 1,2",
             "/test start [--mode meaning_to_target|target_to_kana|target_to_meaning] [--count N] [--strategy strict|weighted]",
         ]
-        self.console.print(Panel("\n".join(lines), title="VocabHelper CLI", border_style="cyan"))
+        self.console.print(Panel("\n".join(lines), title="Commands Menu", border_style="cyan"))
 
     def _active_workbook(self) -> Workbook:
         if self.state.current_workbook_id is None:
