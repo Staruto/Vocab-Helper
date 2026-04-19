@@ -63,7 +63,7 @@ class CliCommandDispatcher:
             elif command in {"exit", "quit"}:
                 return CliAction(continue_running=False)
             elif command == "gui":
-                return CliAction(continue_running=False, launch_gui=True)
+                return CliAction(continue_running=True, launch_gui=True)
             elif command in {"workbook", "wb"}:
                 self._handle_workbook(args)
             elif command == "workbooks":

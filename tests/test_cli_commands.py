@@ -63,6 +63,12 @@ class CliCommandTests(unittest.TestCase):
         self.assertEqual(workbook.name, "English")
         self.assertEqual(workbook.target_language_code, "EN")
 
+    def test_gui_action_keeps_cli_running(self) -> None:
+        action = self.dispatcher.execute("/gui")
+
+        self.assertTrue(action.continue_running)
+        self.assertTrue(action.launch_gui)
+
     def test_test_mode_records_result(self) -> None:
         entry = self.repository.add_entry(
             japanese_text="食べる",

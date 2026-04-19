@@ -7,102 +7,92 @@ from typing import Protocol
 from rich.console import Console
 from rich.panel import Panel
 
-from .cli_commands import CliAction, CliCommandDispatcher, short_language_name
+from .cli_commands import CliAction, CliCommandDispatcher
 from .cli_state import CliState
 from .db import VocabRepository, default_db_path
 
 try:  # pragma: no cover - optional import guard
     from prompt_toolkit import PromptSession
-    from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
-    from prompt_toolkit.completion import WordCompleter
     from prompt_toolkit.history import FileHistory
+    from prompt_toolkit.styles import Style
 except ImportError:  # pragma: no cover - runtime fallback
     PromptSession = None
-    AutoSuggestFromHistory = None
-    WordCompleter = None
     FileHistory = None
+    Style = None
 
 
 class PromptAdapter(Protocol):
-    def prompt(self, text: str, default: str = "") -> str:
+    def prompt_command(self) -> str:
+        ...
+
+    def prompt_field(self, label: str, default: str = "") -> str:
         ...
 
 
 @dataclass(slots=True)
 class BasicPromptAdapter:
-    def prompt(self, text: str, default: str = "") -> str:
+    PROMPT_COLOR = "\x1b[93m"
+    RESET_COLOR = "\x1b[0m"
+
+    def prompt_command(self) -> str:
+        raw = input(f"{self.PROMPT_COLOR}> ").strip()
+        print(self.RESET_COLOR, end="")
+        return raw
+
+    def prompt_field(self, label: str, default: str = "") -> str:
         if default:
-            raw = input(f"{text} [{default}]: ").strip()
+            raw = input(f"{label} [{default}]: ").strip()
             return raw or default
-        return input(f"{text}: ").strip()
+        return input(f"{label}: ").strip()
 
 
 class ToolkitPromptAdapter:
-    def __init__(self, history_path: Path, completer_words: list[str]) -> None:
+    def __init__(self, history_path: Path) -> None:
         if PromptSession is None:
             raise RuntimeError("prompt_toolkit is not available")
-        completer = WordCompleter(completer_words, ignore_case=True)
-        history = FileHistory(str(history_path))
-        self._session = PromptSession(
-            completer=completer,
-            complete_while_typing=True,
-            auto_suggest=AutoSuggestFromHistory(),
-            history=history,
+
+        style = Style.from_dict(
+            {
+                "": "#ffff87",
+                "prompt": "bold #ffff87",
+            }
         )
 
-    def prompt(self, text: str, default: str = "") -> str:
-        return self._session.prompt(f"{text}> ", default=default)
+        history = FileHistory(str(history_path))
+        self._session = PromptSession(
+            history=history,
+            style=style,
+        )
 
+    def prompt_command(self) -> str:
+        return self._session.prompt([("class:prompt", "> ")], default="").strip()
 
-def _command_words() -> list[str]:
-    return [
-        "/help",
-        "/exit",
-        "/quit",
-        "/gui",
-        "/workbook",
-        "/workbooks",
-        "/list",
-        "/filters",
-        "/clear-filters",
-        "/add",
-        "/view",
-        "/edit",
-        "/delete",
-        "/tags",
-        "/test",
-    ]
+    def prompt_field(self, label: str, default: str = "") -> str:
+        raw = self._session.prompt([("class:prompt", f"{label}: ")], default=default)
+        cleaned = raw.strip()
+        if not cleaned and default:
+            return default
+        return cleaned
 
 
 def _build_prompt_adapter(console: Console) -> PromptAdapter:
     history_path = Path.home() / ".vocab_helper_cli_history"
     try:
-        return ToolkitPromptAdapter(history_path=history_path, completer_words=_command_words())
+        return ToolkitPromptAdapter(history_path=history_path)
     except Exception:
         console.print(
-            "prompt_toolkit unavailable, using basic input mode. Install dependencies for richer CLI features.",
+            "prompt_toolkit unavailable, using basic input mode.",
             style="yellow",
         )
         return BasicPromptAdapter()
 
 
-def _build_shell_prompt(state: CliState, repository: VocabRepository) -> str:
-    workbook_id = state.current_workbook_id
-    if workbook_id is None:
-        workbook_id = repository.get_current_workbook_id()
-        state.current_workbook_id = workbook_id
+def _launch_gui(console: Console) -> None:
+    from .app import main as app_main
 
-    if workbook_id is None:
-        return "vocab/no-workbook"
-
-    try:
-        workbook = repository.get_workbook(workbook_id)
-    except LookupError:
-        state.current_workbook_id = repository.get_current_workbook_id()
-        return "vocab/no-workbook"
-
-    language_name = short_language_name(workbook)
-    return f"vocab/{workbook.name}/{language_name}"
+    console.print("Opening GUI. Close the window to return to CLI.", style="cyan")
+    app_main()
+    console.print("Returned to CLI.", style="cyan")
 
 
 def run_cli(
@@ -115,7 +105,7 @@ def run_cli(
     prompt_adapter = _build_prompt_adapter(console)
 
     def ask_input(label: str, default: str | None) -> str:
-        return prompt_adapter.prompt(label, default or "")
+        return prompt_adapter.prompt_field(label, default or "")
 
     dispatcher = CliCommandDispatcher(repository, state, console, ask_input)
 
@@ -127,13 +117,20 @@ def run_cli(
         console.print(Panel(banner, title="VocabHelper CLI", border_style="cyan"))
 
     if command is not None:
-        return dispatcher.execute(command)
+        action = dispatcher.execute(command)
+        if action.launch_gui:
+            _launch_gui(console)
+        return action
 
     while True:
-        prompt_label = _build_shell_prompt(state, repository)
-        raw = prompt_adapter.prompt(prompt_label, "")
+        raw = prompt_adapter.prompt_command()
         action = dispatcher.execute(raw)
-        if not action.continue_running or action.launch_gui:
+        if action.launch_gui:
+            _launch_gui(console)
+            if action.continue_running:
+                continue
+            return CliAction(continue_running=False)
+        if not action.continue_running:
             return action
 
 
@@ -141,9 +138,5 @@ def main(command: str | None = None, show_banner: bool = True) -> int:
     repository = VocabRepository(default_db_path())
     repository.initialize()
 
-    action = run_cli(repository=repository, command=command, show_banner=show_banner)
-    if action.launch_gui:
-        from .app import main as app_main
-
-        app_main()
+    run_cli(repository=repository, command=command, show_banner=show_banner)
     return 0
