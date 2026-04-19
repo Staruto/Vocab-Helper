@@ -105,7 +105,7 @@ class CliCommandDispatcher:
             "/exit",
             "/gui",
             "/workbook list|current|switch <id>|create --name NAME --target-code CODE [--preset generic|japanese] [--target-label TEXT] [--meaning-label TEXT]|delete <id>",
-            "/list [--sort time|stats|tags] [--time newest|oldest] [--search TEXT] [--tags 1,2] [--match all|any]",
+            "/list [--sort time|stats|tags] [--time newest|oldest] [--search TEXT] [--tags 1,2] [--match all|any] [--count COUNT]",
             "/filters",
             "/clear-filters",
             "/add [--target TEXT] [--meaning TEXT] [--kana TEXT] [--pos TEXT] [--tags 1,2]",
@@ -222,6 +222,13 @@ class CliCommandDispatcher:
         if filter_match_mode not in {"all", "any"}:
             raise ValidationError("match must be one of: all, any")
 
+        count_text = options.get("count")
+        count_limit: int | None = None
+        if count_text is not None:
+            count_limit = int(count_text)
+            if count_limit <= 0:
+                raise ValidationError("count must be a positive integer")
+
         self.state.sort_mode = sort_mode
         self.state.time_order = time_order
         self.state.search_query = search_query
@@ -237,6 +244,8 @@ class CliCommandDispatcher:
             target_language_code=workbook.target_language_code,
             workbook_id=workbook.id,
         )
+        if count_limit is not None:
+            rows = rows[:count_limit]
         self._show_filters()
         if not rows:
             self.console.print("No entries found.", style="yellow")

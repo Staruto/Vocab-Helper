@@ -63,6 +63,22 @@ class CliCommandTests(unittest.TestCase):
         self.assertEqual(workbook.name, "English")
         self.assertEqual(workbook.target_language_code, "EN")
 
+    def test_list_with_count_limits_rows(self) -> None:
+        self.dispatcher.execute('/add --target "食べる" --kana "たべる" --meaning "to eat"')
+        self.dispatcher.execute('/add --target "見る" --kana "みる" --meaning "to see"')
+
+        self.dispatcher.execute("/list --count 1")
+        rendered = self.output.getvalue()
+        self.assertIn("to see", rendered)
+        self.assertNotIn("to eat", rendered)
+
+    def test_list_with_invalid_count_shows_validation_error(self) -> None:
+        self.dispatcher.execute("/list --count 0")
+
+        rendered = self.output.getvalue()
+        self.assertIn("Validation error", rendered)
+        self.assertIn("count must be a positive integer", rendered)
+
     def test_gui_action_keeps_cli_running(self) -> None:
         action = self.dispatcher.execute("/gui")
 

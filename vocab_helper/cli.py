@@ -31,11 +31,11 @@ class PromptAdapter(Protocol):
 
 @dataclass(slots=True)
 class BasicPromptAdapter:
-    PROMPT_COLOR = "\x1b[93m"
+    INPUT_COLOR = "\x1b[93m"
     RESET_COLOR = "\x1b[0m"
 
     def prompt_command(self) -> str:
-        raw = input(f"{self.PROMPT_COLOR}> ").strip()
+        raw = input(f"> {self.INPUT_COLOR}").strip()
         print(self.RESET_COLOR, end="")
         return raw
 
@@ -54,7 +54,6 @@ class ToolkitPromptAdapter:
         style = Style.from_dict(
             {
                 "": "#ffff87",
-                "prompt": "bold #ffff87",
             }
         )
 
@@ -65,10 +64,10 @@ class ToolkitPromptAdapter:
         )
 
     def prompt_command(self) -> str:
-        return self._session.prompt([("class:prompt", "> ")], default="").strip()
+        return self._session.prompt("> ", default="").strip()
 
     def prompt_field(self, label: str, default: str = "") -> str:
-        raw = self._session.prompt([("class:prompt", f"{label}: ")], default=default)
+        raw = self._session.prompt(f"{label}: ", default=default)
         cleaned = raw.strip()
         if not cleaned and default:
             return default
