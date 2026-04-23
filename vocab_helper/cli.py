@@ -51,23 +51,35 @@ class ToolkitPromptAdapter:
         if PromptSession is None:
             raise RuntimeError("prompt_toolkit is not available")
 
-        style = Style.from_dict(
+        command_style = Style.from_dict(
             {
                 "": "#ffff87",
+                "prompt": "#ffffff",
+            }
+        )
+
+        field_style = Style.from_dict(
+            {
+                "": "#ffffff",
+                "prompt": "#ffffff",
             }
         )
 
         history = FileHistory(str(history_path))
-        self._session = PromptSession(
+        self._command_session = PromptSession(
             history=history,
-            style=style,
+            style=command_style,
+        )
+        self._field_session = PromptSession(
+            history=history,
+            style=field_style,
         )
 
     def prompt_command(self) -> str:
-        return self._session.prompt("> ", default="").strip()
+        return self._command_session.prompt([("class:prompt", "> ")], default="").strip()
 
     def prompt_field(self, label: str, default: str = "") -> str:
-        raw = self._session.prompt(f"{label}: ", default=default)
+        raw = self._field_session.prompt([("class:prompt", f"{label}: ")], default=default)
         cleaned = raw.strip()
         if not cleaned and default:
             return default

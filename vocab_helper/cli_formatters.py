@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 from rich.table import Table
 
 from .models import VocabEntry, Workbook
@@ -97,3 +99,58 @@ def build_entry_detail_table(entry: VocabEntry, stats: tuple[int, int, str], tag
     if entry.details_markdown:
         table.add_row("Details", entry.details_markdown)
     return table
+
+
+def _activity_symbol(count: int) -> str:
+    if count <= 0:
+        return "·"
+    if count <= 10:
+        return "░"
+    if count <= 20:
+        return "▒"
+    if count <= 30:
+        return "▓"
+    return "█"
+
+
+def build_practice_graph_lines(counts_by_date: dict[str, int], days_back: int = 180) -> list[str]:
+    range_days = max(int(days_back), 1)
+    today = date.today()
+    start_date = today - timedelta(days=range_days - 1)
+    grid_start = start_date - timedelta(days=start_date.weekday())
+    grid_end = today
+    weeks = ((grid_end - grid_start).days // 7) + 1
+
+    grid: list[list[str]] = [["·" for _ in range(weeks)] for _ in range(7)]
+
+    current = start_date
+    while current <= today:
+        week_index = (current - grid_start).days // 7
+        weekday_index = current.weekday()
+        count = counts_by_date.get(current.isoformat(), 0)
+        grid[weekday_index][week_index] = _activity_symbol(count)
+        current += timedelta(days=1)
+
+    month_labels = ["  " for _ in range(weeks)]
+    current = start_date
+    seen_months: set[tuple[int, int]] = set()
+    while current <= today:
+        month_key = (current.year, current.month)
+        if current.day == 1 or current == start_date:
+            week_index = (current - grid_start).days // 7
+            if month_key not in seen_months and 0 <= week_index < weeks:
+                month_labels[week_index] = current.strftime("%b")
+                seen_months.add(month_key)
+        current += timedelta(days=1)
+
+    month_header = "    " + " ".join(f"{label:>3}" for label in month_labels)
+    day_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    day_rows = [f"{day_labels[index]} " + "  ".join(grid[index]) for index in range(7)]
+
+    active_days = sum(1 for value in counts_by_date.values() if value > 0)
+    total_practiced = sum(counts_by_date.values())
+
+    summary = f"Unique vocab practiced: {total_practiced} across {active_days} active days"
+    legend = "Legend: · 0  ░ 1-10  ▒ 11-20  ▓ 21-30  █ 31+"
+
+    return [month_header, *day_rows, "", summary, legend]

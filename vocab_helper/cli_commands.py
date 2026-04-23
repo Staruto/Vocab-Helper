@@ -8,6 +8,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from .cli_formatters import (
+    build_practice_graph_lines,
     build_entries_table,
     build_entry_detail_table,
     build_tags_table,
@@ -59,7 +60,7 @@ class CliCommandDispatcher:
 
         try:
             if command in {"help", "?"}:
-                self._print_help()
+                self._handle_help(args)
             elif command in {"exit", "quit"}:
                 return CliAction(continue_running=False)
             elif command == "gui":
@@ -70,6 +71,8 @@ class CliCommandDispatcher:
                 self._list_workbooks()
             elif command in {"list", "ls"}:
                 self._handle_list(args)
+            elif command == "stats":
+                self._handle_stats(args)
             elif command == "filters":
                 self._show_filters()
             elif command == "clear-filters":
@@ -98,24 +101,149 @@ class CliCommandDispatcher:
 
         return CliAction()
 
-    def _print_help(self) -> None:
+    def _handle_help(self, args: list[str]) -> None:
+        if not args:
+            self._print_help_summary()
+            return
+        command_name = args[0].lstrip("/").strip().lower()
+        self._print_help_detail(command_name)
+
+    def _print_help_summary(self) -> None:
         lines = [
-            "Slash commands:",
-            "/help",
-            "/exit",
-            "/gui",
-            "/workbook list|current|switch <id>|create --name NAME --target-code CODE [--preset generic|japanese] [--target-label TEXT] [--meaning-label TEXT]|delete <id>",
-            "/list [--sort time|stats|tags] [--time newest|oldest] [--search TEXT] [--tags 1,2] [--match all|any] [--count COUNT]",
-            "/filters",
-            "/clear-filters",
-            "/add [--target TEXT] [--meaning TEXT] [--kana TEXT] [--pos TEXT] [--tags 1,2]",
-            "/view <entry_id>",
-            "/edit <entry_id> [--target TEXT] [--meaning TEXT] [--kana TEXT] [--pos TEXT] [--tags 1,2]",
-            "/delete <entry_id[,entry_id...]>",
-            "/tags list|types|add-type --name NAME|delete-type --id ID|add --type-id ID --name NAME|delete --id ID|set --entry-id ID --tag-ids 1,2",
-            "/test start [--mode meaning_to_target|target_to_kana|target_to_meaning] [--count N] [--strategy strict|weighted]",
+            "Use /help <command> to see syntax and parameters.",
+            "",
+            "General:",
+            "/exit  Exit the CLI session.",
+            "/gui  Open the desktop GUI and return to CLI after closing it.",
+            "/help  Show command help summary or details for a specific command.",
+            "",
+            "Learning:",
+            "/stats  Show practice activity graph in terminal.",
+            "/test  Start a practice test session.",
+            "",
+            "Tag management:",
+            "/tags  List and manage tag types, tags, and entry tag assignments.",
+            "",
+            "Vocabulary:",
+            "/add  Add a new vocabulary entry.",
+            "/delete  Delete one or more entries.",
+            "/edit  Edit an existing entry.",
+            "/list  List entries with sorting and filters.",
+            "/view  Show full details for one entry.",
+            "",
+            "Views and filters:",
+            "/clear-filters  Clear active tag/search filters.",
+            "/filters  Show active list filter settings.",
+            "",
+            "Workbooks:",
+            "/workbook  Create, switch, list, or delete workbooks.",
+            "/workbooks  List all workbooks.",
         ]
         self.console.print(Panel("\n".join(lines), title="Commands Menu", border_style="cyan"))
+
+    def _print_help_detail(self, command_name: str) -> None:
+        details: dict[str, tuple[str, list[str]]] = {
+            "help": (
+                "/help [command]",
+                [
+                    "Show summary help or detailed help for one command.",
+                    "Examples: /help, /help list, /help test",
+                ],
+            ),
+            "exit": (
+                "/exit",
+                ["Exit the CLI session."],
+            ),
+            "quit": (
+                "/quit",
+                ["Alias for /exit."],
+            ),
+            "gui": (
+                "/gui",
+                ["Launch desktop GUI and return to CLI after GUI closes."],
+            ),
+            "workbook": (
+                "/workbook list|current|switch <id>|create --name NAME --target-code CODE [--preset generic|japanese] [--target-label TEXT] [--meaning-label TEXT]|delete <id>",
+                [
+                    "Manage the current workbook and workbook catalog.",
+                    "Use /workbook current to show the active workbook.",
+                ],
+            ),
+            "workbooks": (
+                "/workbooks",
+                ["List all workbooks with current marker."],
+            ),
+            "list": (
+                "/list [--sort time|stats|tags] [--time newest|oldest] [--search TEXT] [--tags 1,2] [--match all|any] [--count COUNT]",
+                [
+                    "List entries for the active workbook.",
+                    "--count limits displayed rows to the first COUNT results.",
+                ],
+            ),
+            "stats": (
+                "/stats [--days N]",
+                [
+                    "Show activity graph in terminal.",
+                    "--days controls lookback window (default 180).",
+                ],
+            ),
+            "filters": (
+                "/filters",
+                ["Show currently active list filters and sort settings."],
+            ),
+            "clear-filters": (
+                "/clear-filters",
+                ["Reset active tag and search filters."],
+            ),
+            "add": (
+                "/add [--target TEXT] [--meaning TEXT] [--kana TEXT] [--pos TEXT] [--tags 1,2]",
+                ["Add a new vocabulary entry. Missing fields are prompted interactively."],
+            ),
+            "view": (
+                "/view <entry_id>",
+                ["Show entry details, stats, and tags."],
+            ),
+            "show": (
+                "/show <entry_id>",
+                ["Alias for /view."],
+            ),
+            "edit": (
+                "/edit <entry_id> [--target TEXT] [--meaning TEXT] [--kana TEXT] [--pos TEXT] [--tags 1,2]",
+                ["Edit one entry. Missing fields are prompted interactively."],
+            ),
+            "delete": (
+                "/delete <entry_id[,entry_id...]>",
+                ["Delete one or more entries by id."],
+            ),
+            "del": (
+                "/del <entry_id[,entry_id...]>",
+                ["Alias for /delete."],
+            ),
+            "rm": (
+                "/rm <entry_id[,entry_id...]>",
+                ["Alias for /delete."],
+            ),
+            "tags": (
+                "/tags list|types|add-type --name NAME|delete-type --id ID|add --type-id ID --name NAME|delete --id ID|set --entry-id ID --tag-ids 1,2",
+                ["List and manage tag types, tags, and entry-tag assignments."],
+            ),
+            "test": (
+                "/test start [--mode meaning_to_target|target_to_kana|target_to_meaning] [--count N] [--strategy strict|weighted]",
+                [
+                    "Start a test loop with retry-until-correct behavior.",
+                    "Modes: meaning_to_target, target_to_kana, target_to_meaning.",
+                ],
+            ),
+        }
+
+        detail = details.get(command_name)
+        if detail is None:
+            self.console.print(f"No detailed help for '{command_name}'.", style="yellow")
+            return
+
+        syntax, notes = detail
+        lines = [f"Syntax: {syntax}", "", *notes]
+        self.console.print(Panel("\n".join(lines), title=f"Help: {command_name}", border_style="cyan"))
 
     def _active_workbook(self) -> Workbook:
         if self.state.current_workbook_id is None:
@@ -251,6 +379,22 @@ class CliCommandDispatcher:
             self.console.print("No entries found.", style="yellow")
             return
         self.console.print(build_entries_table(rows))
+
+    def _handle_stats(self, args: list[str]) -> None:
+        workbook = self._active_workbook()
+        _positional, options = self._parse_options(args)
+
+        days_text = options.get("days", "180")
+        days_back = int(days_text)
+        if days_back <= 0:
+            raise ValidationError("days must be a positive integer")
+
+        counts_by_date = self.repository.get_daily_unique_practice_counts(
+            days_back=days_back,
+            workbook_id=workbook.id,
+        )
+        lines = build_practice_graph_lines(counts_by_date, days_back=days_back)
+        self.console.print(Panel("\n".join(lines), title="Practice Activity", border_style="cyan"))
 
     def _handle_add(self, args: list[str]) -> None:
         workbook = self._active_workbook()
@@ -475,7 +619,8 @@ class CliCommandDispatcher:
             for index, entry in enumerate(retry_questions, start=1):
                 if mode == "meaning_to_target":
                     prompt = f"[{index}/{len(retry_questions)}] Meaning: {entry.english_text}"
-                    answer = self.ask_input(prompt, None).strip()
+                    self.console.print(prompt, style="white")
+                    answer = self.ask_input("Answer", None).strip()
                     expected = entry.japanese_text.strip()
                     is_correct = answer == expected
                     if is_correct:
@@ -485,7 +630,8 @@ class CliCommandDispatcher:
                         self.console.print(f"Incorrect. Answer: {expected}{kana_hint}", style="yellow")
                 elif mode == "target_to_kana":
                     prompt = f"[{index}/{len(retry_questions)}] Target: {entry.japanese_text}"
-                    answer = self.ask_input(prompt, None).strip()
+                    self.console.print(prompt, style="white")
+                    answer = self.ask_input("Answer", None).strip()
                     expected = (entry.kana_text or "").strip()
                     is_correct = answer == expected
                     if is_correct:
@@ -505,10 +651,10 @@ class CliCommandDispatcher:
                         )
                         continue
 
-                    self.console.print(f"[{index}/{len(retry_questions)}] Target: {entry.japanese_text}")
+                    self.console.print(f"[{index}/{len(retry_questions)}] Target: {entry.japanese_text}", style="white")
                     for option_index, option in enumerate(options_list, start=1):
                         self.console.print(f"  {option_index}. {option}")
-                    selected_text = self.ask_input("Choose option number", None).strip()
+                    selected_text = self.ask_input("Answer", None).strip()
                     selected_index = int(selected_text) if selected_text else 0
                     if selected_index < 1 or selected_index > len(options_list):
                         is_correct = False

@@ -79,6 +79,34 @@ class CliCommandTests(unittest.TestCase):
         self.assertIn("Validation error", rendered)
         self.assertIn("count must be a positive integer", rendered)
 
+    def test_stats_outputs_practice_graph(self) -> None:
+        entry = self.repository.add_entry(
+            japanese_text="行く",
+            kana_text="いく",
+            english_text="to go",
+            workbook_id=self.workbook.id,
+        )
+        self.repository.record_test_result(entry.id, is_correct=True)
+
+        self.dispatcher.execute("/stats")
+        rendered = self.output.getvalue()
+        self.assertIn("Practice Activity", rendered)
+        self.assertIn("Legend:", rendered)
+
+    def test_help_summary_is_concise(self) -> None:
+        self.dispatcher.execute("/help")
+
+        rendered = self.output.getvalue()
+        self.assertIn("Use /help <command> to see syntax and parameters.", rendered)
+        self.assertIn("/stats  Show practice activity graph in terminal.", rendered)
+
+    def test_help_list_shows_detail(self) -> None:
+        self.dispatcher.execute("/help list")
+
+        rendered = self.output.getvalue()
+        self.assertIn("Help: list", rendered)
+        self.assertIn("--count COUNT", rendered)
+
     def test_gui_action_keeps_cli_running(self) -> None:
         action = self.dispatcher.execute("/gui")
 
