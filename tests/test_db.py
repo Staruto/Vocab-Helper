@@ -835,6 +835,14 @@ class VocabRepositoryTests(unittest.TestCase):
         self.repository.record_test_result(entry.id, is_correct=False)
         self.assertEqual(self.repository.get_entry_stats(entry.id), (4, 3, "red"))
 
+    def test_record_test_result_caps_error_count_at_five(self) -> None:
+        entry = self.repository.add_entry("泳ぐ", "およぐ", "to swim")
+
+        for _ in range(10):
+            self.repository.record_test_result(entry.id, is_correct=False)
+
+        self.assertEqual(self.repository.get_entry_stats(entry.id), (10, 5, "red"))
+
     def test_correct_answer_can_reduce_error_count_once_per_day(self) -> None:
         entry = self.repository.add_entry("書く", "かく", "to write")
         yesterday = date.today() - timedelta(days=1)

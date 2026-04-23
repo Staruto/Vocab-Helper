@@ -21,6 +21,7 @@ from .validators import (
 
 class VocabRepository:
     ERROR_COUNT_RECOVERY_CHANCE = 0.35
+    MAX_ERROR_COUNT = 5
     THEME_MODES = ("light", "dark")
     PREDEFINED_PART_OF_SPEECH_TAGS = (
         "noun",
@@ -2565,11 +2566,11 @@ class VocabRepository:
                 UPDATE vocab_stats
                 SET
                     test_count = test_count + 1,
-                    error_count = error_count + ?,
+                    error_count = MIN(error_count + ?, ?),
                     last_tested = CURRENT_TIMESTAMP
                 WHERE entry_id = ?
                 """,
-                (0 if is_correct else 1, entry_id),
+                (0 if is_correct else 1, self.MAX_ERROR_COUNT, entry_id),
             )
 
             practice_date = (practiced_on or date.today()).isoformat()
@@ -3099,7 +3100,7 @@ class VocabRepository:
                 SET error_count = ?
                 WHERE entry_id = ?
                 """,
-                (max(error_count, 0), entry_id),
+                (min(max(error_count, 0), self.MAX_ERROR_COUNT), entry_id),
             )
             connection.commit()
         finally:
