@@ -4,9 +4,13 @@ declare const process: {
   exit(code?: number): never;
   stdin?: {
     isTTY?: boolean;
+    setRawMode?(mode: boolean): void;
   };
   stdout?: {
     isTTY?: boolean;
+    columns?: number;
+    rows?: number;
+    write?(text: string): boolean;
   };
 };
 

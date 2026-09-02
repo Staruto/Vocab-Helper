@@ -8,7 +8,22 @@ type UiMode =
   | { kind: "edit"; stage: "vocabulary" | "meaning"; entryId: number; vocabulary: string; meaning: string }
   | { kind: "delete"; entryId: number; label: string };
 
+const PAGE_SIZE = 20;
+const TITLE = "VocabHelper MVP";
+const FOOTER_HINT = "Navigate with <- ->";
 const repository = new VocabularyRepository(defaultDbPath());
+
+function writeToStdout(text: string): void {
+  process.stdout?.write?.(text);
+}
+
+function enterAlternateScreen(): void {
+  writeToStdout("\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H");
+}
+
+function leaveAlternateScreen(): void {
+  writeToStdout("\x1b[?1049l\x1b[?25h");
+}
 
 function normalizeCommand(input: string): string[] {
   const cleaned = input.trim().replace(/^\/+/, "");
@@ -23,57 +38,74 @@ function truncate(text: string, width: number): string {
     return "";
   }
   if (text.length <= width) {
-    return text.padEnd(width, " ");
+    return text;
   }
   if (width === 1) {
-    return "…";
+    return ".";
   }
-  return `${text.slice(0, width - 1)}…`;
+  return `${text.slice(0, width - 1)}.`;
+}
+
+function padLine(text: string, width: number): string {
+  const clipped = truncate(text, width);
+  return clipped.padEnd(width, " ");
 }
 
 function buildEntryLabel(entry: EntryRow): string {
   return `#${entry.id} ${entry.vocabulary}`;
 }
 
-function renderEntries(entries: EntryRow[], width: number): string[] {
+function getPageCount(totalEntries: number): number {
+  return Math.max(1, Math.ceil(totalEntries / PAGE_SIZE));
+}
+
+function clampPageIndex(pageIndex: number, totalEntries: number): number {
+  return Math.max(0, Math.min(pageIndex, getPageCount(totalEntries) - 1));
+}
+
+function buildFooterLine(width: number, pageText: string, hintText: string): string {
+  if (width <= 0) {
+    return "";
+  }
+
+  const left = truncate(pageText, width);
+  const right = truncate(hintText, width);
+  if (left.length + right.length + 2 >= width) {
+    const gap = Math.max(1, width - left.length);
+    return `${left}${" ".repeat(gap)}${truncate(right, width - left.length - gap)}`;
+  }
+
+  return `${left}${" ".repeat(width - left.length - right.length)}${right}`;
+}
+
+function buildEntryLines(entries: EntryRow[], pageIndex: number, width: number): string[] {
   const totalWidth = Math.max(width, 60);
   const gap = 3;
-  const leftWidth = Math.max(22, Math.floor((totalWidth - gap) * 0.48));
-  const rightWidth = Math.max(22, totalWidth - gap - leftWidth);
+  const leftWidth = Math.max(24, Math.floor((totalWidth - gap) * 0.48));
+  const rightWidth = Math.max(24, totalWidth - gap - leftWidth);
+
   const header = `${truncate("Vocabulary", leftWidth)}   ${truncate("Meaning", rightWidth)}`;
-  const rows = entries.slice(0, 12).map((entry) => {
+  const pageEntries = entries.slice(pageIndex * PAGE_SIZE, pageIndex * PAGE_SIZE + PAGE_SIZE);
+  const rows = pageEntries.map((entry) => {
     const left = truncate(buildEntryLabel(entry), leftWidth);
     const right = truncate(entry.meaning, rightWidth);
     return `${left}   ${right}`;
   });
-  const footer =
-    entries.length === 0
-      ? "No vocabulary yet. Use /add."
-      : entries.length > 12
-        ? `Showing 12 of ${entries.length}.`
-        : `Total entries: ${entries.length}.`;
-  return [header, ...rows, "", footer];
+
+  return [header, ...rows];
 }
 
-function helpText(): string {
-  return [
-    "Commands:",
-    "/list",
-    "/add",
-    "/edit <id>",
-    "/delete <id>",
-    "/help",
-    "/quit",
-    "",
-    "Esc cancels add/edit/delete.",
-  ].join("\n");
+function buildHelpText(): string {
+  return "Commands: /list /add /edit <id> /delete <id> /help /quit | Esc cancels forms.";
 }
 
 function App(): JSX.Element {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
+  const [rows, setRows] = useState(() => stdout?.rows ?? 24);
   const [entries, setEntries] = useState<EntryRow[]>(() => repository.listEntries());
+  const [pageIndex, setPageIndex] = useState(0);
   const [mode, setMode] = useState<UiMode>({ kind: "command" });
   const [buffer, setBuffer] = useState("");
   const [status, setStatus] = useState<string>("Ready.");
@@ -82,7 +114,12 @@ function App(): JSX.Element {
     if (!stdout) {
       return;
     }
-    const onResize = () => setWidth(stdout.columns ?? 80);
+
+    const onResize = () => {
+      setWidth(stdout.columns ?? 80);
+      setRows(stdout.rows ?? 24);
+    };
+
     stdout.on("resize", onResize);
     return () => {
       stdout.off("resize", onResize);
@@ -91,13 +128,19 @@ function App(): JSX.Element {
 
   useEffect(() => {
     return () => {
+      leaveAlternateScreen();
       repository.close();
     };
   }, []);
 
+  useEffect(() => {
+    setPageIndex((current) => clampPageIndex(current, entries.length));
+  }, [entries.length]);
+
   function refreshEntries(message?: string): void {
     const next = repository.listEntries();
     setEntries(next);
+    setPageIndex((current) => clampPageIndex(current, next.length));
     setStatus(message ?? `Loaded ${next.length} entr${next.length === 1 ? "y" : "ies"}.`);
   }
 
@@ -113,6 +156,7 @@ function App(): JSX.Element {
       setStatus(`Entry #${entryId} was not found.`);
       return;
     }
+
     setMode({
       kind: "edit",
       stage: "vocabulary",
@@ -130,6 +174,7 @@ function App(): JSX.Element {
       setStatus(`Entry #${entryId} was not found.`);
       return;
     }
+
     setMode({ kind: "delete", entryId, label: buildEntryLabel(entry) });
     setBuffer("");
     setStatus(`Type yes to delete ${buildEntryLabel(entry)}.`);
@@ -151,7 +196,7 @@ function App(): JSX.Element {
     const lower = command.toLowerCase();
 
     if (lower === "help") {
-      setStatus(helpText());
+      setStatus(buildHelpText());
       return;
     }
 
@@ -186,6 +231,7 @@ function App(): JSX.Element {
     }
 
     if (lower === "quit" || lower === "exit") {
+      leaveAlternateScreen();
       repository.close();
       exit();
       return;
@@ -203,6 +249,7 @@ function App(): JSX.Element {
           setStatus("Vocabulary is required.");
           return;
         }
+
         setMode({
           kind: "add",
           stage: "meaning",
@@ -232,6 +279,7 @@ function App(): JSX.Element {
           setStatus("Vocabulary is required.");
           return;
         }
+
         setMode({
           kind: "edit",
           stage: "meaning",
@@ -261,6 +309,7 @@ function App(): JSX.Element {
         cancelActiveMode("Delete cancelled.");
         return;
       }
+
       repository.deleteEntry(mode.entryId);
       setMode({ kind: "command" });
       setBuffer("");
@@ -270,6 +319,7 @@ function App(): JSX.Element {
 
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
+      leaveAlternateScreen();
       repository.close();
       exit();
       return;
@@ -282,6 +332,16 @@ function App(): JSX.Element {
       } else {
         cancelActiveMode();
       }
+      return;
+    }
+
+    if (key.leftArrow && mode.kind === "command") {
+      setPageIndex((current) => Math.max(0, current - 1));
+      return;
+    }
+
+    if (key.rightArrow && mode.kind === "command") {
+      setPageIndex((current) => Math.min(getPageCount(entries.length) - 1, current + 1));
       return;
     }
 
@@ -305,7 +365,13 @@ function App(): JSX.Element {
     }
   });
 
-  const entryLines = useMemo(() => renderEntries(entries, width), [entries, width]);
+  const pageCount = getPageCount(entries.length);
+  const safePageIndex = clampPageIndex(pageIndex, entries.length);
+  const pageText = `Page ${safePageIndex + 1}/${pageCount}`;
+  const entryLines = useMemo(
+    () => buildEntryLines(entries, safePageIndex, width),
+    [entries, safePageIndex, width],
+  );
   const promptLabel =
     mode.kind === "command"
       ? "Command"
@@ -318,24 +384,32 @@ function App(): JSX.Element {
             ? "Vocabulary"
             : "Meaning"
           : "Confirm delete";
+  const promptLine = `${promptLabel}: ${buffer}_`;
+
+  const screenLines = useMemo(() => {
+    const lines: string[] = [];
+    lines.push(padLine(TITLE, width));
+    lines.push(padLine(status.split("\n")[0] ?? "", width));
+    lines.push("");
+    for (const line of entryLines) {
+      lines.push(padLine(line, width));
+    }
+
+    const reservedLines = 2;
+    while (lines.length < Math.max(0, rows - reservedLines)) {
+      lines.push("");
+    }
+
+    lines.push(padLine(truncate(promptLine, width), width));
+    lines.push(padLine(buildFooterLine(width, pageText, FOOTER_HINT), width));
+    return lines;
+  }, [entryLines, pageText, promptLine, rows, status, width]);
 
   return (
-    <Box flexDirection="column" padding={1}>
-      <Text color="cyan">VocabHelper MVP</Text>
-      <Text>{status.split("\n")[0] || ""}</Text>
-      {status.split("\n").slice(1).map((line, index) => (
-        <Text key={`${line}-${index}`}>{line}</Text>
+    <Box flexDirection="column">
+      {screenLines.map((line, index) => (
+        <Text key={`${index}-${line}`}>{line}</Text>
       ))}
-      <Box marginTop={1} flexDirection="column">
-        {entryLines.map((line, index) => (
-          <Text key={`${index}-${line}`}>{line}</Text>
-        ))}
-      </Box>
-      <Box marginTop={1}>
-        <Text color="cyan">{promptLabel}: </Text>
-        <Text>{buffer}</Text>
-        <Text color="gray">▌</Text>
-      </Box>
     </Box>
   );
 }
@@ -344,14 +418,16 @@ function run(): void {
   const interactive = Boolean(process.stdin?.isTTY && process.stdout?.isTTY);
   if (!interactive) {
     const entries = repository.listEntries();
-    console.log("VocabHelper MVP");
+    console.log(TITLE);
     console.log(`Loaded ${entries.length} entries.`);
     console.log("Open this app in an interactive terminal to use the TUI.");
     repository.close();
     return;
   }
 
+  enterAlternateScreen();
   render(<App />);
 }
 
 run();
+
