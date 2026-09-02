@@ -10,7 +10,8 @@ type UiMode =
 
 const PAGE_SIZE = 20;
 const TITLE = "VocabHelper MVP";
-const FOOTER_HINT = "Navigate with <- ->";
+const FOOTER_HINT = "Navigate pages with <- ->";
+const STATUS_HINT = "Esc cancels forms.";
 const repository = new VocabularyRepository(defaultDbPath());
 
 function writeToStdout(text: string): void {
@@ -51,6 +52,17 @@ function padLine(text: string, width: number): string {
   return clipped.padEnd(width, " ");
 }
 
+function centerLine(text: string, width: number): string {
+  if (width <= 0) {
+    return "";
+  }
+
+  const clipped = truncate(text, width);
+  const leftPadding = Math.max(0, Math.floor((width - clipped.length) / 2));
+  const rightPadding = Math.max(0, width - clipped.length - leftPadding);
+  return `${" ".repeat(leftPadding)}${clipped}${" ".repeat(rightPadding)}`;
+}
+
 function buildEntryLabel(entry: EntryRow): string {
   return `#${entry.id} ${entry.vocabulary}`;
 }
@@ -79,17 +91,21 @@ function buildFooterLine(width: number, pageText: string, hintText: string): str
 }
 
 function buildEntryLines(entries: EntryRow[], pageIndex: number, width: number): string[] {
-  const totalWidth = Math.max(width, 60);
-  const gap = 3;
-  const leftWidth = Math.max(24, Math.floor((totalWidth - gap) * 0.48));
-  const rightWidth = Math.max(24, totalWidth - gap - leftWidth);
+  const totalWidth = Math.max(width, 80);
+  const gap = 4;
+  const minimumLeft = 28;
+  const minimumRight = 28;
+  const desiredLeft = Math.floor(totalWidth * 0.56);
+  const maxLeft = totalWidth - gap - minimumRight;
+  const leftWidth = Math.max(minimumLeft, Math.min(desiredLeft, maxLeft));
+  const rightWidth = Math.max(minimumRight, totalWidth - gap - leftWidth);
 
-  const header = `${truncate("Vocabulary", leftWidth)}   ${truncate("Meaning", rightWidth)}`;
+  const header = `${truncate("Vocabulary", leftWidth)}${" ".repeat(gap)}${truncate("Meaning", rightWidth)}`;
   const pageEntries = entries.slice(pageIndex * PAGE_SIZE, pageIndex * PAGE_SIZE + PAGE_SIZE);
   const rows = pageEntries.map((entry) => {
     const left = truncate(buildEntryLabel(entry), leftWidth);
     const right = truncate(entry.meaning, rightWidth);
-    return `${left}   ${right}`;
+    return `${left}${" ".repeat(gap)}${right}`;
   });
 
   return [header, ...rows];
@@ -385,29 +401,33 @@ function App(): JSX.Element {
             : "Meaning"
           : "Confirm delete";
   const promptLine = `${promptLabel}: ${buffer}_`;
+  const statusLine = status.split("\n")[0] ?? "";
 
-  const screenLines = useMemo(() => {
+  const bodyLines = useMemo(() => {
     const lines: string[] = [];
-    lines.push(padLine(TITLE, width));
-    lines.push(padLine(status.split("\n")[0] ?? "", width));
     lines.push("");
     for (const line of entryLines) {
       lines.push(padLine(line, width));
     }
 
     const reservedLines = 2;
-    while (lines.length < Math.max(0, rows - reservedLines)) {
+    while (lines.length < Math.max(0, rows - reservedLines - 3)) {
       lines.push("");
     }
 
-    lines.push(padLine(truncate(promptLine, width), width));
+    lines.push(padLine("", width));
     lines.push(padLine(buildFooterLine(width, pageText, FOOTER_HINT), width));
     return lines;
-  }, [entryLines, pageText, promptLine, rows, status, width]);
+  }, [entryLines, pageText, rows, width]);
 
   return (
     <Box flexDirection="column">
-      {screenLines.map((line, index) => (
+      <Text color="magenta" bold>
+        {centerLine(TITLE, width)}
+      </Text>
+      <Text color="cyan">{padLine(promptLine, width)}</Text>
+      <Text>{padLine(statusLine, width)}</Text>
+      {bodyLines.map((line, index) => (
         <Text key={`${index}-${line}`}>{line}</Text>
       ))}
     </Box>
@@ -430,4 +450,3 @@ function run(): void {
 }
 
 run();
-
