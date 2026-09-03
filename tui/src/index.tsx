@@ -231,26 +231,29 @@ function buildCommandSuggestions(buffer: string): CommandSpec[] {
   return COMMANDS.filter((command) => command.name.startsWith(prefix));
 }
 
-function buildSuggestionLine(command: CommandSpec, selected: boolean, width: number): string {
+function buildSuggestionLine(command: CommandSpec, selected: boolean, width: number): { commandText: string; hintText: string } {
   const totalWidth = Math.max(width, 40);
-  const marker = selected ? ">" : " ";
   const leftWidth = Math.max(12, Math.min(16, Math.floor(totalWidth * 0.22)));
   const rightWidth = Math.max(1, totalWidth - 3 - leftWidth);
-  const left = padLine(`/${command.name}`, leftWidth);
-  const right = padLine(command.hint, rightWidth);
-  return `${marker} ${left} ${right}`;
+  return {
+    commandText: padLine(`/${command.name}`, leftWidth),
+    hintText: padLine(command.hint, rightWidth),
+  };
 }
 
-function buildSuggestionLines(suggestions: CommandSpec[], selectedIndex: number, width: number): string[] {
+function buildSuggestionLines(suggestions: CommandSpec[], selectedIndex: number, width: number): Array<{ commandText: string; hintText: string }> {
   if (suggestions.length === 0) {
-    return [padLine("No matching commands.", width), ...Array.from({ length: COMMAND_SUGGESTION_ROWS - 1 }, () => "")];
+    return [
+      { commandText: padLine("No matching commands.", width), hintText: "" },
+      ...Array.from({ length: COMMAND_SUGGESTION_ROWS - 1 }, () => ({ commandText: "", hintText: "" })),
+    ];
   }
 
   const rows = suggestions.slice(0, COMMAND_SUGGESTION_ROWS).map((command, index) =>
     buildSuggestionLine(command, index === selectedIndex, width),
   );
   while (rows.length < COMMAND_SUGGESTION_ROWS) {
-    rows.push("");
+    rows.push({ commandText: "", hintText: "" });
   }
   return rows;
 }
@@ -367,8 +370,7 @@ function App(): JSX.Element {
       return;
     }
 
-    setBuffer("");
-    submitCommand(highlighted.name);
+    setBuffer(`/${highlighted.name}`);
   }
 
   function submitCommand(raw: string): void {
@@ -600,8 +602,19 @@ function App(): JSX.Element {
       <Text>{padLine("", width)}</Text>
       {commandPaletteActive
         ? suggestionLines.map((line, index) => (
-            <Text key={`suggestion-${index}-${line}`} color={index === commandSuggestionIndex ? "yellow" : AUXILIARY_TEXT_COLOR}>
-              {padLine(line, width)}
+            <Text key={`suggestion-${index}-${line.commandText}-${line.hintText}`}>
+              {index === commandSuggestionIndex ? (
+                <>
+                  <Text color="yellow">{padLine(">", 2)}</Text>
+                  <Text color="yellow">{line.commandText}</Text>
+                </>
+              ) : (
+                <>
+                  <Text color={AUXILIARY_TEXT_COLOR}>{padLine(" ", 2)}</Text>
+                  <Text color="white">{line.commandText}</Text>
+                </>
+              )}
+              <Text color={AUXILIARY_TEXT_COLOR}> {line.hintText}</Text>
             </Text>
           ))
         : null}
