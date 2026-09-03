@@ -11,7 +11,6 @@ type UiMode =
 const PAGE_SIZE = 20;
 const TITLE = "VocabHelper MVP";
 const FOOTER_HINT = "Navigate pages with <- ->";
-const STATUS_HINT = "Esc cancels forms.";
 const repository = new VocabularyRepository(defaultDbPath());
 
 function writeToStdout(text: string): void {
@@ -34,22 +33,84 @@ function normalizeCommand(input: string): string[] {
   return cleaned.split(/\s+/);
 }
 
+function isCombiningMark(codePoint: number): boolean {
+  return (
+    (codePoint >= 0x0300 && codePoint <= 0x036f) ||
+    (codePoint >= 0x1ab0 && codePoint <= 0x1aff) ||
+    (codePoint >= 0x1dc0 && codePoint <= 0x1dff) ||
+    (codePoint >= 0x20d0 && codePoint <= 0x20ff) ||
+    (codePoint >= 0xfe20 && codePoint <= 0xfe2f)
+  );
+}
+
+function isWide(codePoint: number): boolean {
+  return (
+    codePoint >= 0x1100 &&
+    (
+      codePoint <= 0x115f ||
+      codePoint === 0x2329 ||
+      codePoint === 0x232a ||
+      (codePoint >= 0x2e80 && codePoint <= 0xa4cf && codePoint !== 0x303f) ||
+      (codePoint >= 0xac00 && codePoint <= 0xd7a3) ||
+      (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
+      (codePoint >= 0xfe10 && codePoint <= 0xfe19) ||
+      (codePoint >= 0xfe30 && codePoint <= 0xfe6f) ||
+      (codePoint >= 0xff00 && codePoint <= 0xff60) ||
+      (codePoint >= 0xffe0 && codePoint <= 0xffe6) ||
+      (codePoint >= 0x1f300 && codePoint <= 0x1f64f) ||
+      (codePoint >= 0x1f900 && codePoint <= 0x1f9ff) ||
+      (codePoint >= 0x20000 && codePoint <= 0x3fffd)
+    )
+  );
+}
+
+function displayWidth(text: string): number {
+  let width = 0;
+  for (const char of Array.from(text)) {
+    const codePoint = char.codePointAt(0) ?? 0;
+    if (isCombiningMark(codePoint)) {
+      continue;
+    }
+    width += isWide(codePoint) ? 2 : 1;
+  }
+  return width;
+}
+
+function sliceToWidth(text: string, maxWidth: number): string {
+  if (maxWidth <= 0) {
+    return "";
+  }
+
+  let width = 0;
+  let result = "";
+  for (const char of Array.from(text)) {
+    const codePoint = char.codePointAt(0) ?? 0;
+    const charWidth = isCombiningMark(codePoint) ? 0 : isWide(codePoint) ? 2 : 1;
+    if (width + charWidth > maxWidth) {
+      break;
+    }
+    result += char;
+    width += charWidth;
+  }
+  return result;
+}
+
 function truncate(text: string, width: number): string {
   if (width <= 0) {
     return "";
   }
-  if (text.length <= width) {
+  if (displayWidth(text) <= width) {
     return text;
   }
   if (width === 1) {
     return ".";
   }
-  return `${text.slice(0, width - 1)}.`;
+  return `${sliceToWidth(text, width - 1)}.`;
 }
 
 function padLine(text: string, width: number): string {
   const clipped = truncate(text, width);
-  return clipped.padEnd(width, " ");
+  return `${clipped}${" ".repeat(Math.max(0, width - displayWidth(clipped)))}`;
 }
 
 function centerLine(text: string, width: number): string {
@@ -58,8 +119,9 @@ function centerLine(text: string, width: number): string {
   }
 
   const clipped = truncate(text, width);
-  const leftPadding = Math.max(0, Math.floor((width - clipped.length) / 2));
-  const rightPadding = Math.max(0, width - clipped.length - leftPadding);
+  const clippedWidth = displayWidth(clipped);
+  const leftPadding = Math.max(0, Math.floor((width - clippedWidth) / 2));
+  const rightPadding = Math.max(0, width - clippedWidth - leftPadding);
   return `${" ".repeat(leftPadding)}${clipped}${" ".repeat(rightPadding)}`;
 }
 
@@ -82,33 +144,38 @@ function buildFooterLine(width: number, pageText: string, hintText: string): str
 
   const left = truncate(pageText, width);
   const right = truncate(hintText, width);
-  if (left.length + right.length + 2 >= width) {
-    const gap = Math.max(1, width - left.length);
-    return `${left}${" ".repeat(gap)}${truncate(right, width - left.length - gap)}`;
+  const leftWidth = displayWidth(left);
+  const rightWidth = displayWidth(right);
+  if (leftWidth + rightWidth + 2 >= width) {
+    const gap = Math.max(1, width - leftWidth);
+    return `${left}${" ".repeat(gap)}${truncate(right, width - leftWidth - gap)}`;
   }
 
-  return `${left}${" ".repeat(width - left.length - right.length)}${right}`;
+  return `${left}${" ".repeat(width - leftWidth - rightWidth)}${right}`;
 }
 
-function buildEntryLines(entries: EntryRow[], pageIndex: number, width: number): string[] {
-  const totalWidth = Math.max(width, 80);
-  const gap = 4;
-  const minimumLeft = 28;
-  const minimumRight = 28;
-  const desiredLeft = Math.floor(totalWidth * 0.56);
-  const maxLeft = totalWidth - gap - minimumRight;
+function buildTableLines(entries: EntryRow[], pageIndex: number, width: number, availableRows: number): string[] {
+  const totalWidth = Math.max(width, 40);
+  const innerWidth = Math.max(20, totalWidth - 2);
+  const gap = 1;
+  const minimumLeft = Math.max(14, Math.floor(innerWidth * 0.4));
+  const minimumRight = Math.max(12, Math.floor(innerWidth * 0.25));
+  const desiredLeft = Math.floor(innerWidth * 0.58);
+  const maxLeft = Math.max(minimumLeft, innerWidth - gap - minimumRight);
   const leftWidth = Math.max(minimumLeft, Math.min(desiredLeft, maxLeft));
-  const rightWidth = Math.max(minimumRight, totalWidth - gap - leftWidth);
+  const rightWidth = Math.max(minimumRight, innerWidth - gap - leftWidth);
+  const visibleRows = Math.max(1, Math.min(PAGE_SIZE, availableRows));
+  const pageEntries = entries.slice(pageIndex * PAGE_SIZE, pageIndex * PAGE_SIZE + visibleRows);
+  const border = `+${"-".repeat(leftWidth)}+${"-".repeat(rightWidth)}+`;
+  const header = `|${padLine("Vocabulary", leftWidth)}|${padLine("Meaning", rightWidth)}|`;
 
-  const header = `${truncate("Vocabulary", leftWidth)}${" ".repeat(gap)}${truncate("Meaning", rightWidth)}`;
-  const pageEntries = entries.slice(pageIndex * PAGE_SIZE, pageIndex * PAGE_SIZE + PAGE_SIZE);
   const rows = pageEntries.map((entry) => {
-    const left = truncate(buildEntryLabel(entry), leftWidth);
-    const right = truncate(entry.meaning, rightWidth);
-    return `${left}${" ".repeat(gap)}${right}`;
+    const left = padLine(buildEntryLabel(entry), leftWidth);
+    const right = padLine(entry.meaning, rightWidth);
+    return `|${left}|${right}|`;
   });
 
-  return [header, ...rows];
+  return [border, header, border, ...rows, border];
 }
 
 function buildHelpText(): string {
@@ -384,9 +451,9 @@ function App(): JSX.Element {
   const pageCount = getPageCount(entries.length);
   const safePageIndex = clampPageIndex(pageIndex, entries.length);
   const pageText = `Page ${safePageIndex + 1}/${pageCount}`;
-  const entryLines = useMemo(
-    () => buildEntryLines(entries, safePageIndex, width),
-    [entries, safePageIndex, width],
+  const tableLines = useMemo(
+    () => buildTableLines(entries, safePageIndex, width, Math.max(1, rows - 6)),
+    [entries, safePageIndex, rows, width],
   );
   const promptLabel =
     mode.kind === "command"
@@ -406,7 +473,7 @@ function App(): JSX.Element {
   const bodyLines = useMemo(() => {
     const lines: string[] = [];
     lines.push("");
-    for (const line of entryLines) {
+    for (const line of tableLines) {
       lines.push(padLine(line, width));
     }
 
@@ -418,11 +485,11 @@ function App(): JSX.Element {
     lines.push(padLine("", width));
     lines.push(padLine(buildFooterLine(width, pageText, FOOTER_HINT), width));
     return lines;
-  }, [entryLines, pageText, rows, width]);
+  }, [pageText, rows, tableLines, width]);
 
   return (
     <Box flexDirection="column">
-      <Text color="magenta" bold>
+      <Text color="cyan" bold>
         {centerLine(TITLE, width)}
       </Text>
       <Text color="cyan">{padLine(promptLine, width)}</Text>
