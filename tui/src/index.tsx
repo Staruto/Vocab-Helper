@@ -8,9 +8,23 @@ type UiMode =
   | { kind: "edit"; stage: "vocabulary" | "meaning"; entryId: number; vocabulary: string; meaning: string }
   | { kind: "delete"; entryId: number; label: string };
 
+type CommandSpec = {
+  name: string;
+  hint: string;
+};
+
 const PAGE_SIZE = 20;
 const TITLE = "VocabHelper MVP";
 const FOOTER_HINT = "Navigate pages with <- ->";
+const COMMAND_SUGGESTION_ROWS = 6;
+const COMMANDS: CommandSpec[] = [
+  { name: "list", hint: "Refresh and show entries" },
+  { name: "add", hint: "Add a new entry" },
+  { name: "edit", hint: "Edit an entry by id" },
+  { name: "delete", hint: "Delete an entry by id" },
+  { name: "help", hint: "Show command help" },
+  { name: "quit", hint: "Exit the app" },
+];
 const repository = new VocabularyRepository(defaultDbPath());
 
 function writeToStdout(text: string): void {
@@ -179,13 +193,7 @@ function buildTableLines(entries: EntryRow[], pageIndex: number, width: number, 
 }
 
 function buildHelpText(): string {
-  return [
-    "Commands:",
-    "/list /add /edit <id> /delete <id>",
-    "/help /quit",
-    "Esc cancels forms.",
-    "Use <- -> to change pages.",
-  ].join("\n");
+  return ["Commands:", ...COMMANDS.map((command) => `/${command.name}  ${command.hint}`), "Esc cancels forms.", "Use <- -> to change pages."].join("\n");
 }
 
 function buildStatusLines(message: string, lineCount = 5): string[] {
@@ -194,6 +202,56 @@ function buildStatusLines(message: string, lineCount = 5): string[] {
     visible.push("");
   }
   return visible;
+}
+
+function getCommandPrefix(buffer: string): string | null {
+  if (!buffer.startsWith("/")) {
+    return null;
+  }
+
+  const afterSlash = buffer.slice(1);
+  if (afterSlash.includes(" ")) {
+    return null;
+  }
+
+  return afterSlash.toLowerCase();
+}
+
+function buildCommandSuggestions(buffer: string): CommandSpec[] {
+  const prefix = getCommandPrefix(buffer);
+  if (prefix === null) {
+    return [];
+  }
+
+  if (prefix === "") {
+    return COMMANDS;
+  }
+
+  return COMMANDS.filter((command) => command.name.startsWith(prefix));
+}
+
+function buildSuggestionLine(command: CommandSpec, selected: boolean, width: number): string {
+  const totalWidth = Math.max(width, 40);
+  const marker = selected ? ">" : " ";
+  const leftWidth = Math.max(12, Math.min(16, Math.floor(totalWidth * 0.22)));
+  const rightWidth = Math.max(1, totalWidth - 3 - leftWidth);
+  const left = padLine(`/${command.name}`, leftWidth);
+  const right = padLine(command.hint, rightWidth);
+  return `${marker} ${left} ${right}`;
+}
+
+function buildSuggestionLines(suggestions: CommandSpec[], selectedIndex: number, width: number): string[] {
+  if (suggestions.length === 0) {
+    return [padLine("No matching commands.", width), ...Array.from({ length: COMMAND_SUGGESTION_ROWS - 1 }, () => "")];
+  }
+
+  const rows = suggestions.slice(0, COMMAND_SUGGESTION_ROWS).map((command, index) =>
+    buildSuggestionLine(command, index === selectedIndex, width),
+  );
+  while (rows.length < COMMAND_SUGGESTION_ROWS) {
+    rows.push("");
+  }
+  return rows;
 }
 
 function App(): JSX.Element {
@@ -205,6 +263,7 @@ function App(): JSX.Element {
   const [pageIndex, setPageIndex] = useState(0);
   const [mode, setMode] = useState<UiMode>({ kind: "command" });
   const [buffer, setBuffer] = useState("");
+  const [suggestionIndex, setSuggestionIndex] = useState(0);
   const [statusLines, setStatusLines] = useState<string[]>(() => buildStatusLines("Ready."));
 
   useEffect(() => {
@@ -233,6 +292,23 @@ function App(): JSX.Element {
   useEffect(() => {
     setPageIndex((current) => clampPageIndex(current, entries.length));
   }, [entries.length]);
+
+  const commandSuggestions = useMemo(() => buildCommandSuggestions(buffer), [buffer]);
+  const commandSuggestionIndex = commandSuggestions.length === 0 ? 0 : Math.min(suggestionIndex, commandSuggestions.length - 1);
+  const commandPaletteActive = mode.kind === "command" && getCommandPrefix(buffer) !== null;
+  const suggestionLines = useMemo(
+    () => buildSuggestionLines(commandSuggestions, commandSuggestionIndex, width),
+    [commandSuggestions, commandSuggestionIndex, width],
+  );
+
+  useEffect(() => {
+    if (mode.kind !== "command") {
+      setSuggestionIndex(0);
+      return;
+    }
+
+    setSuggestionIndex(0);
+  }, [buffer, mode.kind, commandSuggestions.length]);
 
   function refreshEntries(message?: string): void {
     const next = repository.listEntries();
@@ -280,7 +356,18 @@ function App(): JSX.Element {
   function cancelActiveMode(message = "Cancelled."): void {
     setMode({ kind: "command" });
     setBuffer("");
+    setSuggestionIndex(0);
     setStatusLines(buildStatusLines(message));
+  }
+
+  function submitHighlightedCommand(): void {
+    const highlighted = commandSuggestions[commandSuggestionIndex];
+    if (!highlighted) {
+      return;
+    }
+
+    setBuffer("");
+    submitCommand(highlighted.name);
   }
 
   function submitCommand(raw: string): void {
@@ -423,8 +510,13 @@ function App(): JSX.Element {
     }
 
     if (key.escape) {
-      if (mode.kind === "command") {
+      if (commandPaletteActive) {
         setBuffer("");
+        setSuggestionIndex(0);
+        setStatusLines(buildStatusLines("Ready."));
+      } else if (mode.kind === "command") {
+        setBuffer("");
+        setSuggestionIndex(0);
         setStatusLines(buildStatusLines("Ready."));
       } else {
         cancelActiveMode();
@@ -432,12 +524,22 @@ function App(): JSX.Element {
       return;
     }
 
-    if (key.leftArrow && mode.kind === "command") {
+    if (key.upArrow && commandPaletteActive) {
+      setSuggestionIndex((current) => (current <= 0 ? commandSuggestions.length - 1 : current - 1));
+      return;
+    }
+
+    if (key.downArrow && commandPaletteActive) {
+      setSuggestionIndex((current) => (current >= commandSuggestions.length - 1 ? 0 : current + 1));
+      return;
+    }
+
+    if (key.leftArrow && mode.kind === "command" && !commandPaletteActive) {
       setPageIndex((current) => Math.max(0, current - 1));
       return;
     }
 
-    if (key.rightArrow && mode.kind === "command") {
+    if (key.rightArrow && mode.kind === "command" && !commandPaletteActive) {
       setPageIndex((current) => Math.min(getPageCount(entries.length) - 1, current + 1));
       return;
     }
@@ -449,7 +551,9 @@ function App(): JSX.Element {
 
     if (key.return) {
       const current = buffer;
-      if (mode.kind === "command") {
+      if (commandPaletteActive && commandSuggestions.length > 0) {
+        submitHighlightedCommand();
+      } else if (mode.kind === "command") {
         submitCommand(current);
       } else {
         submitForm(current);
@@ -486,6 +590,14 @@ function App(): JSX.Element {
       <Text>{padLine("", width)}</Text>
       <Text color="cyan">{padLine(promptLine, width)}</Text>
       <Text>{padLine("", width)}</Text>
+      {commandPaletteActive
+        ? suggestionLines.map((line, index) => (
+            <Text key={`suggestion-${index}-${line}`} color={index === commandSuggestionIndex ? "yellow" : undefined}>
+              {padLine(line, width)}
+            </Text>
+          ))
+        : null}
+      {commandPaletteActive ? <Text>{padLine("", width)}</Text> : null}
       {statusLines.map((line, index) => (
         <Text key={`status-${index}-${line}`}>{padLine(line, width)}</Text>
       ))}
