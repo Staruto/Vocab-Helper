@@ -179,7 +179,21 @@ function buildTableLines(entries: EntryRow[], pageIndex: number, width: number, 
 }
 
 function buildHelpText(): string {
-  return "Commands: /list /add /edit <id> /delete <id> /help /quit | Esc cancels forms.";
+  return [
+    "Commands:",
+    "/list /add /edit <id> /delete <id>",
+    "/help /quit",
+    "Esc cancels forms.",
+    "Use <- -> to change pages.",
+  ].join("\n");
+}
+
+function buildStatusLines(message: string, lineCount = 5): string[] {
+  const visible = message.split("\n").map((line) => line.trimEnd()).slice(-lineCount);
+  while (visible.length < lineCount) {
+    visible.push("");
+  }
+  return visible;
 }
 
 function App(): JSX.Element {
@@ -191,7 +205,7 @@ function App(): JSX.Element {
   const [pageIndex, setPageIndex] = useState(0);
   const [mode, setMode] = useState<UiMode>({ kind: "command" });
   const [buffer, setBuffer] = useState("");
-  const [status, setStatus] = useState<string>("Ready.");
+  const [statusLines, setStatusLines] = useState<string[]>(() => buildStatusLines("Ready."));
 
   useEffect(() => {
     if (!stdout) {
@@ -224,19 +238,19 @@ function App(): JSX.Element {
     const next = repository.listEntries();
     setEntries(next);
     setPageIndex((current) => clampPageIndex(current, next.length));
-    setStatus(message ?? `Loaded ${next.length} entr${next.length === 1 ? "y" : "ies"}.`);
+    setStatusLines(buildStatusLines(message ?? `Loaded ${next.length} entr${next.length === 1 ? "y" : "ies"}.`));
   }
 
   function beginAdd(): void {
     setMode({ kind: "add", stage: "vocabulary", vocabulary: "", meaning: "" });
     setBuffer("");
-    setStatus("Adding a new entry.");
+    setStatusLines(buildStatusLines("Adding a new entry.\nEnter vocabulary."));
   }
 
   function beginEdit(entryId: number): void {
     const entry = repository.getEntry(entryId);
     if (!entry) {
-      setStatus(`Entry #${entryId} was not found.`);
+      setStatusLines(buildStatusLines(`Entry #${entryId} was not found.`));
       return;
     }
 
@@ -248,25 +262,25 @@ function App(): JSX.Element {
       meaning: entry.meaning,
     });
     setBuffer(entry.vocabulary);
-    setStatus(`Editing #${entryId}.`);
+    setStatusLines(buildStatusLines(`Editing #${entryId}.\nEdit vocabulary.`));
   }
 
   function beginDelete(entryId: number): void {
     const entry = repository.getEntry(entryId);
     if (!entry) {
-      setStatus(`Entry #${entryId} was not found.`);
+      setStatusLines(buildStatusLines(`Entry #${entryId} was not found.`));
       return;
     }
 
     setMode({ kind: "delete", entryId, label: buildEntryLabel(entry) });
     setBuffer("");
-    setStatus(`Type yes to delete ${buildEntryLabel(entry)}.`);
+    setStatusLines(buildStatusLines(`Type yes to delete ${buildEntryLabel(entry)}.`));
   }
 
   function cancelActiveMode(message = "Cancelled."): void {
     setMode({ kind: "command" });
     setBuffer("");
-    setStatus(message);
+    setStatusLines(buildStatusLines(message));
   }
 
   function submitCommand(raw: string): void {
@@ -279,7 +293,7 @@ function App(): JSX.Element {
     const lower = command.toLowerCase();
 
     if (lower === "help") {
-      setStatus(buildHelpText());
+      setStatusLines(buildStatusLines(buildHelpText()));
       return;
     }
 
@@ -296,7 +310,7 @@ function App(): JSX.Element {
     if (lower === "edit") {
       const entryId = Number(args[0]);
       if (!args[0] || Number.isNaN(entryId)) {
-        setStatus("Usage: /edit <id>");
+        setStatusLines(buildStatusLines("Usage: /edit <id>"));
         return;
       }
       beginEdit(entryId);
@@ -306,7 +320,7 @@ function App(): JSX.Element {
     if (lower === "delete") {
       const entryId = Number(args[0]);
       if (!args[0] || Number.isNaN(entryId)) {
-        setStatus("Usage: /delete <id>");
+        setStatusLines(buildStatusLines("Usage: /delete <id>"));
         return;
       }
       beginDelete(entryId);
@@ -320,7 +334,7 @@ function App(): JSX.Element {
       return;
     }
 
-    setStatus(`Unknown command: ${command}`);
+    setStatusLines(buildStatusLines(`Unknown command: ${command}`));
   }
 
   function submitForm(value: string): void {
@@ -329,7 +343,7 @@ function App(): JSX.Element {
     if (mode.kind === "add") {
       if (mode.stage === "vocabulary") {
         if (!text) {
-          setStatus("Vocabulary is required.");
+          setStatusLines(buildStatusLines("Vocabulary is required."));
           return;
         }
 
@@ -340,12 +354,12 @@ function App(): JSX.Element {
           meaning: "",
         });
         setBuffer("");
-        setStatus("Enter meaning.");
+        setStatusLines(buildStatusLines("Enter meaning."));
         return;
       }
 
       if (!text) {
-        setStatus("Meaning is required.");
+        setStatusLines(buildStatusLines("Meaning is required."));
         return;
       }
 
@@ -359,7 +373,7 @@ function App(): JSX.Element {
     if (mode.kind === "edit") {
       if (mode.stage === "vocabulary") {
         if (!text) {
-          setStatus("Vocabulary is required.");
+          setStatusLines(buildStatusLines("Vocabulary is required."));
           return;
         }
 
@@ -371,12 +385,12 @@ function App(): JSX.Element {
           meaning: mode.meaning,
         });
         setBuffer(mode.meaning);
-        setStatus("Update meaning.");
+        setStatusLines(buildStatusLines("Update meaning."));
         return;
       }
 
       if (!text) {
-        setStatus("Meaning is required.");
+        setStatusLines(buildStatusLines("Meaning is required."));
         return;
       }
 
@@ -411,7 +425,7 @@ function App(): JSX.Element {
     if (key.escape) {
       if (mode.kind === "command") {
         setBuffer("");
-        setStatus("Ready.");
+        setStatusLines(buildStatusLines("Ready."));
       } else {
         cancelActiveMode();
       }
@@ -452,50 +466,28 @@ function App(): JSX.Element {
   const safePageIndex = clampPageIndex(pageIndex, entries.length);
   const pageText = `Page ${safePageIndex + 1}/${pageCount}`;
   const tableLines = useMemo(
-    () => buildTableLines(entries, safePageIndex, width, Math.max(1, rows - 6)),
-    [entries, safePageIndex, rows, width],
+    () => buildTableLines(entries, safePageIndex, width, PAGE_SIZE),
+    [entries, safePageIndex, width],
   );
-  const promptLabel =
-    mode.kind === "command"
-      ? "Command"
-      : mode.kind === "add"
-        ? mode.stage === "vocabulary"
-          ? "Vocabulary"
-          : "Meaning"
-        : mode.kind === "edit"
-          ? mode.stage === "vocabulary"
-            ? "Vocabulary"
-            : "Meaning"
-          : "Confirm delete";
-  const promptLine = `${promptLabel}: ${buffer}_`;
-  const statusLine = status.split("\n")[0] ?? "";
-
-  const bodyLines = useMemo(() => {
-    const lines: string[] = [];
-    lines.push("");
-    for (const line of tableLines) {
-      lines.push(padLine(line, width));
-    }
-
-    const reservedLines = 2;
-    while (lines.length < Math.max(0, rows - reservedLines - 3)) {
-      lines.push("");
-    }
-
-    lines.push(padLine("", width));
-    lines.push(padLine(buildFooterLine(width, pageText, FOOTER_HINT), width));
-    return lines;
-  }, [pageText, rows, tableLines, width]);
+  const promptLine = `> ${buffer}_`;
 
   return (
     <Box flexDirection="column">
       <Text color="cyan" bold>
         {centerLine(TITLE, width)}
       </Text>
-      <Text color="cyan">{padLine(promptLine, width)}</Text>
-      <Text>{padLine(statusLine, width)}</Text>
-      {bodyLines.map((line, index) => (
+      {tableLines.map((line, index) => (
         <Text key={`${index}-${line}`}>{line}</Text>
+      ))}
+      <Text>{padLine("", width)}</Text>
+      <Text>{padLine("", width)}</Text>
+      <Text>{padLine(buildFooterLine(width, pageText, FOOTER_HINT), width)}</Text>
+      <Text>{padLine("", width)}</Text>
+      <Text>{padLine("", width)}</Text>
+      <Text color="cyan">{padLine(promptLine, width)}</Text>
+      <Text>{padLine("", width)}</Text>
+      {statusLines.map((line, index) => (
+        <Text key={`status-${index}-${line}`}>{padLine(line, width)}</Text>
       ))}
     </Box>
   );
