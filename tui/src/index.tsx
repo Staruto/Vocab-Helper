@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, render, useApp, useInput, useStdout } from "ink";
-import { EntryRow } from "./db.js";
+import { EntryRow, WorkbookRow } from "./db.js";
 import { VocabularyBackend } from "./backend.js";
 
 type UiMode =
@@ -9,6 +9,18 @@ type UiMode =
   | { kind: "add"; stage: "vocabulary" | "meaning"; vocabulary: string; meaning: string }
   | { kind: "edit"; stage: "vocabulary" | "meaning"; entryId: number; vocabulary: string; meaning: string }
   | { kind: "delete"; entryId: number; label: string };
+
+type AppScreen =
+  | { kind: "menu" }
+  | { kind: "create-workbook" }
+  | { kind: "delete-workbook"; workbook: WorkbookRow; confirm: string }
+  | { kind: "vocab"; workbook: WorkbookRow };
+
+type VocabularyScreenProps = {
+  workbook: WorkbookRow;
+  onBackToMenu: () => void;
+  onQuit: () => void;
+};
 
 type CommandSpec = {
   name: string;
@@ -19,9 +31,12 @@ type ParameterizedCommand = "edit" | "delete";
 
 const PAGE_SIZE = 20;
 const TITLE = "VocabHelper MVP";
-const FOOTER_HINT = "Navigate pages with <- ->";
+const FOOTER_HINT = "Navigate pages with <- -> | Esc returns to menu";
 const AUXILIARY_TEXT_COLOR = "gray";
 const COMMAND_SUGGESTION_ROWS = 6;
+const WORKBOOK_MENU_HINT = "↑↓ select  Enter open  Del delete  + create  Esc quit";
+const WORKBOOK_CREATE_HINT = "Type a name and press Enter. Esc returns to the menu.";
+const WORKBOOK_DELETE_HINT = "Type yes to confirm. Enter deletes. Esc cancels.";
 const COMMANDS: CommandSpec[] = [
   { name: "list", hint: "Refresh and show entries" },
   { name: "add", hint: "Add a new entry" },
@@ -266,12 +281,54 @@ function buildSuggestionLines(suggestions: CommandSpec[], selectedIndex: number,
   return rows;
 }
 
-function App(): JSX.Element {
-  const { exit } = useApp();
+function buildWorkbookMenuLines(
+  workbooks: WorkbookRow[],
+  width: number,
+  selectedIndex: number,
+): { border: string; header: string; rows: Array<{ line: string; selected: boolean }> } {
+  const totalWidth = Math.max(width, 56);
+  const selectWidth = 3;
+  const idWidth = 6;
+  const countWidth = 8;
+  const nameWidth = Math.max(24, totalWidth - selectWidth - idWidth - countWidth - 5);
+  const border = `+${"-".repeat(selectWidth)}+${"-".repeat(idWidth)}+${"-".repeat(nameWidth)}+${"-".repeat(countWidth)}+`;
+  const header = `|${padLine("", selectWidth)}|${padLine("ID", idWidth)}|${padLine("Name", nameWidth)}|${padLine("Words", countWidth)}|`;
+
+  const rows = workbooks.map((workbook, index) => ({
+    selected: index === selectedIndex,
+    line: `|${padLine(index === selectedIndex ? ">" : " ", selectWidth)}|${padLine(`#${workbook.id}`, idWidth)}|${padLine(workbook.name, nameWidth)}|${padLine(String(workbook.wordCount), countWidth)}|`,
+  }));
+
+  rows.push({
+    selected: selectedIndex === workbooks.length,
+    line: `|${padLine(selectedIndex === workbooks.length ? ">" : " ", selectWidth)}|${padLine("+", idWidth)}|${padLine("Create new workbook", nameWidth)}|${padLine("", countWidth)}|`,
+  });
+  return { border, header, rows };
+}
+
+function buildWorkbookCreateLines(name: string, width: number): string[] {
+  return [
+    padLine(`Name: > ${name}_`, width),
+    padLine("", width),
+    padLine(WORKBOOK_CREATE_HINT, width),
+  ];
+}
+
+function buildWorkbookDeleteLines(workbook: WorkbookRow, confirm: string, width: number): string[] {
+  return [
+    padLine(`Delete #${workbook.id} ${workbook.name}?`, width),
+    padLine("", width),
+    padLine(`> ${confirm}_`, width),
+    padLine("", width),
+    padLine(WORKBOOK_DELETE_HINT, width),
+  ];
+}
+
+function VocabularyScreen({ workbook, onBackToMenu, onQuit }: VocabularyScreenProps): JSX.Element {
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
   const [rows, setRows] = useState(() => stdout?.rows ?? 24);
-  const [entries, setEntries] = useState<EntryRow[]>(() => backend.listEntries());
+  const [entries, setEntries] = useState<EntryRow[]>(() => backend.listEntries(workbook.id));
   const [pageIndex, setPageIndex] = useState(0);
   const [mode, setMode] = useState<UiMode>({ kind: "command" });
   const [buffer, setBuffer] = useState("");
@@ -295,13 +352,6 @@ function App(): JSX.Element {
   }, [stdout]);
 
   useEffect(() => {
-    return () => {
-      leaveAlternateScreen();
-      backend.close();
-    };
-  }, []);
-
-  useEffect(() => {
     setPageIndex((current) => clampPageIndex(current, entries.length));
   }, [entries.length]);
 
@@ -323,7 +373,7 @@ function App(): JSX.Element {
   }, [buffer, mode.kind, commandSuggestions.length]);
 
   function refreshEntries(message?: string): void {
-    const next = backend.listEntries();
+    const next = backend.listEntries(workbook.id);
     setEntries(next);
     setPageIndex((current) => clampPageIndex(current, next.length));
     setStatusLines(buildStatusLines(message ?? `Loaded ${next.length} entr${next.length === 1 ? "y" : "ies"}.`));
@@ -443,9 +493,7 @@ function App(): JSX.Element {
     }
 
     if (lower === "quit" || lower === "exit") {
-      leaveAlternateScreen();
-      backend.close();
-      exit();
+      onQuit();
       return;
     }
 
@@ -478,7 +526,7 @@ function App(): JSX.Element {
         return;
       }
 
-      const entry = backend.addEntry(mode.vocabulary, text);
+      const entry = backend.addEntry(workbook.id, mode.vocabulary, text);
       setMode({ kind: "command" });
       setBuffer("");
       refreshEntries(`Added #${entry.id}.`);
@@ -531,24 +579,12 @@ function App(): JSX.Element {
 
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
-      leaveAlternateScreen();
-      backend.close();
-      exit();
+      onQuit();
       return;
     }
 
     if (key.escape) {
-      if (commandPaletteActive) {
-        setBuffer("");
-        setSuggestionIndex(0);
-        setStatusLines(buildStatusLines("Ready."));
-      } else if (mode.kind === "command" || mode.kind === "commandArg") {
-        setBuffer("");
-        setSuggestionIndex(0);
-        setStatusLines(buildStatusLines("Ready."));
-      } else {
-        cancelActiveMode();
-      }
+      onBackToMenu();
       return;
     }
 
@@ -609,11 +645,12 @@ function App(): JSX.Element {
     [entries, safePageIndex, width],
   );
   const promptLine = `> ${buffer}_`;
+  const screenTitle = `${TITLE} — ${workbook.name}`;
 
   return (
     <Box flexDirection="column">
       <Text color="cyan" bold>
-        {centerLine(TITLE, width)}
+        {centerLine(screenTitle, width)}
       </Text>
       {tableLines.map((line, index) => (
         <Text key={`${index}-${line}`}>{line}</Text>
@@ -655,12 +692,385 @@ function App(): JSX.Element {
   );
 }
 
+function WorkbookMenuScreen({
+  workbooks,
+  selectedIndex,
+  onSelectedIndexChange,
+  onOpenWorkbook,
+  onCreateWorkbook,
+  onDeleteWorkbook,
+  onQuit,
+}: {
+  workbooks: WorkbookRow[];
+  selectedIndex: number;
+  onSelectedIndexChange: (index: number) => void;
+  onOpenWorkbook: (workbook: WorkbookRow) => void;
+  onCreateWorkbook: () => void;
+  onDeleteWorkbook: (workbook: WorkbookRow) => void;
+  onQuit: () => void;
+}): JSX.Element {
+  const { stdout } = useStdout();
+  const [width, setWidth] = useState(() => stdout?.columns ?? 80);
+
+  useEffect(() => {
+    if (!stdout) {
+      return;
+    }
+
+    const onResize = () => {
+      setWidth(stdout.columns ?? 80);
+    };
+
+    stdout.on("resize", onResize);
+    return () => {
+      stdout.off("resize", onResize);
+    };
+  }, [stdout]);
+
+  const displayRows = useMemo(() => buildWorkbookMenuLines(workbooks, width, selectedIndex), [workbooks, selectedIndex, width]);
+
+  useInput((input, key) => {
+    if (key.ctrl && input === "c") {
+      onQuit();
+      return;
+    }
+
+    if (key.escape) {
+      onQuit();
+      return;
+    }
+
+    if (key.upArrow) {
+      onSelectedIndexChange(selectedIndex <= 0 ? Math.max(0, workbooks.length) : selectedIndex - 1);
+      return;
+    }
+
+    if (key.downArrow) {
+      onSelectedIndexChange(selectedIndex >= Math.max(0, workbooks.length) ? 0 : selectedIndex + 1);
+      return;
+    }
+
+    if (key.delete) {
+      const selected = selectedIndex < workbooks.length ? workbooks[selectedIndex] : null;
+      if (selected) {
+        onDeleteWorkbook(selected);
+      }
+      return;
+    }
+
+    if (key.return) {
+      const selected = selectedIndex < workbooks.length ? workbooks[selectedIndex] : null;
+      if (selected) {
+        onOpenWorkbook(selected);
+        return;
+      }
+      onCreateWorkbook();
+    }
+  });
+
+  return (
+    <Box flexDirection="column">
+      <Text color="cyan" bold>
+        {centerLine(TITLE, width)}
+      </Text>
+      <Text color={AUXILIARY_TEXT_COLOR}>{padLine("Select a workbook.", width)}</Text>
+      <Text>{padLine("", width)}</Text>
+      <Text>{displayRows.border}</Text>
+      <Text>{displayRows.header}</Text>
+      <Text>{displayRows.border}</Text>
+      {displayRows.rows.map((row, index) => (
+        <Text key={`${index}-${row.line}`} color={row.selected ? "yellow" : AUXILIARY_TEXT_COLOR}>
+          {padLine(row.line, width)}
+        </Text>
+      ))}
+      <Text>{padLine("", width)}</Text>
+      <Text color={AUXILIARY_TEXT_COLOR}>{padLine(WORKBOOK_MENU_HINT, width)}</Text>
+      <Text>{padLine("", width)}</Text>
+      <Text color={AUXILIARY_TEXT_COLOR}>
+        {padLine(
+          selectedIndex < workbooks.length
+            ? `Selected: #${workbooks[selectedIndex].id} ${workbooks[selectedIndex].name}`
+            : "Create new workbook.",
+          width,
+        )}
+      </Text>
+    </Box>
+  );
+}
+
+function WorkbookCreateScreen({
+  onCreate,
+  onCancel,
+  onQuit,
+}: {
+  onCreate: (name: string) => void;
+  onCancel: () => void;
+  onQuit: () => void;
+}): JSX.Element {
+  const { stdout } = useStdout();
+  const [width, setWidth] = useState(() => stdout?.columns ?? 80);
+  const [name, setName] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!stdout) {
+      return;
+    }
+
+    const onResize = () => {
+      setWidth(stdout.columns ?? 80);
+    };
+
+    stdout.on("resize", onResize);
+    return () => {
+      stdout.off("resize", onResize);
+    };
+  }, [stdout]);
+
+  useInput((input, key) => {
+    if (key.ctrl && input === "c") {
+      onQuit();
+      return;
+    }
+
+    if (key.escape) {
+      onCancel();
+      return;
+    }
+
+    if (key.backspace || key.delete) {
+      setName((current) => current.slice(0, -1));
+      return;
+    }
+
+    if (key.return) {
+      const trimmed = name.trim();
+      if (!trimmed) {
+        setError("Workbook name is required.");
+        return;
+      }
+      onCreate(trimmed);
+      return;
+    }
+
+    if (!key.ctrl && !key.meta && input) {
+      setName((current) => current + input);
+      setError("");
+    }
+  });
+
+  const lines = buildWorkbookCreateLines(name, width);
+
+  return (
+    <Box flexDirection="column">
+      <Text color="cyan" bold>
+        {centerLine("Create workbook", width)}
+      </Text>
+      <Text color={AUXILIARY_TEXT_COLOR}>{padLine("Enter a workbook name.", width)}</Text>
+      <Text>{padLine("", width)}</Text>
+      {lines.map((line, index) => (
+        <Text key={`${index}-${line}`} color={index === 0 ? "cyan" : AUXILIARY_TEXT_COLOR}>
+          {padLine(line, width)}
+        </Text>
+      ))}
+      <Text>{padLine("", width)}</Text>
+      <Text color={AUXILIARY_TEXT_COLOR}>{padLine(error || WORKBOOK_CREATE_HINT, width)}</Text>
+    </Box>
+  );
+}
+
+function WorkbookDeleteConfirmScreen({
+  workbook,
+  onConfirm,
+  onCancel,
+  onQuit,
+}: {
+  workbook: WorkbookRow;
+  onConfirm: () => void;
+  onCancel: () => void;
+  onQuit: () => void;
+}): JSX.Element {
+  const { stdout } = useStdout();
+  const [width, setWidth] = useState(() => stdout?.columns ?? 80);
+  const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!stdout) {
+      return;
+    }
+
+    const onResize = () => {
+      setWidth(stdout.columns ?? 80);
+    };
+
+    stdout.on("resize", onResize);
+    return () => {
+      stdout.off("resize", onResize);
+    };
+  }, [stdout]);
+
+  useInput((input, key) => {
+    if (key.ctrl && input === "c") {
+      onQuit();
+      return;
+    }
+
+    if (key.escape) {
+      onCancel();
+      return;
+    }
+
+    if (key.backspace || key.delete) {
+      setConfirm((current) => current.slice(0, -1));
+      return;
+    }
+
+    if (key.return) {
+      if (confirm.trim().toLowerCase() === "yes") {
+        onConfirm();
+        return;
+      }
+      setError("Type yes to delete.");
+      return;
+    }
+
+    if (!key.ctrl && !key.meta && input) {
+      setConfirm((current) => current + input);
+      setError("");
+    }
+  });
+
+  const lines = buildWorkbookDeleteLines(workbook, confirm, width);
+
+  return (
+    <Box flexDirection="column">
+      <Text color="cyan" bold>
+        {centerLine("Delete workbook", width)}
+      </Text>
+      <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Workbook #${workbook.id} ${workbook.name}`, width)}</Text>
+      <Text>{padLine("", width)}</Text>
+      {lines.map((line, index) => (
+        <Text key={`${index}-${line}`} color={AUXILIARY_TEXT_COLOR}>
+          {padLine(line, width)}
+        </Text>
+      ))}
+      <Text>{padLine("", width)}</Text>
+      <Text color={AUXILIARY_TEXT_COLOR}>{padLine(error || WORKBOOK_DELETE_HINT, width)}</Text>
+    </Box>
+  );
+}
+
+function App(): JSX.Element {
+  const { exit } = useApp();
+  const [screen, setScreen] = useState<AppScreen>(() => ({ kind: "menu" }));
+  const [workbooks, setWorkbooks] = useState<WorkbookRow[]>(() => backend.listWorkbooks());
+  const [selectedIndex, setSelectedIndex] = useState(0);
+
+  useEffect(() => {
+    const next = backend.listWorkbooks();
+    setWorkbooks(next);
+    const currentWorkbookId = backend.getCurrentWorkbookId();
+    if (currentWorkbookId !== null) {
+      const currentIndex = next.findIndex((workbook) => workbook.id === currentWorkbookId);
+      setSelectedIndex(currentIndex >= 0 ? currentIndex : (next.length > 0 ? 0 : 0));
+    } else {
+      setSelectedIndex(next.length > 0 ? 0 : 0);
+    }
+
+    return () => {
+      leaveAlternateScreen();
+      backend.close();
+    };
+  }, []);
+
+  function openWorkbook(workbook: WorkbookRow): void {
+    backend.setCurrentWorkbookId(workbook.id);
+    setScreen({ kind: "vocab", workbook });
+  }
+
+  function backToMenu(): void {
+    const nextWorkbooks = backend.listWorkbooks();
+    setWorkbooks(nextWorkbooks);
+    const currentWorkbookId = backend.getCurrentWorkbookId();
+    if (currentWorkbookId !== null) {
+      const currentIndex = nextWorkbooks.findIndex((workbook) => workbook.id === currentWorkbookId);
+      setSelectedIndex(currentIndex >= 0 ? currentIndex : (nextWorkbooks.length > 0 ? 0 : 0));
+    } else {
+      setSelectedIndex(nextWorkbooks.length > 0 ? 0 : 0);
+    }
+    setScreen({ kind: "menu" });
+  }
+
+  function createWorkbook(): void {
+    setScreen({ kind: "create-workbook" });
+  }
+
+  function handleCreateWorkbook(name: string): void {
+    const workbook = backend.createWorkbook(name);
+    backend.setCurrentWorkbookId(workbook.id);
+    const nextWorkbooks = backend.listWorkbooks();
+    setWorkbooks(nextWorkbooks);
+    const nextIndex = nextWorkbooks.findIndex((item) => item.id === workbook.id);
+    setSelectedIndex(nextIndex >= 0 ? nextIndex : (nextWorkbooks.length > 0 ? 0 : 0));
+    setScreen({ kind: "menu" });
+  }
+
+  function handleDeleteWorkbook(workbook: WorkbookRow): void {
+    const nextCurrentId = backend.deleteWorkbook(workbook.id);
+    const nextWorkbooks = backend.listWorkbooks();
+    setWorkbooks(nextWorkbooks);
+    if (nextCurrentId === null) {
+      setSelectedIndex(nextWorkbooks.length > 0 ? 0 : 0);
+    } else {
+      const nextIndex = nextWorkbooks.findIndex((item) => item.id === nextCurrentId);
+      setSelectedIndex(nextIndex >= 0 ? nextIndex : (nextWorkbooks.length > 0 ? 0 : 0));
+    }
+    setScreen({ kind: "menu" });
+  }
+
+  function quit(): void {
+    leaveAlternateScreen();
+    backend.close();
+    exit();
+  }
+
+  if (screen.kind === "vocab") {
+    return <VocabularyScreen workbook={screen.workbook} onBackToMenu={backToMenu} onQuit={quit} />;
+  }
+
+  if (screen.kind === "create-workbook") {
+    return <WorkbookCreateScreen onCreate={handleCreateWorkbook} onCancel={backToMenu} onQuit={quit} />;
+  }
+
+  if (screen.kind === "delete-workbook") {
+    return (
+      <WorkbookDeleteConfirmScreen
+        workbook={screen.workbook}
+        onConfirm={() => handleDeleteWorkbook(screen.workbook)}
+        onCancel={backToMenu}
+        onQuit={quit}
+      />
+    );
+  }
+
+  return (
+    <WorkbookMenuScreen
+      workbooks={workbooks}
+      selectedIndex={selectedIndex}
+      onSelectedIndexChange={setSelectedIndex}
+      onOpenWorkbook={openWorkbook}
+      onCreateWorkbook={createWorkbook}
+      onDeleteWorkbook={(workbook) => setScreen({ kind: "delete-workbook", workbook, confirm: "" })}
+      onQuit={quit}
+    />
+  );
+}
+
 function run(): void {
   const interactive = Boolean(process.stdin?.isTTY && process.stdout?.isTTY);
   if (!interactive) {
-    const entries = backend.listEntries();
     console.log(TITLE);
-    console.log(`Loaded ${entries.length} entries.`);
     console.log("Open this app in an interactive terminal to use the TUI.");
     backend.close();
     return;
