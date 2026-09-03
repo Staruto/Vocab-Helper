@@ -550,6 +550,13 @@ function App(): JSX.Element {
       return;
     }
 
+    if (key.tab) {
+      if (commandPaletteActive && commandSuggestions.length > 0) {
+        submitHighlightedCommand();
+      }
+      return;
+    }
+
     if (key.return) {
       const current = buffer;
       if (commandPaletteActive && commandSuggestions.length > 0) {
@@ -593,7 +600,7 @@ function App(): JSX.Element {
       <Text>{padLine("", width)}</Text>
       {commandPaletteActive
         ? suggestionLines.map((line, index) => (
-            <Text key={`suggestion-${index}-${line}`} color={AUXILIARY_TEXT_COLOR}>
+            <Text key={`suggestion-${index}-${line}`} color={index === commandSuggestionIndex ? "yellow" : AUXILIARY_TEXT_COLOR}>
               {padLine(line, width)}
             </Text>
           ))
