@@ -1,4 +1,4 @@
-import { defaultDbPath, EntryRow, WorkbookRow, VocabularyRepository } from "./db.js";
+import { defaultDbPath, EntryRow, MeaningAttribute, WorkbookRow, VocabularyRepository } from "./db.js";
 
 export class VocabularyBackend {
   private readonly repository: VocabularyRepository;
@@ -19,8 +19,17 @@ export class VocabularyBackend {
     return this.repository.getWorkbook(workbookId);
   }
 
-  createWorkbook(name: string): WorkbookRow {
-    return this.repository.createWorkbook(name);
+  listMeaningAttributes(workbookId: number): MeaningAttribute[] {
+    return this.repository.listMeaningAttributes(workbookId);
+  }
+
+  createWorkbook(
+    name: string,
+    vocabularyLabel = "Vocabulary",
+    vocabularyLanguageCode: string | null = null,
+    meaningAttributes: MeaningAttribute[] = [{ position: 1, label: "Meaning 1", languageCode: null }],
+  ): WorkbookRow {
+    return this.repository.createWorkbook(name, vocabularyLabel, vocabularyLanguageCode, meaningAttributes);
   }
 
   deleteWorkbook(workbookId: number): number | null {
@@ -43,12 +52,12 @@ export class VocabularyBackend {
     return this.repository.getEntry(entryId);
   }
 
-  addEntry(workbookId: number, vocabulary: string, meaning: string): EntryRow {
-    return this.repository.addEntry(workbookId, vocabulary, meaning);
+  addEntry(workbookId: number, vocabulary: string, meaning: string, meanings?: string[]): EntryRow {
+    return this.repository.addEntry(workbookId, vocabulary, meaning, meanings);
   }
 
-  updateEntry(entryId: number, vocabulary: string, meaning: string): EntryRow {
-    return this.repository.updateEntry(entryId, vocabulary, meaning);
+  updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[]): EntryRow {
+    return this.repository.updateEntry(entryId, vocabulary, meaning, meanings);
   }
 
   deleteEntry(entryId: number): void {

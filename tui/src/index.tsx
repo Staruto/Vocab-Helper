@@ -1,13 +1,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, render, useApp, useInput, useStdout } from "ink";
-import { EntryRow, WorkbookRow } from "./db.js";
+import { EntryRow, MeaningAttribute, WorkbookRow } from "./db.js";
 import { VocabularyBackend } from "./backend.js";
 
 type UiMode =
   | { kind: "command" }
   | { kind: "commandArg"; command: ParameterizedCommand }
-  | { kind: "add"; stage: "vocabulary" | "meaning"; vocabulary: string; meaning: string }
-  | { kind: "edit"; stage: "vocabulary" | "meaning"; entryId: number; vocabulary: string; meaning: string }
+  | { kind: "add"; stage: "vocabulary" | "meaning"; vocabulary: string; meanings: string[]; meaningIndex: number }
+  | { kind: "edit"; stage: "vocabulary" | "meaning"; entryId: number; vocabulary: string; meanings: string[]; meaningIndex: number }
   | { kind: "delete"; entryId: number; label: string };
 
 type AppScreen =
@@ -29,11 +29,22 @@ type CommandSpec = {
 
 type ParameterizedCommand = "edit" | "delete";
 
+type LanguagePreset = { code: string; label: string };
+
 const PAGE_SIZE = 20;
 const TITLE = "VocabHelper MVP";
 const FOOTER_HINT = "Navigate pages with <- -> | Esc returns to menu";
 const AUXILIARY_TEXT_COLOR = "gray";
 const COMMAND_SUGGESTION_ROWS = 6;
+const LANGUAGE_PRESETS: LanguagePreset[] = [
+  { code: "JP", label: "Japanese" },
+  { code: "EN", label: "English" },
+  { code: "ZH", label: "Chinese" },
+  { code: "KO", label: "Korean" },
+  { code: "ES", label: "Spanish" },
+  { code: "FR", label: "French" },
+  { code: "DE", label: "German" },
+];
 const WORKBOOK_MENU_HINT = "↑↓ select | Enter open | Del delete | + create | Esc quit";
 const WORKBOOK_CREATE_HINT = "Type a name and press Enter. Esc returns to the menu.";
 const WORKBOOK_DELETE_HINT = "Type yes to confirm. Enter deletes. Esc cancels.";
@@ -197,7 +208,7 @@ function buildFooterLine(width: number, pageText: string, hintText: string): str
   return `${left}${" ".repeat(width - leftWidth - rightWidth)}${right}`;
 }
 
-function buildTableLines(entries: EntryRow[], pageIndex: number, width: number, availableRows: number): string[] {
+function buildTableLines(entries: EntryRow[], pageIndex: number, width: number, availableRows: number, vocabularyLabel: string, meaningLabel: string): string[] {
   const totalWidth = Math.max(width, 40);
   const innerWidth = Math.max(20, totalWidth - 2);
   const gap = 1;
@@ -210,7 +221,7 @@ function buildTableLines(entries: EntryRow[], pageIndex: number, width: number, 
   const visibleRows = Math.max(1, Math.min(PAGE_SIZE, availableRows));
   const pageEntries = entries.slice(pageIndex * PAGE_SIZE, pageIndex * PAGE_SIZE + visibleRows);
   const border = `+${"-".repeat(leftWidth)}+${"-".repeat(rightWidth)}+`;
-  const header = `|${padLine("Vocabulary", leftWidth)}|${padLine("Meaning", rightWidth)}|`;
+  const header = `|${padLine(vocabularyLabel, leftWidth)}|${padLine(meaningLabel, rightWidth)}|`;
 
   const rows = pageEntries.map((entry) => {
     const left = padLine(buildEntryLabel(entry), leftWidth);
@@ -386,9 +397,9 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit }: VocabularyScreenPr
   }
 
   function beginAdd(): void {
-    setMode({ kind: "add", stage: "vocabulary", vocabulary: "", meaning: "" });
+    setMode({ kind: "add", stage: "vocabulary", vocabulary: "", meanings: [], meaningIndex: 0 });
     setBuffer("");
-    setStatusLines(buildStatusLines("Adding a new entry.\nEnter vocabulary."));
+    setStatusLines(buildStatusLines(`Adding a new entry.\nEnter ${workbook.vocabularyLabel}.`));
   }
 
   function beginPendingCommand(command: ParameterizedCommand): void {
@@ -409,7 +420,8 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit }: VocabularyScreenPr
       stage: "vocabulary",
       entryId,
       vocabulary: entry.vocabulary,
-      meaning: entry.meaning,
+      meanings: entry.meanings,
+      meaningIndex: 0,
     });
     setBuffer(entry.vocabulary);
     setStatusLines(buildStatusLines(`Editing #${entryId}.\nEdit vocabulary.`));
@@ -520,19 +532,29 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit }: VocabularyScreenPr
           kind: "add",
           stage: "meaning",
           vocabulary: text,
-          meaning: "",
+          meanings: [],
+          meaningIndex: 0,
         });
         setBuffer("");
-        setStatusLines(buildStatusLines("Enter meaning."));
+        setStatusLines(buildStatusLines(`Enter ${workbook.meaningAttributes[0]?.label ?? "Meaning 1"}.`));
         return;
       }
 
-      if (!text) {
+      if (mode.meaningIndex === 0 && !text) {
         setStatusLines(buildStatusLines("Meaning is required."));
         return;
       }
 
-      const entry = backend.addEntry(workbook.id, mode.vocabulary, text);
+      const meanings = [...mode.meanings, text];
+      const attributeCount = workbook.meaningAttributes.length;
+      if (mode.meaningIndex + 1 < attributeCount) {
+        setMode({ ...mode, meanings, meaningIndex: mode.meaningIndex + 1 });
+        setBuffer("");
+        setStatusLines(buildStatusLines(`Enter ${workbook.meaningAttributes[mode.meaningIndex + 1].label}. Optional.`));
+        return;
+      }
+
+      const entry = backend.addEntry(workbook.id, mode.vocabulary, meanings[0], meanings);
       setMode({ kind: "command" });
       setBuffer("");
       refreshEntries(`Added #${entry.id}.`);
@@ -551,19 +573,29 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit }: VocabularyScreenPr
           stage: "meaning",
           entryId: mode.entryId,
           vocabulary: text,
-          meaning: mode.meaning,
+          meanings: mode.meanings,
+          meaningIndex: 0,
         });
-        setBuffer(mode.meaning);
-        setStatusLines(buildStatusLines("Update meaning."));
+        setBuffer(mode.meanings[0] ?? "");
+        setStatusLines(buildStatusLines(`Update ${workbook.meaningAttributes[0]?.label ?? "Meaning 1"}.`));
         return;
       }
 
-      if (!text) {
+      if (mode.meaningIndex === 0 && !text) {
         setStatusLines(buildStatusLines("Meaning is required."));
         return;
       }
 
-      const entry = backend.updateEntry(mode.entryId, mode.vocabulary, text);
+      const meanings = [...mode.meanings];
+      meanings[mode.meaningIndex] = text;
+      if (mode.meaningIndex + 1 < workbook.meaningAttributes.length) {
+        setMode({ ...mode, meanings, meaningIndex: mode.meaningIndex + 1 });
+        setBuffer(mode.meanings[mode.meaningIndex + 1] ?? "");
+        setStatusLines(buildStatusLines(`Update ${workbook.meaningAttributes[mode.meaningIndex + 1].label}. Optional.`));
+        return;
+      }
+
+      const entry = backend.updateEntry(mode.entryId, mode.vocabulary, meanings[0], meanings);
       setMode({ kind: "command" });
       setBuffer("");
       refreshEntries(`Updated #${entry.id}.`);
@@ -647,8 +679,8 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit }: VocabularyScreenPr
   const safePageIndex = clampPageIndex(pageIndex, entries.length);
   const pageText = `Page ${safePageIndex + 1}/${pageCount}`;
   const tableLines = useMemo(
-    () => buildTableLines(entries, safePageIndex, width, PAGE_SIZE),
-    [entries, safePageIndex, width],
+    () => buildTableLines(entries, safePageIndex, width, PAGE_SIZE, workbook.vocabularyLabel, workbook.meaningAttributes[0]?.label ?? "Meaning 1"),
+    [entries, safePageIndex, width, workbook.vocabularyLabel, workbook.meaningAttributes],
   );
   const promptLine = `> ${buffer}_`;
   const screenTitle = `${TITLE} — ${workbook.name}`;
@@ -809,13 +841,24 @@ function WorkbookCreateScreen({
   onCancel,
   onQuit,
 }: {
-  onCreate: (name: string) => void;
+  onCreate: (name: string, vocabularyLabel: string, vocabularyLanguageCode: string | null, meaningAttributes: MeaningAttribute[]) => void;
   onCancel: () => void;
   onQuit: () => void;
 }): JSX.Element {
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
+  const [stage, setStage] = useState<"name" | "vocabulary" | "count" | "meaning">("name");
   const [name, setName] = useState("");
+  const [vocabularyLabel, setVocabularyLabel] = useState("");
+  const [vocabularyLanguageCode, setVocabularyLanguageCode] = useState<string | null>(null);
+  const [meaningCount, setMeaningCount] = useState(1);
+  const [meaningAttributes, setMeaningAttributes] = useState<MeaningAttribute[]>([
+    { position: 1, label: "Meaning 1", languageCode: null },
+  ]);
+  const [meaningIndex, setMeaningIndex] = useState(0);
+  const [buffer, setBuffer] = useState("");
+  const [paletteIndex, setPaletteIndex] = useState(0);
+  const [paletteActive, setPaletteActive] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -844,43 +887,148 @@ function WorkbookCreateScreen({
       return;
     }
 
+    if (stage === "count") {
+      if (key.upArrow) {
+        setMeaningCount((current) => Math.min(5, current + 1));
+        return;
+      }
+      if (key.downArrow) {
+        setMeaningCount((current) => Math.max(1, current - 1));
+        return;
+      }
+      if (key.return) {
+        setMeaningAttributes((current) => Array.from({ length: meaningCount }, (_, index) => current[index] ?? {
+          position: index + 1,
+          label: `Meaning ${index + 1}`,
+          languageCode: null,
+        }));
+        setMeaningIndex(0);
+        setBuffer(meaningAttributes[0]?.label ?? "Meaning 1");
+        setStage("meaning");
+        setError("");
+      }
+      return;
+    }
+
+    if (key.upArrow || key.downArrow) {
+      if (stage === "vocabulary" || stage === "meaning") {
+        setPaletteActive(true);
+        setPaletteIndex((current) => key.upArrow
+          ? (current <= 0 ? LANGUAGE_PRESETS.length - 1 : current - 1)
+          : (current >= LANGUAGE_PRESETS.length - 1 ? 0 : current + 1));
+      }
+      return;
+    }
+
     if (key.backspace || key.delete) {
-      setName((current) => current.slice(0, -1));
+      setBuffer((current) => current.slice(0, -1));
+      setPaletteActive(false);
+      setError("");
       return;
     }
 
     if (key.return) {
-      const trimmed = name.trim();
-      if (!trimmed) {
-        setError("Workbook name is required.");
+      if (stage === "name") {
+        const trimmed = buffer.trim();
+        if (!trimmed) {
+          setError("Workbook name is required.");
+          return;
+        }
+        setName(trimmed);
+        setBuffer("");
+        setStage("vocabulary");
+        setError("");
         return;
       }
-      onCreate(trimmed);
-      return;
+
+      if (stage === "vocabulary") {
+        if (paletteActive) {
+          const preset = LANGUAGE_PRESETS[paletteIndex];
+          setVocabularyLabel(preset.label);
+          setVocabularyLanguageCode(preset.code);
+        } else {
+          setVocabularyLabel(buffer.trim() || "Vocabulary");
+          setVocabularyLanguageCode(null);
+        }
+        setBuffer("");
+        setStage("count");
+        setPaletteActive(false);
+        setError("");
+        return;
+      }
+
+      if (stage === "meaning") {
+        const label = paletteActive ? LANGUAGE_PRESETS[paletteIndex].label : (buffer.trim() || `Meaning ${meaningIndex + 1}`);
+        if (!label) {
+          setError("Meaning label is required.");
+          return;
+        }
+        const nextAttributes = meaningAttributes.map((attribute, index) => index === meaningIndex
+          ? { ...attribute, label, languageCode: paletteActive ? LANGUAGE_PRESETS[paletteIndex].code : null }
+          : attribute);
+        if (new Set(nextAttributes.map((attribute) => attribute.label.toLocaleLowerCase())).size !== nextAttributes.length) {
+          setError("Meaning attribute labels must be unique.");
+          return;
+        }
+        setMeaningAttributes(nextAttributes);
+        if (meaningIndex + 1 < meaningCount) {
+          setMeaningIndex((current) => current + 1);
+          setBuffer(nextAttributes[meaningIndex + 1]?.label ?? `Meaning ${meaningIndex + 2}`);
+          setPaletteActive(false);
+          setError("");
+          return;
+        }
+        try {
+          onCreate(name, vocabularyLabel || "Vocabulary", vocabularyLanguageCode, nextAttributes);
+        } catch (caught) {
+          setError(caught instanceof Error ? caught.message : "Could not create workbook.");
+        }
+        return;
+      }
     }
 
     if (!key.ctrl && !key.meta && input) {
-      setName((current) => current + input);
+      setBuffer((current) => current + input);
+      setPaletteActive(false);
       setError("");
     }
   });
 
-  const lines = buildWorkbookCreateLines(name, width);
+  const currentPrompt = stage === "name"
+    ? `Name: > ${buffer}_`
+    : stage === "vocabulary"
+      ? `Vocabulary: > ${buffer}_`
+      : stage === "count"
+        ? `Meaning attributes: ${meaningCount}`
+        : `${meaningAttributes[meaningIndex]?.label ?? `Meaning ${meaningIndex + 1}`}: > ${buffer}_`;
+  const stageHint = stage === "name"
+    ? "Enter a workbook name."
+    : stage === "vocabulary"
+      ? "Type a custom label, or use ↑↓ to choose a language. Blank uses Vocabulary."
+      : stage === "count"
+        ? "Use ↑↓ to choose 1–5 meaning attributes, then press Enter."
+        : `Meaning ${meaningIndex + 1}/${meaningCount}: type a label or use ↑↓ for a language preset.`;
 
   return (
     <Box flexDirection="column">
       <Text color="cyan" bold>
         {centerLine("Create workbook", width)}
       </Text>
-      <Text color={AUXILIARY_TEXT_COLOR}>{padLine("Enter a workbook name.", width)}</Text>
+      <Text color={AUXILIARY_TEXT_COLOR}>{padLine(stageHint, width)}</Text>
       <Text>{padLine("", width)}</Text>
-      {lines.map((line, index) => (
-        <Text key={`${index}-${line}`} color={index === 0 ? "cyan" : AUXILIARY_TEXT_COLOR}>
-          {padLine(line, width)}
-        </Text>
-      ))}
+      <Text color="cyan">{padLine(currentPrompt, width)}</Text>
+      {(stage === "vocabulary" || stage === "meaning") && paletteActive ? (
+        <>
+          <Text>{padLine("", width)}</Text>
+          {LANGUAGE_PRESETS.map((preset, index) => (
+            <Text key={preset.code} color={index === paletteIndex ? "yellow" : AUXILIARY_TEXT_COLOR}>
+              {padLine(`${index === paletteIndex ? ">" : " "} ${preset.label} (${preset.code})`, width)}
+            </Text>
+          ))}
+        </>
+      ) : null}
       <Text>{padLine("", width)}</Text>
-      <Text color={AUXILIARY_TEXT_COLOR}>{padLine(error || WORKBOOK_CREATE_HINT, width)}</Text>
+      <Text color={AUXILIARY_TEXT_COLOR}>{padLine(error || "Enter advances. Esc returns to the menu.", width)}</Text>
     </Box>
   );
 }
@@ -1012,8 +1160,13 @@ function App(): JSX.Element {
     setScreen({ kind: "create-workbook" });
   }
 
-  function handleCreateWorkbook(name: string): void {
-    const workbook = backend.createWorkbook(name);
+  function handleCreateWorkbook(
+    name: string,
+    vocabularyLabel: string,
+    vocabularyLanguageCode: string | null,
+    meaningAttributes: MeaningAttribute[],
+  ): void {
+    const workbook = backend.createWorkbook(name, vocabularyLabel, vocabularyLanguageCode, meaningAttributes);
     backend.setCurrentWorkbookId(workbook.id);
     const nextWorkbooks = backend.listWorkbooks();
     setWorkbooks(nextWorkbooks);
