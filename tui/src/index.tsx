@@ -370,7 +370,18 @@ function App(): JSX.Element {
       return;
     }
 
-    setBuffer(`/${highlighted.name}`);
+    setBuffer("");
+    setSuggestionIndex(0);
+    submitCommand(`/${highlighted.name}`);
+  }
+
+  function autocompleteHighlightedCommand(): void {
+    const highlighted = commandSuggestions[commandSuggestionIndex];
+    if (!highlighted) {
+      return;
+    }
+
+    setBuffer(`/${highlighted.name} `);
   }
 
   function submitCommand(raw: string): void {
@@ -554,7 +565,7 @@ function App(): JSX.Element {
 
     if (key.tab) {
       if (commandPaletteActive && commandSuggestions.length > 0) {
-        submitHighlightedCommand();
+        autocompleteHighlightedCommand();
       }
       return;
     }
