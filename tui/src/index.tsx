@@ -13,6 +13,7 @@ type UiMode =
 type AppScreen =
   | { kind: "menu" }
   | { kind: "create-workbook" }
+  | { kind: "edit-workbook"; workbook: WorkbookRow }
   | { kind: "delete-workbook"; workbook: WorkbookRow; confirm: string }
   | { kind: "vocab"; workbook: WorkbookRow };
 
@@ -45,7 +46,7 @@ const LANGUAGE_PRESETS: LanguagePreset[] = [
   { code: "FR", label: "French" },
   { code: "DE", label: "German" },
 ];
-const WORKBOOK_MENU_HINT = "↑↓ select | Enter open | Del delete | + create | Esc quit";
+const WORKBOOK_MENU_HINT = "↑↓ select | Enter open | E edit | Del delete | + create | Esc quit";
 const WORKBOOK_CREATE_HINT = "Type a name and press Enter. Esc returns to the menu.";
 const WORKBOOK_DELETE_HINT = "Type yes to confirm. Enter deletes. Esc cancels.";
 const COMMANDS: CommandSpec[] = [
@@ -736,6 +737,7 @@ function WorkbookMenuScreen({
   onSelectedIndexChange,
   onOpenWorkbook,
   onCreateWorkbook,
+  onEditWorkbook,
   onDeleteWorkbook,
   onQuit,
 }: {
@@ -744,6 +746,7 @@ function WorkbookMenuScreen({
   onSelectedIndexChange: (index: number) => void;
   onOpenWorkbook: (workbook: WorkbookRow) => void;
   onCreateWorkbook: () => void;
+  onEditWorkbook: (workbook: WorkbookRow) => void;
   onDeleteWorkbook: (workbook: WorkbookRow) => void;
   onQuit: () => void;
 }): JSX.Element {
@@ -796,6 +799,12 @@ function WorkbookMenuScreen({
       return;
     }
 
+    if (input.toLowerCase() === "e") {
+      const selected = selectedIndex < workbooks.length ? workbooks[selectedIndex] : null;
+      if (selected) onEditWorkbook(selected);
+      return;
+    }
+
     if (key.return) {
       const selected = selectedIndex < workbooks.length ? workbooks[selectedIndex] : null;
       if (selected) {
@@ -840,19 +849,21 @@ function WorkbookCreateScreen({
   onCreate,
   onCancel,
   onQuit,
+  existingWorkbook,
 }: {
   onCreate: (name: string, vocabularyLabel: string, vocabularyLanguageCode: string | null, meaningAttributes: MeaningAttribute[]) => void;
   onCancel: () => void;
   onQuit: () => void;
+  existingWorkbook?: WorkbookRow;
 }): JSX.Element {
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
-  const [stage, setStage] = useState<"name" | "vocabulary" | "count" | "meaning">("name");
-  const [name, setName] = useState("");
-  const [vocabularyLabel, setVocabularyLabel] = useState("");
-  const [vocabularyLanguageCode, setVocabularyLanguageCode] = useState<string | null>(null);
-  const [meaningCount, setMeaningCount] = useState(1);
-  const [meaningAttributes, setMeaningAttributes] = useState<MeaningAttribute[]>([
+  const [stage, setStage] = useState<"name" | "vocabulary" | "count" | "meaning">(existingWorkbook ? "vocabulary" : "name");
+  const [name, setName] = useState(existingWorkbook?.name ?? "");
+  const [vocabularyLabel, setVocabularyLabel] = useState(existingWorkbook?.vocabularyLabel ?? "");
+  const [vocabularyLanguageCode, setVocabularyLanguageCode] = useState<string | null>(existingWorkbook?.vocabularyLanguageCode ?? null);
+  const [meaningCount, setMeaningCount] = useState(existingWorkbook?.meaningAttributes.length ?? 1);
+  const [meaningAttributes, setMeaningAttributes] = useState<MeaningAttribute[]>(existingWorkbook?.meaningAttributes ?? [
     { position: 1, label: "Meaning 1", languageCode: null },
   ]);
   const [meaningIndex, setMeaningIndex] = useState(0);
@@ -897,13 +908,14 @@ function WorkbookCreateScreen({
         return;
       }
       if (key.return) {
-        setMeaningAttributes((current) => Array.from({ length: meaningCount }, (_, index) => current[index] ?? {
+        const nextAttributes = Array.from({ length: meaningCount }, (_, index) => meaningAttributes[index] ?? {
           position: index + 1,
           label: `Meaning ${index + 1}`,
           languageCode: null,
-        }));
+        });
+        setMeaningAttributes(nextAttributes);
         setMeaningIndex(0);
-        setBuffer(meaningAttributes[0]?.label ?? "Meaning 1");
+        setBuffer(nextAttributes[0]?.label ?? "Meaning 1");
         setStage("meaning");
         setError("");
       }
@@ -947,8 +959,9 @@ function WorkbookCreateScreen({
           setVocabularyLabel(preset.label);
           setVocabularyLanguageCode(preset.code);
         } else {
-          setVocabularyLabel(buffer.trim() || "Vocabulary");
-          setVocabularyLanguageCode(null);
+          const label = buffer.trim() || "Vocabulary";
+          setVocabularyLabel(label);
+          setVocabularyLanguageCode(existingWorkbook && label === existingWorkbook.vocabularyLabel ? existingWorkbook.vocabularyLanguageCode : null);
         }
         setBuffer("");
         setStage("count");
@@ -964,7 +977,7 @@ function WorkbookCreateScreen({
           return;
         }
         const nextAttributes = meaningAttributes.map((attribute, index) => index === meaningIndex
-          ? { ...attribute, label, languageCode: paletteActive ? LANGUAGE_PRESETS[paletteIndex].code : null }
+          ? { ...attribute, label, languageCode: paletteActive ? LANGUAGE_PRESETS[paletteIndex].code : (existingWorkbook && label === attribute.label ? attribute.languageCode : null) }
           : attribute);
         if (new Set(nextAttributes.map((attribute) => attribute.label.toLocaleLowerCase())).size !== nextAttributes.length) {
           setError("Meaning attribute labels must be unique.");
@@ -1012,7 +1025,7 @@ function WorkbookCreateScreen({
   return (
     <Box flexDirection="column">
       <Text color="cyan" bold>
-        {centerLine("Create workbook", width)}
+        {centerLine(existingWorkbook ? "Edit workbook settings" : "Create workbook", width)}
       </Text>
       <Text color={AUXILIARY_TEXT_COLOR}>{padLine(stageHint, width)}</Text>
       <Text>{padLine("", width)}</Text>
@@ -1160,6 +1173,10 @@ function App(): JSX.Element {
     setScreen({ kind: "create-workbook" });
   }
 
+  function editWorkbook(workbook: WorkbookRow): void {
+    setScreen({ kind: "edit-workbook", workbook });
+  }
+
   function handleCreateWorkbook(
     name: string,
     vocabularyLabel: string,
@@ -1172,6 +1189,21 @@ function App(): JSX.Element {
     setWorkbooks(nextWorkbooks);
     const nextIndex = nextWorkbooks.findIndex((item) => item.id === workbook.id);
     setSelectedIndex(nextIndex >= 0 ? nextIndex : (nextWorkbooks.length > 0 ? 0 : 0));
+    setScreen({ kind: "menu" });
+  }
+
+  function handleUpdateWorkbook(
+    workbookId: number,
+    _name: string,
+    vocabularyLabel: string,
+    vocabularyLanguageCode: string | null,
+    meaningAttributes: MeaningAttribute[],
+  ): void {
+    const updated = backend.updateWorkbookSettings(workbookId, vocabularyLabel, vocabularyLanguageCode, meaningAttributes);
+    const nextWorkbooks = backend.listWorkbooks();
+    setWorkbooks(nextWorkbooks);
+    const nextIndex = nextWorkbooks.findIndex((item) => item.id === updated.id);
+    setSelectedIndex(nextIndex >= 0 ? nextIndex : 0);
     setScreen({ kind: "menu" });
   }
 
@@ -1202,6 +1234,17 @@ function App(): JSX.Element {
     return <WorkbookCreateScreen onCreate={handleCreateWorkbook} onCancel={backToMenu} onQuit={quit} />;
   }
 
+  if (screen.kind === "edit-workbook") {
+    return (
+      <WorkbookCreateScreen
+        existingWorkbook={screen.workbook}
+        onCreate={(name, label, languageCode, attributes) => handleUpdateWorkbook(screen.workbook.id, name, label, languageCode, attributes)}
+        onCancel={backToMenu}
+        onQuit={quit}
+      />
+    );
+  }
+
   if (screen.kind === "delete-workbook") {
     return (
       <WorkbookDeleteConfirmScreen
@@ -1220,6 +1263,7 @@ function App(): JSX.Element {
       onSelectedIndexChange={setSelectedIndex}
       onOpenWorkbook={openWorkbook}
       onCreateWorkbook={createWorkbook}
+      onEditWorkbook={editWorkbook}
       onDeleteWorkbook={(workbook) => setScreen({ kind: "delete-workbook", workbook, confirm: "" })}
       onQuit={quit}
     />

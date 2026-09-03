@@ -184,6 +184,7 @@ export class VocabularyRepository {
       this.importLegacyDataIfNeeded();
       this.ensureWorkbookBackfill();
       this.ensureWorkbookSchemaBackfill();
+      this.repairLegacyWorkbookSplit();
       this.ensureCurrentWorkbookSetting();
     });
   }
@@ -269,6 +270,28 @@ export class VocabularyRepository {
       this.setCurrentWorkbookId(workbook.id);
     }
     return workbook;
+  }
+
+  updateWorkbookSettings(
+    workbookId: number,
+    vocabularyLabel: string,
+    vocabularyLanguageCode: string | null,
+    meaningAttributes: MeaningAttribute[],
+  ): WorkbookRow {
+    if (!this.getWorkbook(workbookId)) {
+      throw new Error(`Workbook with id ${workbookId} was not found.`);
+    }
+    const attributes = this.normalizeMeaningAttributes(meaningAttributes);
+    this.transaction(() => {
+      this.db.prepare("UPDATE mvp_workbooks SET vocabulary_label = ?, vocabulary_language_code = ? WHERE id = ?")
+        .run(trimOptional(vocabularyLabel) ?? "Vocabulary", vocabularyLanguageCode, workbookId);
+      this.db.prepare("DELETE FROM mvp_workbook_meaning_attributes WHERE workbook_id = ?").run(workbookId);
+      const insert = this.db.prepare("INSERT INTO mvp_workbook_meaning_attributes (workbook_id, position, label, language_code) VALUES (?, ?, ?, ?)");
+      for (const attribute of attributes) insert.run(workbookId, attribute.position, attribute.label, attribute.languageCode);
+    });
+    const updated = this.getWorkbook(workbookId);
+    if (!updated) throw new Error(`Workbook with id ${workbookId} was not found.`);
+    return updated;
   }
 
   deleteWorkbook(workbookId: number): number | null {
@@ -604,6 +627,38 @@ export class VocabularyRepository {
     for (const row of entries) {
       insertMeaning.run(Number(row.id), String(row.meaning ?? ""));
     }
+  }
+
+  private repairLegacyWorkbookSplit(): void {
+    if (this.getMeta("legacy_workbook_split_complete") === "1" || !this.tableExists("workbooks") || !this.tableExists("vocab_entries")) return;
+    const mvp = this.db.prepare("SELECT id FROM mvp_workbooks ORDER BY id ASC").all() as Record<string, unknown>[];
+    const legacy = this.db.prepare("SELECT id, name, target_language_code, target_label, meaning_label, created_at FROM workbooks ORDER BY id ASC").all() as Record<string, unknown>[];
+    if (mvp.length !== 1 || legacy.length < 2) {
+      this.setMeta("legacy_workbook_split_complete", "1");
+      return;
+    }
+    const firstId = Number(mvp[0].id);
+    const ids: number[] = [];
+    for (let index = 0; index < legacy.length; index += 1) {
+      const row = legacy[index];
+      const name = trimRequired(String(row.name ?? `Workbook ${index + 1}`), "Workbook name");
+      const vocabularyLabel = trimOptional(String(row.target_label ?? "")) ?? "Vocabulary";
+      const languageCode = trimOptional(String(row.target_language_code ?? ""))?.toUpperCase() ?? null;
+      const meaningLabel = trimOptional(String(row.meaning_label ?? "")) ?? "Meaning 1";
+      const id = index === 0 ? firstId : Number(this.db.prepare("INSERT INTO mvp_workbooks (name, vocabulary_label, vocabulary_language_code, created_at) VALUES (?, ?, ?, ?)").run(name, vocabularyLabel, languageCode, String(row.created_at ?? new Date().toISOString())).lastInsertRowid);
+      if (index === 0) this.db.prepare("UPDATE mvp_workbooks SET name = ?, vocabulary_label = ?, vocabulary_language_code = ?, created_at = ? WHERE id = ?").run(name, vocabularyLabel, languageCode, String(row.created_at ?? new Date().toISOString()), id);
+      this.db.prepare("DELETE FROM mvp_workbook_meaning_attributes WHERE workbook_id = ?").run(id);
+      this.db.prepare("INSERT INTO mvp_workbook_meaning_attributes (workbook_id, position, label, language_code) VALUES (?, 1, ?, NULL)").run(id, meaningLabel);
+      ids.push(id);
+    }
+    const entries = this.db.prepare("SELECT id, workbook_id FROM vocab_entries ORDER BY id ASC").all() as Record<string, unknown>[];
+    const mvpEntries = this.db.prepare("SELECT id FROM mvp_entries ORDER BY id ASC").all() as Record<string, unknown>[];
+    const update = this.db.prepare("UPDATE mvp_entries SET workbook_id = ? WHERE id = ?");
+    for (let index = 0; index < entries.length && index < mvpEntries.length; index += 1) {
+      const sourceIndex = legacy.findIndex((row) => Number(row.id) === Number(entries[index].workbook_id));
+      update.run(ids[sourceIndex >= 0 ? sourceIndex : 0], Number(mvpEntries[index].id));
+    }
+    this.setMeta("legacy_workbook_split_complete", "1");
   }
 
   private ensureDefaultWorkbookIfNeeded(name: string | null): number | null {
