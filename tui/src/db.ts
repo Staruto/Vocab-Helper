@@ -274,6 +274,7 @@ export class VocabularyRepository {
 
   updateWorkbookSettings(
     workbookId: number,
+    name: string,
     vocabularyLabel: string,
     vocabularyLanguageCode: string | null,
     meaningAttributes: MeaningAttribute[],
@@ -282,9 +283,10 @@ export class VocabularyRepository {
       throw new Error(`Workbook with id ${workbookId} was not found.`);
     }
     const attributes = this.normalizeMeaningAttributes(meaningAttributes);
+    const cleanedName = trimRequired(name, "Workbook name");
     this.transaction(() => {
-      this.db.prepare("UPDATE mvp_workbooks SET vocabulary_label = ?, vocabulary_language_code = ? WHERE id = ?")
-        .run(trimOptional(vocabularyLabel) ?? "Vocabulary", vocabularyLanguageCode, workbookId);
+      this.db.prepare("UPDATE mvp_workbooks SET name = ?, vocabulary_label = ?, vocabulary_language_code = ? WHERE id = ?")
+        .run(cleanedName, trimOptional(vocabularyLabel) ?? "Vocabulary", vocabularyLanguageCode, workbookId);
       this.db.prepare("DELETE FROM mvp_workbook_meaning_attributes WHERE workbook_id = ?").run(workbookId);
       const insert = this.db.prepare("INSERT INTO mvp_workbook_meaning_attributes (workbook_id, position, label, language_code) VALUES (?, ?, ?, ?)");
       for (const attribute of attributes) insert.run(workbookId, attribute.position, attribute.label, attribute.languageCode);

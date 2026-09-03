@@ -34,7 +34,7 @@ type LanguagePreset = { code: string; label: string };
 
 const PAGE_SIZE = 20;
 const TITLE = "VocabHelper MVP";
-const FOOTER_HINT = "Navigate pages with <- -> | Esc returns to menu";
+const FOOTER_HINT = "Navigate pages with <- -> | /menu returns to menu";
 const AUXILIARY_TEXT_COLOR = "gray";
 const COMMAND_SUGGESTION_ROWS = 6;
 const LANGUAGE_PRESETS: LanguagePreset[] = [
@@ -54,6 +54,7 @@ const COMMANDS: CommandSpec[] = [
   { name: "add", hint: "Add a new entry" },
   { name: "edit", hint: "Edit an entry by id" },
   { name: "delete", hint: "Delete an entry by id" },
+  { name: "menu", hint: "Return to the workbook menu" },
   { name: "help", hint: "Show command help" },
   { name: "quit", hint: "Exit the app" },
 ];
@@ -486,6 +487,11 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit }: VocabularyScreenPr
       return;
     }
 
+    if (lower === "menu") {
+      onBackToMenu();
+      return;
+    }
+
     if (lower === "add") {
       beginAdd();
       return;
@@ -623,7 +629,9 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit }: VocabularyScreenPr
     }
 
     if (key.escape) {
-      onBackToMenu();
+      if (mode.kind !== "command") {
+        cancelActiveMode("Cancelled.");
+      }
       return;
     }
 
@@ -858,7 +866,7 @@ function WorkbookCreateScreen({
 }): JSX.Element {
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
-  const [stage, setStage] = useState<"name" | "vocabulary" | "count" | "meaning">(existingWorkbook ? "vocabulary" : "name");
+  const [stage, setStage] = useState<"name" | "vocabulary" | "count" | "meaning">("name");
   const [name, setName] = useState(existingWorkbook?.name ?? "");
   const [vocabularyLabel, setVocabularyLabel] = useState(existingWorkbook?.vocabularyLabel ?? "");
   const [vocabularyLanguageCode, setVocabularyLanguageCode] = useState<string | null>(existingWorkbook?.vocabularyLanguageCode ?? null);
@@ -867,7 +875,7 @@ function WorkbookCreateScreen({
     { position: 1, label: "Meaning 1", languageCode: null },
   ]);
   const [meaningIndex, setMeaningIndex] = useState(0);
-  const [buffer, setBuffer] = useState("");
+  const [buffer, setBuffer] = useState(existingWorkbook?.name ?? "");
   const [paletteIndex, setPaletteIndex] = useState(0);
   const [paletteActive, setPaletteActive] = useState(false);
   const [error, setError] = useState("");
@@ -1041,7 +1049,7 @@ function WorkbookCreateScreen({
         </>
       ) : null}
       <Text>{padLine("", width)}</Text>
-      <Text color={AUXILIARY_TEXT_COLOR}>{padLine(error || "Enter advances. Esc returns to the menu.", width)}</Text>
+      <Text color={AUXILIARY_TEXT_COLOR}>{padLine(error || "Enter advances. Esc cancels. Use /menu to return.", width)}</Text>
     </Box>
   );
 }
@@ -1194,12 +1202,12 @@ function App(): JSX.Element {
 
   function handleUpdateWorkbook(
     workbookId: number,
-    _name: string,
+    name: string,
     vocabularyLabel: string,
     vocabularyLanguageCode: string | null,
     meaningAttributes: MeaningAttribute[],
   ): void {
-    const updated = backend.updateWorkbookSettings(workbookId, vocabularyLabel, vocabularyLanguageCode, meaningAttributes);
+    const updated = backend.updateWorkbookSettings(workbookId, name, vocabularyLabel, vocabularyLanguageCode, meaningAttributes);
     const nextWorkbooks = backend.listWorkbooks();
     setWorkbooks(nextWorkbooks);
     const nextIndex = nextWorkbooks.findIndex((item) => item.id === updated.id);

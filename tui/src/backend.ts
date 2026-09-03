@@ -19,8 +19,14 @@ export class VocabularyBackend {
     return this.repository.getWorkbook(workbookId);
   }
 
-  updateWorkbookSettings(workbookId: number, vocabularyLabel: string, vocabularyLanguageCode: string | null, meaningAttributes: MeaningAttribute[]): WorkbookRow {
-    return this.repository.updateWorkbookSettings(workbookId, vocabularyLabel, vocabularyLanguageCode, meaningAttributes);
+  updateWorkbookSettings(
+    workbookId: number,
+    name: string,
+    vocabularyLabel: string,
+    vocabularyLanguageCode: string | null,
+    meaningAttributes: MeaningAttribute[],
+  ): WorkbookRow {
+    return this.repository.updateWorkbookSettings(workbookId, name, vocabularyLabel, vocabularyLanguageCode, meaningAttributes);
   }
 
   listMeaningAttributes(workbookId: number): MeaningAttribute[] {
