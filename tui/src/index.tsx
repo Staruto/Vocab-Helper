@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, render, useApp, useInput, useStdout } from "ink";
-import { defaultDbPath, EntryRow, VocabularyRepository } from "./db.js";
+import { EntryRow } from "./db.js";
+import { VocabularyBackend } from "./backend.js";
 
 type UiMode =
   | { kind: "command" }
+  | { kind: "commandArg"; command: ParameterizedCommand }
   | { kind: "add"; stage: "vocabulary" | "meaning"; vocabulary: string; meaning: string }
   | { kind: "edit"; stage: "vocabulary" | "meaning"; entryId: number; vocabulary: string; meaning: string }
   | { kind: "delete"; entryId: number; label: string };
@@ -12,6 +14,8 @@ type CommandSpec = {
   name: string;
   hint: string;
 };
+
+type ParameterizedCommand = "edit" | "delete";
 
 const PAGE_SIZE = 20;
 const TITLE = "VocabHelper MVP";
@@ -26,7 +30,7 @@ const COMMANDS: CommandSpec[] = [
   { name: "help", hint: "Show command help" },
   { name: "quit", hint: "Exit the app" },
 ];
-const repository = new VocabularyRepository(defaultDbPath());
+const backend = new VocabularyBackend();
 
 function writeToStdout(text: string): void {
   process.stdout?.write?.(text);
@@ -197,6 +201,10 @@ function buildHelpText(): string {
   return ["Commands:", ...COMMANDS.map((command) => `/${command.name}  ${command.hint}`), "Esc cancels forms.", "Use <- -> to change pages."].join("\n");
 }
 
+function buildPendingCommandText(command: ParameterizedCommand): string {
+  return `Enter id for /${command}.`;
+}
+
 function buildStatusLines(message: string, lineCount = 5): string[] {
   const visible = message.split("\n").map((line) => line.trimEnd()).slice(-lineCount);
   while (visible.length < lineCount) {
@@ -263,7 +271,7 @@ function App(): JSX.Element {
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
   const [rows, setRows] = useState(() => stdout?.rows ?? 24);
-  const [entries, setEntries] = useState<EntryRow[]>(() => repository.listEntries());
+  const [entries, setEntries] = useState<EntryRow[]>(() => backend.listEntries());
   const [pageIndex, setPageIndex] = useState(0);
   const [mode, setMode] = useState<UiMode>({ kind: "command" });
   const [buffer, setBuffer] = useState("");
@@ -289,7 +297,7 @@ function App(): JSX.Element {
   useEffect(() => {
     return () => {
       leaveAlternateScreen();
-      repository.close();
+      backend.close();
     };
   }, []);
 
@@ -315,7 +323,7 @@ function App(): JSX.Element {
   }, [buffer, mode.kind, commandSuggestions.length]);
 
   function refreshEntries(message?: string): void {
-    const next = repository.listEntries();
+    const next = backend.listEntries();
     setEntries(next);
     setPageIndex((current) => clampPageIndex(current, next.length));
     setStatusLines(buildStatusLines(message ?? `Loaded ${next.length} entr${next.length === 1 ? "y" : "ies"}.`));
@@ -327,8 +335,14 @@ function App(): JSX.Element {
     setStatusLines(buildStatusLines("Adding a new entry.\nEnter vocabulary."));
   }
 
+  function beginPendingCommand(command: ParameterizedCommand): void {
+    setMode({ kind: "commandArg", command });
+    setBuffer(`/${command} `);
+    setStatusLines(buildStatusLines(buildPendingCommandText(command)));
+  }
+
   function beginEdit(entryId: number): void {
-    const entry = repository.getEntry(entryId);
+    const entry = backend.getEntry(entryId);
     if (!entry) {
       setStatusLines(buildStatusLines(`Entry #${entryId} was not found.`));
       return;
@@ -346,7 +360,7 @@ function App(): JSX.Element {
   }
 
   function beginDelete(entryId: number): void {
-    const entry = repository.getEntry(entryId);
+    const entry = backend.getEntry(entryId);
     if (!entry) {
       setStatusLines(buildStatusLines(`Entry #${entryId} was not found.`));
       return;
@@ -411,7 +425,7 @@ function App(): JSX.Element {
     if (lower === "edit") {
       const entryId = Number(args[0]);
       if (!args[0] || Number.isNaN(entryId)) {
-        setStatusLines(buildStatusLines("Usage: /edit <id>"));
+        beginPendingCommand("edit");
         return;
       }
       beginEdit(entryId);
@@ -421,7 +435,7 @@ function App(): JSX.Element {
     if (lower === "delete") {
       const entryId = Number(args[0]);
       if (!args[0] || Number.isNaN(entryId)) {
-        setStatusLines(buildStatusLines("Usage: /delete <id>"));
+        beginPendingCommand("delete");
         return;
       }
       beginDelete(entryId);
@@ -430,7 +444,7 @@ function App(): JSX.Element {
 
     if (lower === "quit" || lower === "exit") {
       leaveAlternateScreen();
-      repository.close();
+      backend.close();
       exit();
       return;
     }
@@ -464,7 +478,7 @@ function App(): JSX.Element {
         return;
       }
 
-      const entry = repository.addEntry(mode.vocabulary, text);
+      const entry = backend.addEntry(mode.vocabulary, text);
       setMode({ kind: "command" });
       setBuffer("");
       refreshEntries(`Added #${entry.id}.`);
@@ -495,7 +509,7 @@ function App(): JSX.Element {
         return;
       }
 
-      const entry = repository.updateEntry(mode.entryId, mode.vocabulary, text);
+      const entry = backend.updateEntry(mode.entryId, mode.vocabulary, text);
       setMode({ kind: "command" });
       setBuffer("");
       refreshEntries(`Updated #${entry.id}.`);
@@ -508,7 +522,7 @@ function App(): JSX.Element {
         return;
       }
 
-      repository.deleteEntry(mode.entryId);
+      backend.deleteEntry(mode.entryId);
       setMode({ kind: "command" });
       setBuffer("");
       refreshEntries(`Deleted ${mode.label}.`);
@@ -518,7 +532,7 @@ function App(): JSX.Element {
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
       leaveAlternateScreen();
-      repository.close();
+      backend.close();
       exit();
       return;
     }
@@ -528,7 +542,7 @@ function App(): JSX.Element {
         setBuffer("");
         setSuggestionIndex(0);
         setStatusLines(buildStatusLines("Ready."));
-      } else if (mode.kind === "command") {
+      } else if (mode.kind === "command" || mode.kind === "commandArg") {
         setBuffer("");
         setSuggestionIndex(0);
         setStatusLines(buildStatusLines("Ready."));
@@ -574,7 +588,7 @@ function App(): JSX.Element {
       const current = buffer;
       if (commandPaletteActive && commandSuggestions.length > 0) {
         submitHighlightedCommand();
-      } else if (mode.kind === "command") {
+      } else if (mode.kind === "command" || mode.kind === "commandArg") {
         submitCommand(current);
       } else {
         submitForm(current);
@@ -644,11 +658,11 @@ function App(): JSX.Element {
 function run(): void {
   const interactive = Boolean(process.stdin?.isTTY && process.stdout?.isTTY);
   if (!interactive) {
-    const entries = repository.listEntries();
+    const entries = backend.listEntries();
     console.log(TITLE);
     console.log(`Loaded ${entries.length} entries.`);
     console.log("Open this app in an interactive terminal to use the TUI.");
-    repository.close();
+    backend.close();
     return;
   }
 
