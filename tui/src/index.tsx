@@ -16,6 +16,7 @@ type CommandSpec = {
 const PAGE_SIZE = 20;
 const TITLE = "VocabHelper MVP";
 const FOOTER_HINT = "Navigate pages with <- ->";
+const AUXILIARY_TEXT_COLOR = "gray";
 const COMMAND_SUGGESTION_ROWS = 6;
 const COMMANDS: CommandSpec[] = [
   { name: "list", hint: "Refresh and show entries" },
@@ -585,22 +586,26 @@ function App(): JSX.Element {
       ))}
       <Text>{padLine("", width)}</Text>
       <Text>{padLine("", width)}</Text>
-      <Text>{padLine(buildFooterLine(width, pageText, FOOTER_HINT), width)}</Text>
+      <Text color={AUXILIARY_TEXT_COLOR}>{padLine(buildFooterLine(width, pageText, FOOTER_HINT), width)}</Text>
       <Text>{padLine("", width)}</Text>
       <Text>{padLine("", width)}</Text>
       <Text color="cyan">{padLine(promptLine, width)}</Text>
       <Text>{padLine("", width)}</Text>
       {commandPaletteActive
         ? suggestionLines.map((line, index) => (
-            <Text key={`suggestion-${index}-${line}`} color={index === commandSuggestionIndex ? "yellow" : undefined}>
+            <Text key={`suggestion-${index}-${line}`} color={AUXILIARY_TEXT_COLOR}>
               {padLine(line, width)}
             </Text>
           ))
         : null}
       {commandPaletteActive ? <Text>{padLine("", width)}</Text> : null}
-      {statusLines.map((line, index) => (
-        <Text key={`status-${index}-${line}`}>{padLine(line, width)}</Text>
-      ))}
+      {!commandPaletteActive
+        ? statusLines.map((line, index) => (
+            <Text key={`status-${index}-${line}`} color={AUXILIARY_TEXT_COLOR}>
+              {padLine(line, width)}
+            </Text>
+          ))
+        : null}
     </Box>
   );
 }
