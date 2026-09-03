@@ -34,7 +34,7 @@ const TITLE = "VocabHelper MVP";
 const FOOTER_HINT = "Navigate pages with <- -> | Esc returns to menu";
 const AUXILIARY_TEXT_COLOR = "gray";
 const COMMAND_SUGGESTION_ROWS = 6;
-const WORKBOOK_MENU_HINT = "↑↓ select  Enter open  Del delete  + create  Esc quit";
+const WORKBOOK_MENU_HINT = "↑↓ select | Enter open | Del delete | + create | Esc quit";
 const WORKBOOK_CREATE_HINT = "Type a name and press Enter. Esc returns to the menu.";
 const WORKBOOK_DELETE_HINT = "Type yes to confirm. Enter deletes. Esc cancels.";
 const COMMANDS: CommandSpec[] = [
@@ -157,6 +157,15 @@ function centerLine(text: string, width: number): string {
   const leftPadding = Math.max(0, Math.floor((width - clippedWidth) / 2));
   const rightPadding = Math.max(0, width - clippedWidth - leftPadding);
   return `${" ".repeat(leftPadding)}${clipped}${" ".repeat(rightPadding)}`;
+}
+
+function rightLine(text: string, width: number): string {
+  if (width <= 0) {
+    return "";
+  }
+
+  const clipped = truncate(text, width);
+  return `${" ".repeat(Math.max(0, width - displayWidth(clipped)))}${clipped}`;
 }
 
 function buildEntryLabel(entry: EntryRow): string {
@@ -288,20 +297,19 @@ function buildWorkbookMenuLines(
 ): { border: string; header: string; rows: Array<{ line: string; selected: boolean }> } {
   const totalWidth = Math.max(width, 56);
   const selectWidth = 3;
-  const idWidth = 6;
   const countWidth = 8;
-  const nameWidth = Math.max(24, totalWidth - selectWidth - idWidth - countWidth - 5);
-  const border = `+${"-".repeat(selectWidth)}+${"-".repeat(idWidth)}+${"-".repeat(nameWidth)}+${"-".repeat(countWidth)}+`;
-  const header = `|${padLine("", selectWidth)}|${padLine("ID", idWidth)}|${padLine("Name", nameWidth)}|${padLine("Words", countWidth)}|`;
+  const nameWidth = Math.max(24, totalWidth - selectWidth - countWidth - 4);
+  const border = `+${"-".repeat(selectWidth)}+${"-".repeat(nameWidth)}+${"-".repeat(countWidth)}+`;
+  const header = `|${padLine("", selectWidth)}|${padLine("Name", nameWidth)}|${padLine("Words", countWidth)}|`;
 
   const rows = workbooks.map((workbook, index) => ({
     selected: index === selectedIndex,
-    line: `|${padLine(index === selectedIndex ? ">" : " ", selectWidth)}|${padLine(`#${workbook.id}`, idWidth)}|${padLine(workbook.name, nameWidth)}|${padLine(String(workbook.wordCount), countWidth)}|`,
+    line: `|${padLine(index === selectedIndex ? ">" : " ", selectWidth)}|${padLine(workbook.name, nameWidth)}|${padLine(String(workbook.wordCount), countWidth)}|`,
   }));
 
   rows.push({
     selected: selectedIndex === workbooks.length,
-    line: `|${padLine(selectedIndex === workbooks.length ? ">" : " ", selectWidth)}|${padLine("+", idWidth)}|${padLine("Create new workbook", nameWidth)}|${padLine("", countWidth)}|`,
+    line: `|${padLine(selectedIndex === workbooks.length ? ">" : " ", selectWidth)}|${padLine("+ Create new workbook", nameWidth)}|${padLine("", countWidth)}|`,
   });
   return { border, header, rows };
 }
@@ -310,17 +318,15 @@ function buildWorkbookCreateLines(name: string, width: number): string[] {
   return [
     padLine(`Name: > ${name}_`, width),
     padLine("", width),
-    padLine(WORKBOOK_CREATE_HINT, width),
   ];
 }
 
 function buildWorkbookDeleteLines(workbook: WorkbookRow, confirm: string, width: number): string[] {
   return [
-    padLine(`Delete #${workbook.id} ${workbook.name}?`, width),
+    padLine(`Delete ${workbook.name}?`, width),
     padLine("", width),
     padLine(`> ${confirm}_`, width),
     padLine("", width),
-    padLine(WORKBOOK_DELETE_HINT, width),
   ];
 }
 
@@ -784,12 +790,12 @@ function WorkbookMenuScreen({
         </Text>
       ))}
       <Text>{padLine("", width)}</Text>
-      <Text color={AUXILIARY_TEXT_COLOR}>{padLine(WORKBOOK_MENU_HINT, width)}</Text>
+      <Text color={AUXILIARY_TEXT_COLOR}>{rightLine(WORKBOOK_MENU_HINT, width)}</Text>
       <Text>{padLine("", width)}</Text>
       <Text color={AUXILIARY_TEXT_COLOR}>
         {padLine(
           selectedIndex < workbooks.length
-            ? `Selected: #${workbooks[selectedIndex].id} ${workbooks[selectedIndex].name}`
+            ? `Selected: ${workbooks[selectedIndex].name}`
             : "Create new workbook.",
           width,
         )}
@@ -948,7 +954,7 @@ function WorkbookDeleteConfirmScreen({
       <Text color="cyan" bold>
         {centerLine("Delete workbook", width)}
       </Text>
-      <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Workbook #${workbook.id} ${workbook.name}`, width)}</Text>
+      <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Workbook: ${workbook.name}`, width)}</Text>
       <Text>{padLine("", width)}</Text>
       {lines.map((line, index) => (
         <Text key={`${index}-${line}`} color={AUXILIARY_TEXT_COLOR}>
