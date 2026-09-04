@@ -374,7 +374,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   const [suggestionIndex, setSuggestionIndex] = useState(0);
   const [statusLines, setStatusLines] = useState<string[]>(() => buildStatusLines("Ready."));
   const [tierColorsEnabled, setTierColorsEnabled] = useState(() => backend.getTierColorsEnabled());
-  const activeMetadata = workbook.metadataAttributes.filter((a) => a.visible && a.key !== "vocab" && !a.key.startsWith("meaning_"));
+  const activeMetadata = workbook.metadataAttributes.filter((a) => a.key !== "vocab" && !a.key.startsWith("meaning_"));
   const posTags = ["JP", "EN"].includes(workbook.vocabularyLanguageCode ?? "") ? backend.listPosTags(workbook.id) : [];
 
   useEffect(() => {
@@ -784,6 +784,17 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       <Text>{padLine("", width)}</Text>
       <Text>{padLine("", width)}</Text>
       <Text color="cyan">{padLine(promptLine, width)}</Text>
+      {(mode.kind === "add" || mode.kind === "edit") && mode.stage === "pos" ? (
+        <>
+          <Text>{padLine("", width)}</Text>
+          {posTags.map((tag, index) => (
+            <Text key={tag.id} color={index === mode.posIndex ? "yellow" : AUXILIARY_TEXT_COLOR}>
+              {padLine(`${index === mode.posIndex ? ">" : " "} [${mode.selectedTagIds.includes(tag.id) ? "x" : " "}] ${tag.name}`, width)}
+            </Text>
+          ))}
+          <Text color={AUXILIARY_TEXT_COLOR}>{padLine("Space selects | ↑↓ moves | Enter confirms", width)}</Text>
+        </>
+      ) : null}
       <Text>{padLine("", width)}</Text>
       {commandPaletteActive
         ? suggestionLines.map((line, index) => (

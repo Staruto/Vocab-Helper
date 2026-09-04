@@ -892,15 +892,36 @@ export class VocabularyRepository {
   }
 
   private ensureStatsBackfill(): void {
-    const hasLegacyStats = this.tableExists("vocab_stats");
-    if (!hasLegacyStats) return;
-    const rows = this.db.prepare("SELECT entry_id, test_count, error_count, last_tested FROM vocab_stats").all() as Record<string, unknown>[];
-    const insert = this.db.prepare("INSERT OR IGNORE INTO mvp_entry_stats (entry_id, test_count, error_count, last_tested) VALUES (?, ?, ?, ?)");
-    for (const row of rows) {
-      const entryId = Number(row.entry_id);
-      if (!this.db.prepare("SELECT 1 FROM mvp_entries WHERE id = ?").get(entryId)) continue;
-      insert.run(entryId, Math.max(0, Number(row.test_count ?? 0)), Math.min(3, Math.max(0, Number(row.error_count ?? 0))), row.last_tested == null ? null : String(row.last_tested));
+    if (this.getMeta("stats_import_v2_complete") === "1") return;
+    if (!this.tableExists("vocab_stats") || !this.tableExists("vocab_entries")) {
+      this.setMeta("stats_import_v2_complete", "1");
+      return;
     }
+
+    // Legacy and MVP entry IDs are not guaranteed to match because the MVP
+    // importer creates new rows. Match by the stable vocabulary/meaning pair
+    // so a newly-created MVP entry cannot inherit another entry's stats.
+    const legacyEntries = this.db.prepare("SELECT id, japanese_text, english_text FROM vocab_entries").all() as Record<string, unknown>[];
+    const legacyStats = this.db.prepare("SELECT entry_id, test_count, error_count, last_tested FROM vocab_stats").all() as Record<string, unknown>[];
+    const statsByLegacyId = new Map<number, Record<string, unknown>>();
+    for (const row of legacyStats) statsByLegacyId.set(Number(row.entry_id), row);
+    const legacyByKey = new Map<string, Record<string, unknown>>();
+    for (const row of legacyEntries) {
+      const key = `${String(row.japanese_text ?? "").trim().toLocaleLowerCase()}\u0000${String(row.english_text ?? "").trim().toLocaleLowerCase()}`;
+      if (!legacyByKey.has(key)) legacyByKey.set(key, row);
+    }
+
+    this.db.prepare("DELETE FROM mvp_entry_stats").run();
+    const mvpEntries = this.db.prepare("SELECT id, vocabulary, meaning FROM mvp_entries").all() as Record<string, unknown>[];
+    const insert = this.db.prepare("INSERT INTO mvp_entry_stats (entry_id, test_count, error_count, last_tested) VALUES (?, ?, ?, ?)");
+    for (const entry of mvpEntries) {
+      const key = `${String(entry.vocabulary ?? "").trim().toLocaleLowerCase()}\u0000${String(entry.meaning ?? "").trim().toLocaleLowerCase()}`;
+      const legacy = legacyByKey.get(key);
+      const stats = legacy ? statsByLegacyId.get(Number(legacy.id)) : undefined;
+      if (!stats) continue;
+      insert.run(Number(entry.id), Math.max(0, Number(stats.test_count ?? 0)), Math.min(3, Math.max(0, Number(stats.error_count ?? 0))), stats.last_tested == null ? null : String(stats.last_tested));
+    }
+    this.setMeta("stats_import_v2_complete", "1");
   }
 
   private hasAttribute(workbookId: number, key: string): boolean {
