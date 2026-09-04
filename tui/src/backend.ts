@@ -1,4 +1,4 @@
-import { defaultDbPath, EntryRow, MeaningAttribute, WorkbookRow, VocabularyRepository } from "./db.js";
+import { defaultDbPath, EntryRow, MeaningAttribute, MetadataAttribute, PosTag, WorkbookRow, VocabularyRepository } from "./db.js";
 
 export class VocabularyBackend {
   private readonly repository: VocabularyRepository;
@@ -25,8 +25,9 @@ export class VocabularyBackend {
     vocabularyLabel: string,
     vocabularyLanguageCode: string | null,
     meaningAttributes: MeaningAttribute[],
+    presetEnabled = vocabularyLanguageCode === "JP",
   ): WorkbookRow {
-    return this.repository.updateWorkbookSettings(workbookId, name, vocabularyLabel, vocabularyLanguageCode, meaningAttributes);
+    return this.repository.updateWorkbookSettings(workbookId, name, vocabularyLabel, vocabularyLanguageCode, meaningAttributes, presetEnabled);
   }
 
   listMeaningAttributes(workbookId: number): MeaningAttribute[] {
@@ -38,8 +39,9 @@ export class VocabularyBackend {
     vocabularyLabel = "Vocabulary",
     vocabularyLanguageCode: string | null = null,
     meaningAttributes: MeaningAttribute[] = [{ position: 1, label: "Meaning 1", languageCode: null }],
+    presetEnabled = vocabularyLanguageCode === "JP",
   ): WorkbookRow {
-    return this.repository.createWorkbook(name, vocabularyLabel, vocabularyLanguageCode, meaningAttributes);
+    return this.repository.createWorkbook(name, vocabularyLabel, vocabularyLanguageCode, meaningAttributes, presetEnabled);
   }
 
   deleteWorkbook(workbookId: number): number | null {
@@ -62,17 +64,25 @@ export class VocabularyBackend {
     return this.repository.getEntry(entryId);
   }
 
-  addEntry(workbookId: number, vocabulary: string, meaning: string, meanings?: string[]): EntryRow {
-    return this.repository.addEntry(workbookId, vocabulary, meaning, meanings);
+  addEntry(workbookId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, posTagIds?: number[]): EntryRow {
+    return this.repository.addEntry(workbookId, vocabulary, meaning, meanings, attributes, posTagIds);
   }
 
-  updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[]): EntryRow {
-    return this.repository.updateEntry(entryId, vocabulary, meaning, meanings);
+  updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, posTagIds?: number[]): EntryRow {
+    return this.repository.updateEntry(entryId, vocabulary, meaning, meanings, attributes, posTagIds);
   }
 
   deleteEntry(entryId: number): void {
     this.repository.deleteEntry(entryId);
   }
+
+  listMetadataAttributes(workbookId: number): MetadataAttribute[] { return this.repository.listMetadataAttributes(workbookId); }
+  updateMetadataAttributes(workbookId: number, attributes: MetadataAttribute[]): WorkbookRow { return this.repository.updateMetadataAttributes(workbookId, attributes); }
+  listPosTags(workbookId: number): PosTag[] { return this.repository.listPosTags(workbookId); }
+  addPosTag(workbookId: number, name: string): PosTag { return this.repository.addPosTag(workbookId, name); }
+  renamePosTag(tagId: number, name: string): void { this.repository.renamePosTag(tagId, name); }
+  deletePosTag(tagId: number): void { this.repository.deletePosTag(tagId); }
+  setEntryPosTags(entryId: number, tagIds: number[]): void { this.repository.setEntryPosTags(entryId, tagIds); }
 
   close(): void {
     this.repository.close();

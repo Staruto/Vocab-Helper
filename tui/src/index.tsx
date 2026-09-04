@@ -1,13 +1,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, render, useApp, useInput, useStdout } from "ink";
-import { EntryRow, MeaningAttribute, WorkbookRow } from "./db.js";
+import { EntryRow, MeaningAttribute, MetadataAttribute, PosTag, WorkbookRow } from "./db.js";
 import { VocabularyBackend } from "./backend.js";
 
 type UiMode =
   | { kind: "command" }
   | { kind: "commandArg"; command: ParameterizedCommand }
-  | { kind: "add"; stage: "vocabulary" | "meaning"; vocabulary: string; meanings: string[]; meaningIndex: number }
-  | { kind: "edit"; stage: "vocabulary" | "meaning"; entryId: number; vocabulary: string; meanings: string[]; meaningIndex: number }
+  | { kind: "add"; stage: "vocabulary" | "meaning" | "metadata" | "pos"; vocabulary: string; meanings: string[]; meaningIndex: number; metadata: Record<string, string>; metadataIndex: number; selectedTagIds: number[]; posIndex: number }
+  | { kind: "edit"; stage: "vocabulary" | "meaning" | "metadata" | "pos"; entryId: number; vocabulary: string; meanings: string[]; meaningIndex: number; metadata: Record<string, string>; metadataIndex: number; selectedTagIds: number[]; posIndex: number }
   | { kind: "delete"; entryId: number; label: string };
 
 type AppScreen =
@@ -15,12 +15,16 @@ type AppScreen =
   | { kind: "create-workbook" }
   | { kind: "edit-workbook"; workbook: WorkbookRow }
   | { kind: "delete-workbook"; workbook: WorkbookRow; confirm: string }
+  | { kind: "settings"; workbook: WorkbookRow }
+  | { kind: "tags"; workbook: WorkbookRow }
   | { kind: "vocab"; workbook: WorkbookRow };
 
 type VocabularyScreenProps = {
   workbook: WorkbookRow;
   onBackToMenu: () => void;
   onQuit: () => void;
+  onOpenSettings: () => void;
+  onOpenTags: () => void;
 };
 
 type CommandSpec = {
@@ -56,6 +60,8 @@ const COMMANDS: CommandSpec[] = [
   { name: "delete", hint: "Delete an entry by id" },
   { name: "menu", hint: "Return to the workbook menu" },
   { name: "help", hint: "Show command help" },
+  { name: "setting", hint: "Configure workbook fields" },
+  { name: "tag", hint: "Manage part-of-speech tags" },
   { name: "quit", hint: "Exit the app" },
 ];
 const backend = new VocabularyBackend();
@@ -210,25 +216,22 @@ function buildFooterLine(width: number, pageText: string, hintText: string): str
   return `${left}${" ".repeat(width - leftWidth - rightWidth)}${right}`;
 }
 
-function buildTableLines(entries: EntryRow[], pageIndex: number, width: number, availableRows: number, vocabularyLabel: string, meaningLabel: string): string[] {
+function buildTableLines(entries: EntryRow[], pageIndex: number, width: number, availableRows: number, vocabularyLabel: string, meaningLabel: string, attributes?: MetadataAttribute[]): string[] {
   const totalWidth = Math.max(width, 40);
   const innerWidth = Math.max(20, totalWidth - 2);
-  const gap = 1;
-  const minimumLeft = Math.max(14, Math.floor(innerWidth * 0.4));
-  const minimumRight = Math.max(12, Math.floor(innerWidth * 0.25));
-  const desiredLeft = Math.floor(innerWidth * 0.58);
-  const maxLeft = Math.max(minimumLeft, innerWidth - gap - minimumRight);
-  const leftWidth = Math.max(minimumLeft, Math.min(desiredLeft, maxLeft));
-  const rightWidth = Math.max(minimumRight, innerWidth - gap - leftWidth);
+  const columns = (attributes?.filter((a) => a.visible) ?? [
+    { key: "vocab", label: vocabularyLabel }, { key: "meaning_1", label: meaningLabel },
+  ]).map((a) => ({ key: a.key, label: a.label }));
+  const columnWidth = Math.max(12, Math.floor((innerWidth - columns.length + 1) / columns.length));
+  const widths = columns.map((_c, i) => i === columns.length - 1 ? innerWidth - (columnWidth + 1) * (columns.length - 1) : columnWidth);
+  const border = `+${widths.map((w) => "-".repeat(w)).join("+")}+`;
+  const valueFor = (entry: EntryRow, key: string): string => key === "vocab" ? buildEntryLabel(entry) : key === "meaning_1" ? entry.meaning : entry.attributes[key] ?? "";
   const visibleRows = Math.max(1, Math.min(PAGE_SIZE, availableRows));
   const pageEntries = entries.slice(pageIndex * PAGE_SIZE, pageIndex * PAGE_SIZE + visibleRows);
-  const border = `+${"-".repeat(leftWidth)}+${"-".repeat(rightWidth)}+`;
-  const header = `|${padLine(vocabularyLabel, leftWidth)}|${padLine(meaningLabel, rightWidth)}|`;
+  const header = `|${columns.map((c, i) => padLine(c.label, widths[i])).join("|")}|`;
 
   const rows = pageEntries.map((entry) => {
-    const left = padLine(buildEntryLabel(entry), leftWidth);
-    const right = padLine(entry.meaning, rightWidth);
-    return `|${left}|${right}|`;
+    return `|${columns.map((c, i) => padLine(valueFor(entry, c.key), widths[i])).join("|")}|`;
   });
 
   return [border, header, border, ...rows, border];
@@ -343,7 +346,7 @@ function buildWorkbookDeleteLines(workbook: WorkbookRow, confirm: string, width:
   ];
 }
 
-function VocabularyScreen({ workbook, onBackToMenu, onQuit }: VocabularyScreenProps): JSX.Element {
+function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOpenTags }: VocabularyScreenProps): JSX.Element {
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
   const [rows, setRows] = useState(() => stdout?.rows ?? 24);
@@ -353,6 +356,8 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit }: VocabularyScreenPr
   const [buffer, setBuffer] = useState("");
   const [suggestionIndex, setSuggestionIndex] = useState(0);
   const [statusLines, setStatusLines] = useState<string[]>(() => buildStatusLines("Ready."));
+  const activeMetadata = workbook.metadataAttributes.filter((a) => a.visible && !["vocab", "meaning_1"].includes(a.key));
+  const posTags = ["JP", "EN"].includes(workbook.vocabularyLanguageCode ?? "") ? backend.listPosTags(workbook.id) : [];
 
   useEffect(() => {
     if (!stdout) {
@@ -399,7 +404,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit }: VocabularyScreenPr
   }
 
   function beginAdd(): void {
-    setMode({ kind: "add", stage: "vocabulary", vocabulary: "", meanings: [], meaningIndex: 0 });
+    setMode({ kind: "add", stage: "vocabulary", vocabulary: "", meanings: [], meaningIndex: 0, metadata: {}, metadataIndex: 0, selectedTagIds: [], posIndex: 0 });
     setBuffer("");
     setStatusLines(buildStatusLines(`Adding a new entry.\nEnter ${workbook.vocabularyLabel}.`));
   }
@@ -424,6 +429,10 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit }: VocabularyScreenPr
       vocabulary: entry.vocabulary,
       meanings: entry.meanings,
       meaningIndex: 0,
+      metadata: entry.attributes,
+      metadataIndex: 0,
+      selectedTagIds: entry.posTags.map((tag) => tag.id),
+      posIndex: 0,
     });
     setBuffer(entry.vocabulary);
     setStatusLines(buildStatusLines(`Editing #${entryId}.\nEdit vocabulary.`));
@@ -477,6 +486,8 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit }: VocabularyScreenPr
     const [command, ...args] = parts;
     const lower = command.toLowerCase();
 
+    if (lower === "setting" || lower === "settings") { onOpenSettings(); return; }
+    if (lower === "tag" || lower === "tags") { if (!["JP", "EN"].includes(workbook.vocabularyLanguageCode ?? "")) setStatusLines(buildStatusLines("POS tags are unavailable for this language.")); else onOpenTags(); return; }
     if (lower === "help") {
       setStatusLines(buildStatusLines(buildHelpText()));
       return;
@@ -541,10 +552,22 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit }: VocabularyScreenPr
           vocabulary: text,
           meanings: [],
           meaningIndex: 0,
+          metadata: {}, metadataIndex: 0, selectedTagIds: [], posIndex: 0,
         });
         setBuffer("");
         setStatusLines(buildStatusLines(`Enter ${workbook.meaningAttributes[0]?.label ?? "Meaning 1"}.`));
         return;
+      }
+
+      if (mode.stage === "metadata") {
+        const field = activeMetadata[mode.metadataIndex];
+        const metadata = { ...mode.metadata, [field.key]: text };
+        if (mode.metadataIndex + 1 < activeMetadata.length) { setMode({ ...mode, metadata, metadataIndex: mode.metadataIndex + 1 }); setBuffer(""); setStatusLines(buildStatusLines(`Enter ${activeMetadata[mode.metadataIndex + 1].label}. Optional.`)); return; }
+        if (posTags.length > 0) { setMode({ ...mode, metadata, stage: "pos", posIndex: 0 }); setBuffer(""); setStatusLines(buildStatusLines("Select part-of-speech tags with Space, then press Enter.")); return; }
+        const entry = backend.addEntry(workbook.id, mode.vocabulary, mode.meanings[0], mode.meanings, metadata, mode.selectedTagIds); setMode({ kind: "command" }); setBuffer(""); refreshEntries(`Added #${entry.id}.`); return;
+      }
+      if (mode.stage === "pos") {
+        const entry = backend.addEntry(workbook.id, mode.vocabulary, mode.meanings[0], mode.meanings, mode.metadata, mode.selectedTagIds); setMode({ kind: "command" }); setBuffer(""); refreshEntries(`Added #${entry.id}.`); return;
       }
 
       if (mode.meaningIndex === 0 && !text) {
@@ -561,7 +584,12 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit }: VocabularyScreenPr
         return;
       }
 
-      const entry = backend.addEntry(workbook.id, mode.vocabulary, meanings[0], meanings);
+      if (activeMetadata.length > 0) {
+        setMode({ ...mode, meanings, stage: "metadata", metadataIndex: 0 });
+        setBuffer(""); setStatusLines(buildStatusLines(`Enter ${activeMetadata[0].label}. Optional.`)); return;
+      }
+      if (posTags.length > 0) { setMode({ ...mode, meanings, stage: "pos", posIndex: 0 }); setBuffer(""); setStatusLines(buildStatusLines("Select part-of-speech tags with Space, then press Enter.")); return; }
+      const entry = backend.addEntry(workbook.id, mode.vocabulary, meanings[0], meanings, mode.metadata, mode.selectedTagIds);
       setMode({ kind: "command" });
       setBuffer("");
       refreshEntries(`Added #${entry.id}.`);
@@ -582,10 +610,22 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit }: VocabularyScreenPr
           vocabulary: text,
           meanings: mode.meanings,
           meaningIndex: 0,
+          metadata: mode.metadata, metadataIndex: 0, selectedTagIds: mode.selectedTagIds, posIndex: 0,
         });
         setBuffer(mode.meanings[0] ?? "");
         setStatusLines(buildStatusLines(`Update ${workbook.meaningAttributes[0]?.label ?? "Meaning 1"}.`));
         return;
+      }
+
+      if (mode.stage === "metadata") {
+        const field = activeMetadata[mode.metadataIndex];
+        const metadata = { ...mode.metadata, [field.key]: text };
+        if (mode.metadataIndex + 1 < activeMetadata.length) { setMode({ ...mode, metadata, metadataIndex: mode.metadataIndex + 1 }); setBuffer(mode.metadata[activeMetadata[mode.metadataIndex + 1].key] ?? ""); setStatusLines(buildStatusLines(`Update ${activeMetadata[mode.metadataIndex + 1].label}. Optional.`)); return; }
+        if (posTags.length > 0) { setMode({ ...mode, metadata, stage: "pos", posIndex: 0 }); setBuffer(""); setStatusLines(buildStatusLines("Select part-of-speech tags with Space, then press Enter.")); return; }
+        const entry = backend.updateEntry(mode.entryId, mode.vocabulary, mode.meanings[0], mode.meanings, metadata, mode.selectedTagIds); setMode({ kind: "command" }); setBuffer(""); refreshEntries(`Updated #${entry.id}.`); return;
+      }
+      if (mode.stage === "pos") {
+        const entry = backend.updateEntry(mode.entryId, mode.vocabulary, mode.meanings[0], mode.meanings, mode.metadata, mode.selectedTagIds); setMode({ kind: "command" }); setBuffer(""); refreshEntries(`Updated #${entry.id}.`); return;
       }
 
       if (mode.meaningIndex === 0 && !text) {
@@ -601,8 +641,9 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit }: VocabularyScreenPr
         setStatusLines(buildStatusLines(`Update ${workbook.meaningAttributes[mode.meaningIndex + 1].label}. Optional.`));
         return;
       }
-
-      const entry = backend.updateEntry(mode.entryId, mode.vocabulary, meanings[0], meanings);
+      if (activeMetadata.length > 0) { setMode({ ...mode, meanings, stage: "metadata", metadataIndex: 0 }); setBuffer(mode.metadata[activeMetadata[0].key] ?? ""); setStatusLines(buildStatusLines(`Update ${activeMetadata[0].label}. Optional.`)); return; }
+      if (posTags.length > 0) { setMode({ ...mode, meanings, stage: "pos", posIndex: 0 }); setBuffer(""); setStatusLines(buildStatusLines("Select part-of-speech tags with Space, then press Enter.")); return; }
+      const entry = backend.updateEntry(mode.entryId, mode.vocabulary, meanings[0], meanings, mode.metadata, mode.selectedTagIds);
       setMode({ kind: "command" });
       setBuffer("");
       refreshEntries(`Updated #${entry.id}.`);
@@ -633,6 +674,12 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit }: VocabularyScreenPr
         cancelActiveMode("Cancelled.");
       }
       return;
+    }
+
+    if ((mode.kind === "add" || mode.kind === "edit") && mode.stage === "pos" && posTags.length > 0) {
+      if (key.upArrow) { setMode({ ...mode, posIndex: Math.max(0, mode.posIndex - 1) }); return; }
+      if (key.downArrow) { setMode({ ...mode, posIndex: Math.min(posTags.length - 1, mode.posIndex + 1) }); return; }
+      if (input === " ") { const id = posTags[mode.posIndex].id; setMode({ ...mode, selectedTagIds: mode.selectedTagIds.includes(id) ? mode.selectedTagIds.filter((v) => v !== id) : [...mode.selectedTagIds, id] }); return; }
     }
 
     if (key.upArrow && commandPaletteActive) {
@@ -688,8 +735,8 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit }: VocabularyScreenPr
   const safePageIndex = clampPageIndex(pageIndex, entries.length);
   const pageText = `Page ${safePageIndex + 1}/${pageCount}`;
   const tableLines = useMemo(
-    () => buildTableLines(entries, safePageIndex, width, PAGE_SIZE, workbook.vocabularyLabel, workbook.meaningAttributes[0]?.label ?? "Meaning 1"),
-    [entries, safePageIndex, width, workbook.vocabularyLabel, workbook.meaningAttributes],
+    () => buildTableLines(entries, safePageIndex, width, PAGE_SIZE, workbook.vocabularyLabel, workbook.meaningAttributes[0]?.label ?? "Meaning 1", workbook.metadataAttributes),
+    [entries, safePageIndex, width, workbook.vocabularyLabel, workbook.meaningAttributes, workbook.metadataAttributes],
   );
   const promptLine = `> ${buffer}_`;
   const screenTitle = `${TITLE} — ${workbook.name}`;
@@ -1136,6 +1183,41 @@ function WorkbookDeleteConfirmScreen({
   );
 }
 
+function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook: WorkbookRow; onSave: (attributes: MetadataAttribute[]) => void; onCancel: () => void; onQuit: () => void }): JSX.Element {
+  const { stdout } = useStdout();
+  const [width, setWidth] = useState(() => stdout?.columns ?? 80);
+  const [attributes, setAttributes] = useState<MetadataAttribute[]>(workbook.metadataAttributes);
+  const [buffer, setBuffer] = useState("");
+  const [message, setMessage] = useState("↑↓ select field | Space toggle visibility | A add field | R rename | S save | Esc back");
+  const [selected, setSelected] = useState(0);
+  useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => stdout.off("resize", f); }, [stdout]);
+  useInput((input, key) => {
+    if (key.ctrl && input === "c") return onQuit();
+    if (key.escape) return onCancel();
+    if (key.upArrow) return setSelected((v) => Math.max(0, v - 1));
+    if (key.downArrow) return setSelected((v) => Math.min(attributes.length - 1, v + 1));
+    if (input === " ") { setAttributes((xs) => xs.map((a, i) => i === selected && a.key !== "vocab" && a.key !== "meaning_1" ? { ...a, visible: !a.visible } : a)); return; }
+    if (input.toLowerCase() === "s") { try { onSave(attributes); } catch (e) { setMessage(e instanceof Error ? e.message : "Could not save settings."); } return; }
+    if (input.toLowerCase() === "r") { setBuffer(attributes[selected]?.label ?? ""); setMessage("Type a new label and press Enter."); return; }
+    if (input.toLowerCase() === "a") { setBuffer(""); setMessage("Type a new attribute label and press Enter."); return; }
+    if (key.backspace || key.delete) { setBuffer((v) => v.slice(0, -1)); return; }
+    if (key.return && buffer.trim()) {
+      if (message.startsWith("Type a new attribute")) { const keyName = buffer.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_"); setAttributes((xs) => [...xs, { key: keyName, label: buffer.trim(), languageCode: null, required: false, visible: false, displayOrder: xs.length }]); }
+      else setAttributes((xs) => xs.map((a, i) => i === selected ? { ...a, label: buffer.trim() } : a));
+      setBuffer(""); setMessage("↑↓ select field | Space toggle visibility | A add field | R rename | S save | Esc back"); return;
+    }
+    if (!key.ctrl && !key.meta && input) setBuffer((v) => v + input);
+  });
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Settings — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text><Text>{padLine("", width)}</Text>{attributes.map((a, i) => <Text key={a.key} color={i === selected ? "yellow" : AUXILIARY_TEXT_COLOR}>{padLine(`${i === selected ? ">" : " "} ${a.label} [${a.visible ? "shown" : "hidden"}]${a.required ? " (required)" : ""}`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color="cyan">{padLine(buffer ? `> ${buffer}_` : "", width)}</Text></Box>;
+}
+
+function PosTagScreen({ workbook, onCancel, onQuit }: { workbook: WorkbookRow; onCancel: () => void; onQuit: () => void }): JSX.Element {
+  const { stdout } = useStdout(); const [width, setWidth] = useState(() => stdout?.columns ?? 80); const [tags, setTags] = useState<PosTag[]>(() => backend.listPosTags(workbook.id)); const [selected, setSelected] = useState(0); const [buffer, setBuffer] = useState(""); const [message, setMessage] = useState(tags.length ? "↑↓ select | A add | R rename | D delete | Esc back" : "No POS tags. Press A to add one, or Esc to return.");
+  useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => stdout.off("resize", f); }, [stdout]);
+  useInput((input, key) => { if (key.ctrl && input === "c") return onQuit(); if (key.escape) return onCancel(); if (key.upArrow) return setSelected((v) => Math.max(0, v - 1)); if (key.downArrow) return setSelected((v) => Math.min(tags.length - 1, v + 1)); if (input.toLowerCase() === "a" || input.toLowerCase() === "r") { setBuffer(""); setMessage(input.toLowerCase() === "a" ? "Type tag name and press Enter." : "Type replacement name and press Enter."); return; } if (input.toLowerCase() === "d" && tags[selected]) { backend.deletePosTag(tags[selected].id); setTags(backend.listPosTags(workbook.id)); setSelected(0); return; } if (key.backspace || key.delete) { setBuffer((v) => v.slice(0, -1)); return; } if (key.return && buffer.trim()) { try { if (message.startsWith("Type tag")) backend.addPosTag(workbook.id, buffer); else if (tags[selected]) backend.renamePosTag(tags[selected].id, buffer); setTags(backend.listPosTags(workbook.id)); setBuffer(""); setMessage("↑↓ select | A add | R rename | D delete | Esc back"); } catch (e) { setMessage(e instanceof Error ? e.message : "Could not update tag."); } return; } if (!key.ctrl && !key.meta && input) setBuffer((v) => v + input); });
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Part of speech — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text><Text>{padLine("", width)}</Text>{tags.map((tag, i) => <Text key={tag.id} color={i === selected ? "yellow" : AUXILIARY_TEXT_COLOR}>{padLine(`${i === selected ? ">" : " "} ${tag.name}${tag.predefined ? " (preset)" : ""}`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color="cyan">{padLine(buffer ? `> ${buffer}_` : "", width)}</Text></Box>;
+}
+
 function App(): JSX.Element {
   const { exit } = useApp();
   const [screen, setScreen] = useState<AppScreen>(() => ({ kind: "menu" }));
@@ -1234,9 +1316,16 @@ function App(): JSX.Element {
     exit();
   }
 
-  if (screen.kind === "vocab") {
-    return <VocabularyScreen workbook={screen.workbook} onBackToMenu={backToMenu} onQuit={quit} />;
+  function refreshWorkbook(workbookId: number): WorkbookRow {
+    return backend.getWorkbook(workbookId) ?? workbooks.find((w) => w.id === workbookId)!;
   }
+
+  if (screen.kind === "vocab") {
+    return <VocabularyScreen workbook={screen.workbook} onBackToMenu={backToMenu} onQuit={quit} onOpenSettings={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onOpenTags={() => setScreen({ kind: "tags", workbook: refreshWorkbook(screen.workbook.id) })} />;
+  }
+
+  if (screen.kind === "settings") return <MetadataSettingsScreen workbook={screen.workbook} onSave={(attributes) => { const updated = backend.updateMetadataAttributes(screen.workbook.id, attributes); setScreen({ kind: "vocab", workbook: updated }); }} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
+  if (screen.kind === "tags") return <PosTagScreen workbook={screen.workbook} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
 
   if (screen.kind === "create-workbook") {
     return <WorkbookCreateScreen onCreate={handleCreateWorkbook} onCancel={backToMenu} onQuit={quit} />;

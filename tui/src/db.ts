@@ -8,7 +8,9 @@ export type WorkbookRow = {
   createdAt: string;
   vocabularyLabel: string;
   vocabularyLanguageCode: string | null;
+  presetEnabled: boolean;
   meaningAttributes: MeaningAttribute[];
+  metadataAttributes: MetadataAttribute[];
 };
 
 export type MeaningAttribute = {
@@ -17,6 +19,17 @@ export type MeaningAttribute = {
   languageCode: string | null;
 };
 
+export type MetadataAttribute = {
+  key: string;
+  label: string;
+  languageCode: string | null;
+  required: boolean;
+  visible: boolean;
+  displayOrder: number;
+};
+
+export type PosTag = { id: number; name: string; predefined: boolean };
+
 export type EntryRow = {
   id: number;
   workbookId: number;
@@ -24,6 +37,8 @@ export type EntryRow = {
   meaning: string;
   meanings: string[];
   kanaText: string | null;
+  attributes: Record<string, string>;
+  posTags: PosTag[];
   createdAt: string;
   updatedAt: string;
 };
@@ -54,6 +69,8 @@ function rowToEntry(row: Record<string, unknown>): EntryRow {
     meaning: String(row.meaning ?? ""),
     meanings: [],
     kanaText: row.kana_text == null ? null : String(row.kana_text),
+    attributes: {},
+    posTags: [],
     createdAt: String(row.created_at ?? ""),
     updatedAt: String(row.updated_at ?? ""),
   };
@@ -67,7 +84,9 @@ function rowToWorkbook(row: Record<string, unknown>): WorkbookRow {
     createdAt: String(row.created_at ?? ""),
     vocabularyLabel: String(row.vocabulary_label ?? "Vocabulary"),
     vocabularyLanguageCode: row.vocabulary_language_code == null ? null : String(row.vocabulary_language_code),
+    presetEnabled: Number(row.preset_enabled ?? 0) === 1,
     meaningAttributes: [],
+    metadataAttributes: [],
   };
 }
 
@@ -80,6 +99,7 @@ const LANGUAGE_PRESETS = [
   { code: "FR", label: "French" },
   { code: "DE", label: "German" },
 ] as const;
+const JAPANESE_POS_TAGS = ["名詞", "固有名詞", "イ形容詞", "ナ形容詞", "動詞 (自動詞)", "動詞 (他動詞)", "副詞", "連体詞", "接続詞", "連語", "その他"];
 
 export function defaultDbPath(): string {
   if (process.env.VOCAB_HELPER_DB_PATH?.trim()) {
@@ -135,6 +155,7 @@ export class VocabularyRepository {
           name TEXT NOT NULL COLLATE NOCASE UNIQUE,
           vocabulary_label TEXT NOT NULL DEFAULT 'Vocabulary',
           vocabulary_language_code TEXT NULL,
+          preset_enabled INTEGER NOT NULL DEFAULT 0,
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -169,6 +190,44 @@ export class VocabularyRepository {
           CHECK (position >= 1)
         );
 
+        CREATE TABLE IF NOT EXISTS mvp_workbook_attributes (
+          workbook_id INTEGER NOT NULL,
+          attribute_key TEXT NOT NULL,
+          label TEXT NOT NULL,
+          language_code TEXT NULL,
+          is_required INTEGER NOT NULL DEFAULT 0,
+          is_visible INTEGER NOT NULL DEFAULT 0,
+          display_order INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (workbook_id, attribute_key),
+          FOREIGN KEY (workbook_id) REFERENCES mvp_workbooks(id) ON DELETE CASCADE,
+          CHECK (trim(attribute_key) <> ''), CHECK (trim(label) <> '')
+        );
+
+        CREATE TABLE IF NOT EXISTS mvp_entry_attributes (
+          entry_id INTEGER NOT NULL,
+          attribute_key TEXT NOT NULL,
+          value TEXT NOT NULL DEFAULT '',
+          PRIMARY KEY (entry_id, attribute_key),
+          FOREIGN KEY (entry_id) REFERENCES mvp_entries(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS mvp_pos_tags (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          workbook_id INTEGER NOT NULL,
+          name TEXT NOT NULL COLLATE NOCASE,
+          is_predefined INTEGER NOT NULL DEFAULT 0,
+          UNIQUE (workbook_id, name),
+          FOREIGN KEY (workbook_id) REFERENCES mvp_workbooks(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS mvp_entry_pos_tags (
+          entry_id INTEGER NOT NULL,
+          tag_id INTEGER NOT NULL,
+          PRIMARY KEY (entry_id, tag_id),
+          FOREIGN KEY (entry_id) REFERENCES mvp_entries(id) ON DELETE CASCADE,
+          FOREIGN KEY (tag_id) REFERENCES mvp_pos_tags(id) ON DELETE CASCADE
+        );
+
         CREATE INDEX IF NOT EXISTS idx_mvp_entries_created_at
           ON mvp_entries(created_at);
 
@@ -177,6 +236,7 @@ export class VocabularyRepository {
       this.ensureColumn("mvp_entries", "workbook_id", "INTEGER NULL");
       this.ensureColumn("mvp_workbooks", "vocabulary_label", "TEXT NOT NULL DEFAULT 'Vocabulary'");
       this.ensureColumn("mvp_workbooks", "vocabulary_language_code", "TEXT NULL");
+      this.ensureColumn("mvp_workbooks", "preset_enabled", "INTEGER NOT NULL DEFAULT 0");
       this.db.exec(`
         CREATE INDEX IF NOT EXISTS idx_mvp_entries_workbook_id
           ON mvp_entries(workbook_id);
@@ -198,6 +258,7 @@ export class VocabularyRepository {
           w.name,
           w.vocabulary_label,
           w.vocabulary_language_code,
+          w.preset_enabled,
           w.created_at,
           COUNT(e.id) AS word_count
         FROM mvp_workbooks AS w
@@ -220,6 +281,7 @@ export class VocabularyRepository {
           w.name,
           w.vocabulary_label,
           w.vocabulary_language_code,
+          w.preset_enabled,
           w.created_at,
           COUNT(e.id) AS word_count
         FROM mvp_workbooks AS w
@@ -246,14 +308,15 @@ export class VocabularyRepository {
     vocabularyLabel = "Vocabulary",
     vocabularyLanguageCode: string | null = null,
     meaningAttributes: MeaningAttribute[] = [{ position: 1, label: "Meaning 1", languageCode: null }],
+    presetEnabled = vocabularyLanguageCode === "JP",
   ): WorkbookRow {
     const cleanedName = trimRequired(name, "Workbook name");
     const cleanedVocabularyLabel = trimOptional(vocabularyLabel) ?? "Vocabulary";
     const attributes = this.normalizeMeaningAttributes(meaningAttributes);
     const workbook = this.transaction(() => {
       const result = this.db.prepare(
-        "INSERT INTO mvp_workbooks (name, vocabulary_label, vocabulary_language_code) VALUES (?, ?, ?)",
-      ).run(cleanedName, cleanedVocabularyLabel, vocabularyLanguageCode);
+        "INSERT INTO mvp_workbooks (name, vocabulary_label, vocabulary_language_code, preset_enabled) VALUES (?, ?, ?, ?)",
+      ).run(cleanedName, cleanedVocabularyLabel, vocabularyLanguageCode, presetEnabled ? 1 : 0);
       const workbookId = Number(result.lastInsertRowid);
       const insertAttribute = this.db.prepare(
         "INSERT INTO mvp_workbook_meaning_attributes (workbook_id, position, label, language_code) VALUES (?, ?, ?, ?)",
@@ -278,6 +341,7 @@ export class VocabularyRepository {
     vocabularyLabel: string,
     vocabularyLanguageCode: string | null,
     meaningAttributes: MeaningAttribute[],
+    presetEnabled = vocabularyLanguageCode === "JP",
   ): WorkbookRow {
     if (!this.getWorkbook(workbookId)) {
       throw new Error(`Workbook with id ${workbookId} was not found.`);
@@ -285,8 +349,8 @@ export class VocabularyRepository {
     const attributes = this.normalizeMeaningAttributes(meaningAttributes);
     const cleanedName = trimRequired(name, "Workbook name");
     this.transaction(() => {
-      this.db.prepare("UPDATE mvp_workbooks SET name = ?, vocabulary_label = ?, vocabulary_language_code = ? WHERE id = ?")
-        .run(cleanedName, trimOptional(vocabularyLabel) ?? "Vocabulary", vocabularyLanguageCode, workbookId);
+      this.db.prepare("UPDATE mvp_workbooks SET name = ?, vocabulary_label = ?, vocabulary_language_code = ?, preset_enabled = ? WHERE id = ?")
+        .run(cleanedName, trimOptional(vocabularyLabel) ?? "Vocabulary", vocabularyLanguageCode, presetEnabled ? 1 : 0, workbookId);
       this.db.prepare("DELETE FROM mvp_workbook_meaning_attributes WHERE workbook_id = ?").run(workbookId);
       const insert = this.db.prepare("INSERT INTO mvp_workbook_meaning_attributes (workbook_id, position, label, language_code) VALUES (?, ?, ?, ?)");
       for (const attribute of attributes) insert.run(workbookId, attribute.position, attribute.label, attribute.languageCode);
@@ -376,7 +440,7 @@ export class VocabularyRepository {
     return row ? this.withEntryMeanings(rowToEntry(row)) : null;
   }
 
-  addEntry(workbookId: number, vocabulary: string, meaning: string, meanings?: string[]): EntryRow {
+  addEntry(workbookId: number, vocabulary: string, meaning: string, meanings?: string[], attributes: Record<string, string> = {}, posTagIds: number[] = []): EntryRow {
     if (!this.getWorkbook(workbookId)) {
       throw new Error(`Workbook with id ${workbookId} was not found.`);
     }
@@ -397,6 +461,9 @@ export class VocabularyRepository {
       const entryId = Number(inserted.lastInsertRowid);
       const insertMeaning = this.db.prepare("INSERT INTO mvp_entry_meanings (entry_id, position, value) VALUES (?, ?, ?)");
       cleanedMeanings.forEach((value, index) => insertMeaning.run(entryId, index + 1, value));
+      this.saveEntryAttributes(entryId, attributes);
+      const addTag = this.db.prepare("INSERT OR IGNORE INTO mvp_entry_pos_tags (entry_id, tag_id) VALUES (?, ?)");
+      for (const tagId of [...new Set(posTagIds)]) addTag.run(entryId, tagId);
       return entryId;
     });
 
@@ -407,7 +474,67 @@ export class VocabularyRepository {
     return inserted;
   }
 
-  updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[]): EntryRow {
+  listMetadataAttributes(workbookId: number): MetadataAttribute[] {
+    const workbook = this.getWorkbook(workbookId);
+    if (!workbook) throw new Error(`Workbook with id ${workbookId} was not found.`);
+    return workbook.metadataAttributes;
+  }
+
+  updateMetadataAttributes(workbookId: number, attributes: MetadataAttribute[]): WorkbookRow {
+    const workbook = this.getWorkbook(workbookId);
+    if (!workbook) throw new Error(`Workbook with id ${workbookId} was not found.`);
+    const normalized = attributes.map((attribute, index) => ({ ...attribute, key: attribute.key.trim(), label: trimRequired(attribute.label, "Attribute label"), displayOrder: index }));
+    if (!normalized.some((a) => a.key === "vocab") || !normalized.some((a) => a.key === "meaning_1")) throw new ValidationError("Vocab and Meaning 1 cannot be removed.");
+    if (!normalized.find((a) => a.key === "vocab")?.required || !normalized.find((a) => a.key === "meaning_1")?.required) throw new ValidationError("Vocab and Meaning 1 are required.");
+    if (new Set(normalized.map((a) => a.key)).size !== normalized.length) throw new ValidationError("Attribute keys must be unique.");
+    this.transaction(() => {
+      const save = this.db.prepare("INSERT INTO mvp_workbook_attributes (workbook_id, attribute_key, label, language_code, is_required, is_visible, display_order) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(workbook_id, attribute_key) DO UPDATE SET label=excluded.label, language_code=excluded.language_code, is_required=excluded.is_required, is_visible=excluded.is_visible, display_order=excluded.display_order");
+      for (const a of normalized) save.run(workbookId, a.key, a.label, a.languageCode, a.required ? 1 : 0, a.visible ? 1 : 0, a.displayOrder);
+      const keys = normalized.map((a) => a.key);
+      const existing = this.db.prepare("SELECT attribute_key FROM mvp_workbook_attributes WHERE workbook_id = ?").all(workbookId) as Record<string, unknown>[];
+      for (const row of existing) if (!keys.includes(String(row.attribute_key))) this.db.prepare("DELETE FROM mvp_workbook_attributes WHERE workbook_id = ? AND attribute_key = ?").run(workbookId, String(row.attribute_key));
+    });
+    return this.getWorkbook(workbookId)!;
+  }
+
+  listPosTags(workbookId: number): PosTag[] {
+    const workbook = this.getWorkbook(workbookId);
+    if (!workbook) throw new Error(`Workbook with id ${workbookId} was not found.`);
+    if (!["JP", "EN"].includes(workbook.vocabularyLanguageCode ?? "")) return [];
+    const rows = this.db.prepare("SELECT id, name, is_predefined FROM mvp_pos_tags WHERE workbook_id = ? ORDER BY name").all(workbookId) as Record<string, unknown>[];
+    return rows.map((row) => ({ id: Number(row.id), name: String(row.name), predefined: Number(row.is_predefined) === 1 }));
+  }
+
+  addPosTag(workbookId: number, name: string): PosTag {
+    const clean = trimRequired(name, "POS tag");
+    this.ensurePosSupported(workbookId);
+    const result = this.db.prepare("INSERT INTO mvp_pos_tags (workbook_id, name, is_predefined) VALUES (?, ?, 0)").run(workbookId, clean);
+    return { id: Number(result.lastInsertRowid), name: clean, predefined: false };
+  }
+
+  renamePosTag(tagId: number, name: string): void { this.db.prepare("UPDATE mvp_pos_tags SET name = ? WHERE id = ?").run(trimRequired(name, "POS tag"), tagId); }
+  deletePosTag(tagId: number): void { this.db.prepare("DELETE FROM mvp_pos_tags WHERE id = ?").run(tagId); }
+  setEntryPosTags(entryId: number, tagIds: number[]): void {
+    this.db.prepare("DELETE FROM mvp_entry_pos_tags WHERE entry_id = ?").run(entryId);
+    const add = this.db.prepare("INSERT OR IGNORE INTO mvp_entry_pos_tags (entry_id, tag_id) VALUES (?, ?)");
+    for (const id of [...new Set(tagIds)]) add.run(entryId, id);
+  }
+
+  private saveEntryAttributes(entryId: number, attributes: Record<string, string>): void {
+    const save = this.db.prepare("INSERT INTO mvp_entry_attributes (entry_id, attribute_key, value) VALUES (?, ?, ?) ON CONFLICT(entry_id, attribute_key) DO UPDATE SET value=excluded.value");
+    const remove = this.db.prepare("DELETE FROM mvp_entry_attributes WHERE entry_id = ? AND attribute_key = ?");
+    for (const [key, value] of Object.entries(attributes)) {
+      const clean = value.trim();
+      if (clean) save.run(entryId, key, clean); else remove.run(entryId, key);
+    }
+  }
+
+  private ensurePosSupported(workbookId: number): void {
+    const workbook = this.getWorkbook(workbookId);
+    if (!workbook || !["JP", "EN"].includes(workbook.vocabularyLanguageCode ?? "")) throw new ValidationError("POS tags are unavailable for this language.");
+  }
+
+  updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, posTagIds?: number[]): EntryRow {
     const cleanedVocabulary = trimRequired(vocabulary, "Vocabulary");
     const values = meanings && meanings.length > 0 ? meanings : [meaning];
     const cleanedMeanings = values.map((value) => trimOptional(value) ?? "");
@@ -430,6 +557,12 @@ export class VocabularyRepository {
       this.db.prepare("DELETE FROM mvp_entry_meanings WHERE entry_id = ?").run(entryId);
       const insertMeaning = this.db.prepare("INSERT INTO mvp_entry_meanings (entry_id, position, value) VALUES (?, ?, ?)");
       cleanedMeanings.forEach((value, index) => insertMeaning.run(entryId, index + 1, value));
+      if (attributes) this.saveEntryAttributes(entryId, attributes);
+      if (posTagIds) {
+        this.db.prepare("DELETE FROM mvp_entry_pos_tags WHERE entry_id = ?").run(entryId);
+        const addTag = this.db.prepare("INSERT OR IGNORE INTO mvp_entry_pos_tags (entry_id, tag_id) VALUES (?, ?)");
+        for (const tagId of [...new Set(posTagIds)]) addTag.run(entryId, tagId);
+      }
     });
 
     const updated = this.getEntry(entryId);
@@ -443,12 +576,42 @@ export class VocabularyRepository {
     const rows = this.db.prepare(
       "SELECT position, label, language_code FROM mvp_workbook_meaning_attributes WHERE workbook_id = ? ORDER BY position ASC",
     ).all(workbook.id) as Record<string, unknown>[];
+    const definitions = this.db.prepare(
+      "SELECT attribute_key, label, language_code, is_required, is_visible, display_order FROM mvp_workbook_attributes WHERE workbook_id = ? ORDER BY display_order ASC, attribute_key ASC",
+    ).all(workbook.id) as Record<string, unknown>[];
+    if (definitions.length === 0) {
+      const defaults = [
+        { key: "vocab", label: workbook.vocabularyLabel, languageCode: workbook.vocabularyLanguageCode, required: true, visible: true, order: 0 },
+        { key: "meaning_1", label: workbook.meaningAttributes[0]?.label ?? "Meaning 1", languageCode: workbook.meaningAttributes[0]?.languageCode ?? null, required: true, visible: true, order: 1 },
+      ];
+      if (workbook.presetEnabled && workbook.vocabularyLanguageCode === "JP") {
+        defaults.push({ key: "kana", label: "Kana", languageCode: "JP", required: false, visible: false, order: 2 });
+        defaults.push({ key: "example_1", label: "Example 1", languageCode: "JP", required: false, visible: false, order: 3 });
+        defaults.push({ key: "example_2", label: "Example 2", languageCode: "JP", required: false, visible: false, order: 4 });
+      }
+      const insert = this.db.prepare("INSERT OR IGNORE INTO mvp_workbook_attributes (workbook_id, attribute_key, label, language_code, is_required, is_visible, display_order) VALUES (?, ?, ?, ?, ?, ?, ?)");
+      for (const item of defaults) insert.run(workbook.id, item.key, item.label, item.languageCode, item.required ? 1 : 0, item.visible ? 1 : 0, item.order);
+    }
+    if (workbook.presetEnabled && workbook.vocabularyLanguageCode === "JP") {
+      const count = Number((this.db.prepare("SELECT COUNT(*) AS count FROM mvp_pos_tags WHERE workbook_id = ?").get(workbook.id) as Record<string, unknown>).count ?? 0);
+      if (count === 0) {
+        const insertTag = this.db.prepare("INSERT OR IGNORE INTO mvp_pos_tags (workbook_id, name, is_predefined) VALUES (?, ?, 1)");
+        for (const tag of JAPANESE_POS_TAGS) insertTag.run(workbook.id, tag);
+      }
+    }
+    const metadataRows = this.db.prepare(
+      "SELECT attribute_key, label, language_code, is_required, is_visible, display_order FROM mvp_workbook_attributes WHERE workbook_id = ? ORDER BY display_order ASC, attribute_key ASC",
+    ).all(workbook.id) as Record<string, unknown>[];
     return {
       ...workbook,
       meaningAttributes: rows.map((row) => ({
         position: Number(row.position),
         label: String(row.label),
         languageCode: row.language_code == null ? null : String(row.language_code),
+          })),
+      metadataAttributes: metadataRows.map((row) => ({
+        key: String(row.attribute_key), label: String(row.label), languageCode: row.language_code == null ? null : String(row.language_code),
+        required: Number(row.is_required) === 1, visible: Number(row.is_visible) === 1, displayOrder: Number(row.display_order),
       })),
     };
   }
@@ -456,7 +619,12 @@ export class VocabularyRepository {
   private withEntryMeanings(entry: EntryRow): EntryRow {
     const rows = this.db.prepare("SELECT position, value FROM mvp_entry_meanings WHERE entry_id = ? ORDER BY position ASC").all(entry.id) as Record<string, unknown>[];
     const meanings = rows.length > 0 ? rows.map((row) => String(row.value ?? "")) : [entry.meaning];
-    return { ...entry, meanings, meaning: meanings[0] ?? entry.meaning };
+    const attributes = this.db.prepare("SELECT attribute_key, value FROM mvp_entry_attributes WHERE entry_id = ?").all(entry.id) as Record<string, unknown>[];
+    const attributeMap: Record<string, string> = {};
+    for (const row of attributes) attributeMap[String(row.attribute_key)] = String(row.value ?? "");
+    if (entry.kanaText) attributeMap.kana ??= entry.kanaText;
+    const tags = this.db.prepare("SELECT t.id, t.name, t.is_predefined FROM mvp_entry_pos_tags et JOIN mvp_pos_tags t ON t.id = et.tag_id WHERE et.entry_id = ? ORDER BY t.name").all(entry.id) as Record<string, unknown>[];
+    return { ...entry, meanings, meaning: meanings[0] ?? entry.meaning, attributes: attributeMap, posTags: tags.map((row) => ({ id: Number(row.id), name: String(row.name), predefined: Number(row.is_predefined) === 1 })) };
   }
 
   private normalizeMeaningAttributes(attributes: MeaningAttribute[]): MeaningAttribute[] {
