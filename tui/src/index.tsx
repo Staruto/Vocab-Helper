@@ -38,7 +38,7 @@ type LanguagePreset = { code: string; label: string };
 
 const PAGE_SIZE = 20;
 const TITLE = "VocabHelper MVP";
-const FOOTER_HINT = "Navigate pages with <- -> | /menu returns to menu";
+const FOOTER_HINT = "Navigate pages with <- -> | Esc returns to menu";
 const AUXILIARY_TEXT_COLOR = "gray";
 const COMMAND_SUGGESTION_ROWS = 6;
 const LANGUAGE_PRESETS: LanguagePreset[] = [
@@ -225,7 +225,11 @@ function buildTableLines(entries: EntryRow[], pageIndex: number, width: number, 
   const columnWidth = Math.max(12, Math.floor((innerWidth - columns.length + 1) / columns.length));
   const widths = columns.map((_c, i) => i === columns.length - 1 ? innerWidth - (columnWidth + 1) * (columns.length - 1) : columnWidth);
   const border = `+${widths.map((w) => "-".repeat(w)).join("+")}+`;
-  const valueFor = (entry: EntryRow, key: string): string => key === "vocab" ? buildEntryLabel(entry) : key === "meaning_1" ? entry.meaning : entry.attributes[key] ?? "";
+  const valueFor = (entry: EntryRow, key: string): string => {
+    if (key === "vocab") return buildEntryLabel(entry);
+    if (key.startsWith("meaning_")) return entry.meanings[Number(key.slice("meaning_".length)) - 1] ?? "";
+    return entry.attributes[key] ?? "";
+  };
   const visibleRows = Math.max(1, Math.min(PAGE_SIZE, availableRows));
   const pageEntries = entries.slice(pageIndex * PAGE_SIZE, pageIndex * PAGE_SIZE + visibleRows);
   const header = `|${columns.map((c, i) => padLine(c.label, widths[i])).join("|")}|`;
@@ -356,7 +360,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   const [buffer, setBuffer] = useState("");
   const [suggestionIndex, setSuggestionIndex] = useState(0);
   const [statusLines, setStatusLines] = useState<string[]>(() => buildStatusLines("Ready."));
-  const activeMetadata = workbook.metadataAttributes.filter((a) => a.visible && !["vocab", "meaning_1"].includes(a.key));
+  const activeMetadata = workbook.metadataAttributes.filter((a) => a.visible && a.key !== "vocab" && !a.key.startsWith("meaning_"));
   const posTags = ["JP", "EN"].includes(workbook.vocabularyLanguageCode ?? "") ? backend.listPosTags(workbook.id) : [];
 
   useEffect(() => {
@@ -672,6 +676,8 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     if (key.escape) {
       if (mode.kind !== "command") {
         cancelActiveMode("Cancelled.");
+      } else {
+        onBackToMenu();
       }
       return;
     }
@@ -1190,22 +1196,28 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
   const [buffer, setBuffer] = useState("");
   const [message, setMessage] = useState("↑↓ select field | Space toggle visibility | A add field | R rename | S save | Esc back");
   const [selected, setSelected] = useState(0);
+  const [editAction, setEditAction] = useState<"none" | "add" | "rename">("none");
   useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => stdout.off("resize", f); }, [stdout]);
   useInput((input, key) => {
     if (key.ctrl && input === "c") return onQuit();
     if (key.escape) return onCancel();
     if (key.upArrow) return setSelected((v) => Math.max(0, v - 1));
     if (key.downArrow) return setSelected((v) => Math.min(attributes.length - 1, v + 1));
+    if (editAction !== "none") {
+      if (key.backspace || key.delete) { setBuffer((v) => v.slice(0, -1)); return; }
+      if (key.return && buffer.trim()) {
+        if (editAction === "add") { const keyName = buffer.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_"); setAttributes((xs) => [...xs, { key: keyName, label: buffer.trim(), languageCode: null, required: false, visible: false, displayOrder: xs.length }]); }
+        else setAttributes((xs) => xs.map((a, i) => i === selected ? { ...a, label: buffer.trim() } : a));
+        setBuffer(""); setEditAction("none"); setMessage("↑↓ select field | Space toggle visibility | A add field | R rename | S save | Esc back"); return;
+      }
+      if (!key.ctrl && !key.meta && input) setBuffer((v) => v + input);
+      return;
+    }
     if (input === " ") { setAttributes((xs) => xs.map((a, i) => i === selected && a.key !== "vocab" && a.key !== "meaning_1" ? { ...a, visible: !a.visible } : a)); return; }
     if (input.toLowerCase() === "s") { try { onSave(attributes); } catch (e) { setMessage(e instanceof Error ? e.message : "Could not save settings."); } return; }
-    if (input.toLowerCase() === "r") { setBuffer(attributes[selected]?.label ?? ""); setMessage("Type a new label and press Enter."); return; }
-    if (input.toLowerCase() === "a") { setBuffer(""); setMessage("Type a new attribute label and press Enter."); return; }
+    if (input.toLowerCase() === "r") { setBuffer(attributes[selected]?.label ?? ""); setEditAction("rename"); setMessage("Type a new label and press Enter."); return; }
+    if (input.toLowerCase() === "a") { setBuffer(""); setEditAction("add"); setMessage("Type a new attribute label and press Enter."); return; }
     if (key.backspace || key.delete) { setBuffer((v) => v.slice(0, -1)); return; }
-    if (key.return && buffer.trim()) {
-      if (message.startsWith("Type a new attribute")) { const keyName = buffer.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_"); setAttributes((xs) => [...xs, { key: keyName, label: buffer.trim(), languageCode: null, required: false, visible: false, displayOrder: xs.length }]); }
-      else setAttributes((xs) => xs.map((a, i) => i === selected ? { ...a, label: buffer.trim() } : a));
-      setBuffer(""); setMessage("↑↓ select field | Space toggle visibility | A add field | R rename | S save | Esc back"); return;
-    }
     if (!key.ctrl && !key.meta && input) setBuffer((v) => v + input);
   });
   return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Settings — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text><Text>{padLine("", width)}</Text>{attributes.map((a, i) => <Text key={a.key} color={i === selected ? "yellow" : AUXILIARY_TEXT_COLOR}>{padLine(`${i === selected ? ">" : " "} ${a.label} [${a.visible ? "shown" : "hidden"}]${a.required ? " (required)" : ""}`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color="cyan">{padLine(buffer ? `> ${buffer}_` : "", width)}</Text></Box>;

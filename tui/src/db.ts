@@ -244,6 +244,7 @@ export class VocabularyRepository {
       this.importLegacyDataIfNeeded();
       this.ensureWorkbookBackfill();
       this.ensureWorkbookSchemaBackfill();
+      this.ensureMetadataBackfill();
       this.repairLegacyWorkbookSplit();
       this.ensureCurrentWorkbookSetting();
     });
@@ -797,6 +798,36 @@ export class VocabularyRepository {
     for (const row of entries) {
       insertMeaning.run(Number(row.id), String(row.meaning ?? ""));
     }
+  }
+
+  private ensureMetadataBackfill(): void {
+    const workbooks = this.db.prepare("SELECT id, vocabulary_language_code, preset_enabled FROM mvp_workbooks ORDER BY id ASC").all() as Record<string, unknown>[];
+    const add = this.db.prepare("INSERT OR IGNORE INTO mvp_workbook_attributes (workbook_id, attribute_key, label, language_code, is_required, is_visible, display_order) VALUES (?, ?, ?, ?, ?, ?, ?)");
+    for (const row of workbooks) {
+      const workbookId = Number(row.id);
+      const meaningRows = this.db.prepare("SELECT position, label, language_code FROM mvp_workbook_meaning_attributes WHERE workbook_id = ? ORDER BY position ASC").all(workbookId) as Record<string, unknown>[];
+      add.run(workbookId, "vocab", "Vocabulary", String(row.vocabulary_language_code ?? "") || null, 1, 1, 0);
+      const meanings = meaningRows.length > 0 ? meaningRows : [{ position: 1, label: "Meaning 1", language_code: null }];
+      for (const meaning of meanings) {
+        const position = Number(meaning.position);
+        add.run(workbookId, `meaning_${position}`, String(meaning.label ?? `Meaning ${position}`), meaning.language_code == null ? null : String(meaning.language_code), 1, position === 1 ? 1 : 0, position);
+      }
+      const language = String(row.vocabulary_language_code ?? "").toUpperCase();
+      const optional = [
+        ["kana", "Kana", "JP", 2],
+        ["example_1", "Example 1", "JP", 3],
+        ["example_2", "Example 2", "JP", 4],
+      ] as const;
+      if (language === "JP" && (Number(row.preset_enabled) === 1 || !this.hasAttribute(workbookId, "kana"))) {
+        this.db.prepare("UPDATE mvp_workbooks SET preset_enabled = 1 WHERE id = ?").run(workbookId);
+        for (const [key, label, code, order] of optional) add.run(workbookId, key, label, code, 0, 0, order);
+      }
+      this.db.prepare("UPDATE mvp_entries SET kana_text = kana_text WHERE workbook_id = ?").run(workbookId);
+    }
+  }
+
+  private hasAttribute(workbookId: number, key: string): boolean {
+    return Boolean(this.db.prepare("SELECT 1 FROM mvp_workbook_attributes WHERE workbook_id = ? AND attribute_key = ?").get(workbookId, key));
   }
 
   private repairLegacyWorkbookSplit(): void {
