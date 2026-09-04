@@ -41,9 +41,20 @@ export type EntryRow = {
   posTags: PosTag[];
   createdAt: string;
   updatedAt: string;
+  testCount: number;
+  errorCount: number;
+  tier: "gray" | "green" | "yellow" | "red";
+  lastTested: string | null;
 };
 
 class ValidationError extends Error {}
+
+function tierFor(testCount: number, errorCount: number): EntryRow["tier"] {
+  if (testCount <= 0) return "gray";
+  if (errorCount <= 0) return "green";
+  if (errorCount <= 2) return "yellow";
+  return "red";
+}
 
 function trimRequired(value: string, label: string): string {
   const cleaned = value.trim();
@@ -73,6 +84,10 @@ function rowToEntry(row: Record<string, unknown>): EntryRow {
     posTags: [],
     createdAt: String(row.created_at ?? ""),
     updatedAt: String(row.updated_at ?? ""),
+    testCount: 0,
+    errorCount: 0,
+    tier: "gray",
+    lastTested: null,
   };
 }
 
@@ -228,6 +243,15 @@ export class VocabularyRepository {
           FOREIGN KEY (tag_id) REFERENCES mvp_pos_tags(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS mvp_entry_stats (
+          entry_id INTEGER PRIMARY KEY,
+          test_count INTEGER NOT NULL DEFAULT 0,
+          error_count INTEGER NOT NULL DEFAULT 0,
+          last_tested TEXT NULL,
+          FOREIGN KEY (entry_id) REFERENCES mvp_entries(id) ON DELETE CASCADE,
+          CHECK (test_count >= 0), CHECK (error_count >= 0 AND error_count <= 3)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_mvp_entries_created_at
           ON mvp_entries(created_at);
 
@@ -246,6 +270,7 @@ export class VocabularyRepository {
       this.ensureWorkbookSchemaBackfill();
       this.ensureMetadataBackfill();
       this.repairLegacyWorkbookSplit();
+      this.ensureStatsBackfill();
       this.ensureCurrentWorkbookSetting();
     });
   }
@@ -428,6 +453,15 @@ export class VocabularyRepository {
 
     const row = this.db.prepare("SELECT COUNT(*) AS count FROM mvp_entries WHERE workbook_id = ?").get(workbookId) as Record<string, unknown>;
     return Number(row.count ?? 0);
+  }
+
+  getTierColorsEnabled(): boolean {
+    return this.getMeta("tier_colors_enabled") !== "0";
+  }
+
+  setTierColorsEnabled(enabled: boolean): boolean {
+    this.setMeta("tier_colors_enabled", enabled ? "1" : "0");
+    return enabled;
   }
 
   getEntry(entryId: number): EntryRow | null {
@@ -627,7 +661,35 @@ export class VocabularyRepository {
     for (const row of attributes) attributeMap[String(row.attribute_key)] = String(row.value ?? "");
     if (entry.kanaText) attributeMap.kana ??= entry.kanaText;
     const tags = this.db.prepare("SELECT t.id, t.name, t.is_predefined FROM mvp_entry_pos_tags et JOIN mvp_pos_tags t ON t.id = et.tag_id WHERE et.entry_id = ? ORDER BY t.name").all(entry.id) as Record<string, unknown>[];
-    return { ...entry, meanings, meaning: meanings[0] ?? entry.meaning, attributes: attributeMap, posTags: tags.map((row) => ({ id: Number(row.id), name: String(row.name), predefined: Number(row.is_predefined) === 1 })) };
+    const stats = this.db.prepare("SELECT test_count, error_count, last_tested FROM mvp_entry_stats WHERE entry_id = ?").get(entry.id) as Record<string, unknown> | undefined;
+    const testCount = Math.max(0, Number(stats?.test_count ?? 0));
+    const errorCount = Math.min(3, Math.max(0, Number(stats?.error_count ?? 0)));
+    return { ...entry, meanings, meaning: meanings[0] ?? entry.meaning, attributes: attributeMap, posTags: tags.map((row) => ({ id: Number(row.id), name: String(row.name), predefined: Number(row.is_predefined) === 1 })), testCount, errorCount, tier: tierFor(testCount, errorCount), lastTested: stats?.last_tested == null ? null : String(stats.last_tested) };
+  }
+
+  getEntryStats(entryId: number): { testCount: number; errorCount: number; tier: EntryRow["tier"]; lastTested: string | null } {
+    const entry = this.getEntry(entryId);
+    if (!entry) throw new Error(`Entry with id ${entryId} was not found.`);
+    return { testCount: entry.testCount, errorCount: entry.errorCount, tier: entry.tier, lastTested: entry.lastTested };
+  }
+
+  recordTestResult(entryId: number, isCorrect: boolean): EntryRow {
+    if (!this.getEntry(entryId)) throw new Error(`Entry with id ${entryId} was not found.`);
+    this.db.prepare("INSERT INTO mvp_entry_stats (entry_id, test_count, error_count, last_tested) VALUES (?, 0, 0, CURRENT_TIMESTAMP) ON CONFLICT(entry_id) DO NOTHING").run(entryId);
+    this.db.prepare("UPDATE mvp_entry_stats SET test_count = test_count + 1, error_count = MIN(error_count + ?, 3), last_tested = CURRENT_TIMESTAMP WHERE entry_id = ?").run(isCorrect ? 0 : 1, entryId);
+    return this.getEntry(entryId)!;
+  }
+
+  increasePriority(entryId: number): EntryRow { return this.adjustPriority(entryId, true); }
+  decreasePriority(entryId: number): EntryRow { return this.adjustPriority(entryId, false); }
+
+  private adjustPriority(entryId: number, increase: boolean): EntryRow {
+    const entry = this.getEntry(entryId);
+    if (!entry) throw new Error(`Entry with id ${entryId} was not found.`);
+    if (entry.testCount === 0) throw new ValidationError("Untested entries cannot have their priority adjusted.");
+    const next = increase ? (entry.errorCount === 0 ? 1 : 3) : (entry.errorCount >= 3 ? 2 : 0);
+    this.db.prepare("INSERT INTO mvp_entry_stats (entry_id, test_count, error_count, last_tested) VALUES (?, ?, ?, ?) ON CONFLICT(entry_id) DO UPDATE SET error_count = excluded.error_count").run(entryId, entry.testCount, next, entry.lastTested);
+    return this.getEntry(entryId)!;
   }
 
   private normalizeMeaningAttributes(attributes: MeaningAttribute[]): MeaningAttribute[] {
@@ -826,6 +888,18 @@ export class VocabularyRepository {
         for (const [key, label, code, order] of optional) add.run(workbookId, key, label, code, 0, 0, order);
       }
       this.db.prepare("UPDATE mvp_entries SET kana_text = kana_text WHERE workbook_id = ?").run(workbookId);
+    }
+  }
+
+  private ensureStatsBackfill(): void {
+    const hasLegacyStats = this.tableExists("vocab_stats");
+    if (!hasLegacyStats) return;
+    const rows = this.db.prepare("SELECT entry_id, test_count, error_count, last_tested FROM vocab_stats").all() as Record<string, unknown>[];
+    const insert = this.db.prepare("INSERT OR IGNORE INTO mvp_entry_stats (entry_id, test_count, error_count, last_tested) VALUES (?, ?, ?, ?)");
+    for (const row of rows) {
+      const entryId = Number(row.entry_id);
+      if (!this.db.prepare("SELECT 1 FROM mvp_entries WHERE id = ?").get(entryId)) continue;
+      insert.run(entryId, Math.max(0, Number(row.test_count ?? 0)), Math.min(3, Math.max(0, Number(row.error_count ?? 0))), row.last_tested == null ? null : String(row.last_tested));
     }
   }
 

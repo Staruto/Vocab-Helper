@@ -60,6 +60,13 @@ export class VocabularyBackend {
     return this.repository.countEntries(workbookId);
   }
 
+  getTierColorsEnabled(): boolean { return this.repository.getTierColorsEnabled(); }
+  setTierColorsEnabled(enabled: boolean): boolean { return this.repository.setTierColorsEnabled(enabled); }
+  getEntryStats(entryId: number) { return this.repository.getEntryStats(entryId); }
+  recordTestResult(entryId: number, isCorrect: boolean): EntryRow { return this.repository.recordTestResult(entryId, isCorrect); }
+  increasePriority(entryId: number): EntryRow { return this.repository.increasePriority(entryId); }
+  decreasePriority(entryId: number): EntryRow { return this.repository.decreasePriority(entryId); }
+
   getEntry(entryId: number): EntryRow | null {
     return this.repository.getEntry(entryId);
   }

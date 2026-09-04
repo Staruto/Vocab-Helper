@@ -17,6 +17,7 @@ type AppScreen =
   | { kind: "delete-workbook"; workbook: WorkbookRow; confirm: string }
   | { kind: "settings"; workbook: WorkbookRow }
   | { kind: "tags"; workbook: WorkbookRow }
+  | { kind: "view"; workbook: WorkbookRow; entry: EntryRow }
   | { kind: "vocab"; workbook: WorkbookRow };
 
 type VocabularyScreenProps = {
@@ -25,6 +26,7 @@ type VocabularyScreenProps = {
   onQuit: () => void;
   onOpenSettings: () => void;
   onOpenTags: () => void;
+  onViewEntry: (entry: EntryRow) => void;
 };
 
 type CommandSpec = {
@@ -62,6 +64,7 @@ const COMMANDS: CommandSpec[] = [
   { name: "help", hint: "Show command help" },
   { name: "setting", hint: "Configure workbook fields" },
   { name: "tag", hint: "Manage part-of-speech tags" },
+  { name: "view", hint: "View entry details and status" },
   { name: "quit", hint: "Exit the app" },
 ];
 const backend = new VocabularyBackend();
@@ -249,6 +252,16 @@ function buildPendingCommandText(command: ParameterizedCommand): string {
   return `Enter id for /${command}.`;
 }
 
+function tierColor(tier: EntryRow["tier"]): string {
+  return tier === "gray" ? "gray" : tier === "green" ? "green" : tier === "yellow" ? "yellow" : "red";
+}
+
+function formatLastTested(value: string | null): string {
+  if (!value) return "Never";
+  const date = new Date(value.replace(" ", "T") + (value.includes("Z") ? "" : "Z"));
+  return Number.isNaN(date.getTime()) ? value.slice(0, 10) : date.toLocaleDateString();
+}
+
 function buildStatusLines(message: string, lineCount = 5): string[] {
   const visible = message.split("\n").map((line) => line.trimEnd()).slice(-lineCount);
   while (visible.length < lineCount) {
@@ -350,7 +363,7 @@ function buildWorkbookDeleteLines(workbook: WorkbookRow, confirm: string, width:
   ];
 }
 
-function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOpenTags }: VocabularyScreenProps): JSX.Element {
+function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOpenTags, onViewEntry }: VocabularyScreenProps): JSX.Element {
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
   const [rows, setRows] = useState(() => stdout?.rows ?? 24);
@@ -360,6 +373,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   const [buffer, setBuffer] = useState("");
   const [suggestionIndex, setSuggestionIndex] = useState(0);
   const [statusLines, setStatusLines] = useState<string[]>(() => buildStatusLines("Ready."));
+  const [tierColorsEnabled, setTierColorsEnabled] = useState(() => backend.getTierColorsEnabled());
   const activeMetadata = workbook.metadataAttributes.filter((a) => a.visible && a.key !== "vocab" && !a.key.startsWith("meaning_"));
   const posTags = ["JP", "EN"].includes(workbook.vocabularyLanguageCode ?? "") ? backend.listPosTags(workbook.id) : [];
 
@@ -494,6 +508,15 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     if (lower === "tag" || lower === "tags") { if (!["JP", "EN"].includes(workbook.vocabularyLanguageCode ?? "")) setStatusLines(buildStatusLines("POS tags are unavailable for this language.")); else onOpenTags(); return; }
     if (lower === "help") {
       setStatusLines(buildStatusLines(buildHelpText()));
+      return;
+    }
+
+    if (lower === "view") {
+      const entryId = Number(args[0]);
+      if (!args[0] || !Number.isInteger(entryId)) { setStatusLines(buildStatusLines("Usage: /view <id>")); return; }
+      const entry = backend.getEntry(entryId);
+      if (!entry || entry.workbookId !== workbook.id) { setStatusLines(buildStatusLines(`Entry #${entryId} was not found.`)); return; }
+      onViewEntry(entry);
       return;
     }
 
@@ -753,7 +776,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
         {centerLine(screenTitle, width)}
       </Text>
       {tableLines.map((line, index) => (
-        <Text key={`${index}-${line}`}>{line}</Text>
+        <Text key={`${index}-${line}`} color={tierColorsEnabled && index >= 3 && index < 3 + entries.slice(safePageIndex * PAGE_SIZE, safePageIndex * PAGE_SIZE + PAGE_SIZE).length ? tierColor(entries[safePageIndex * PAGE_SIZE + index - 3].tier) : undefined}>{line}</Text>
       ))}
       <Text>{padLine("", width)}</Text>
       <Text>{padLine("", width)}</Text>
@@ -1196,6 +1219,7 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
   const [buffer, setBuffer] = useState("");
   const [message, setMessage] = useState("↑↓ select field | Space toggle visibility | A add field | R rename | S save | Esc back");
   const [selected, setSelected] = useState(0);
+  const [tierColors, setTierColors] = useState(() => backend.getTierColorsEnabled());
   const [editAction, setEditAction] = useState<"none" | "add" | "rename">("none");
   useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => stdout.off("resize", f); }, [stdout]);
   useInput((input, key) => {
@@ -1215,12 +1239,13 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
     }
     if (input === " ") { setAttributes((xs) => xs.map((a, i) => i === selected && a.key !== "vocab" && a.key !== "meaning_1" ? { ...a, visible: !a.visible } : a)); return; }
     if (input.toLowerCase() === "s") { try { onSave(attributes); } catch (e) { setMessage(e instanceof Error ? e.message : "Could not save settings."); } return; }
+    if (input.toLowerCase() === "t") { const next = !tierColors; backend.setTierColorsEnabled(next); setTierColors(next); setMessage(`Tier colors ${next ? "enabled" : "disabled"}. Press S to save fields.`); return; }
     if (input.toLowerCase() === "r") { setBuffer(attributes[selected]?.label ?? ""); setEditAction("rename"); setMessage("Type a new label and press Enter."); return; }
     if (input.toLowerCase() === "a") { setBuffer(""); setEditAction("add"); setMessage("Type a new attribute label and press Enter."); return; }
     if (key.backspace || key.delete) { setBuffer((v) => v.slice(0, -1)); return; }
     if (!key.ctrl && !key.meta && input) setBuffer((v) => v + input);
   });
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Settings — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text><Text>{padLine("", width)}</Text>{attributes.map((a, i) => <Text key={a.key} color={i === selected ? "yellow" : AUXILIARY_TEXT_COLOR}>{padLine(`${i === selected ? ">" : " "} ${a.label} [${a.visible ? "shown" : "hidden"}]${a.required ? " (required)" : ""}`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color="cyan">{padLine(buffer ? `> ${buffer}_` : "", width)}</Text></Box>;
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Settings — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text><Text>{padLine("", width)}</Text>{attributes.map((a, i) => <Text key={a.key} color={i === selected ? "yellow" : AUXILIARY_TEXT_COLOR}>{padLine(`${i === selected ? ">" : " "} ${a.label} [${a.visible ? "shown" : "hidden"}]${a.required ? " (required)" : ""}`, width)}</Text>)}<Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Tier colors: ${tierColors ? "enabled" : "disabled"} (T toggles)`, width)}</Text><Text>{padLine("", width)}</Text><Text color="cyan">{padLine(buffer ? `> ${buffer}_` : "", width)}</Text></Box>;
 }
 
 function PosTagScreen({ workbook, onCancel, onQuit }: { workbook: WorkbookRow; onCancel: () => void; onQuit: () => void }): JSX.Element {
@@ -1228,6 +1253,26 @@ function PosTagScreen({ workbook, onCancel, onQuit }: { workbook: WorkbookRow; o
   useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => stdout.off("resize", f); }, [stdout]);
   useInput((input, key) => { if (key.ctrl && input === "c") return onQuit(); if (key.escape) return onCancel(); if (key.upArrow) return setSelected((v) => Math.max(0, v - 1)); if (key.downArrow) return setSelected((v) => Math.min(tags.length - 1, v + 1)); if (input.toLowerCase() === "a" || input.toLowerCase() === "r") { setBuffer(""); setMessage(input.toLowerCase() === "a" ? "Type tag name and press Enter." : "Type replacement name and press Enter."); return; } if (input.toLowerCase() === "d" && tags[selected]) { backend.deletePosTag(tags[selected].id); setTags(backend.listPosTags(workbook.id)); setSelected(0); return; } if (key.backspace || key.delete) { setBuffer((v) => v.slice(0, -1)); return; } if (key.return && buffer.trim()) { try { if (message.startsWith("Type tag")) backend.addPosTag(workbook.id, buffer); else if (tags[selected]) backend.renamePosTag(tags[selected].id, buffer); setTags(backend.listPosTags(workbook.id)); setBuffer(""); setMessage("↑↓ select | A add | R rename | D delete | Esc back"); } catch (e) { setMessage(e instanceof Error ? e.message : "Could not update tag."); } return; } if (!key.ctrl && !key.meta && input) setBuffer((v) => v + input); });
   return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Part of speech — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text><Text>{padLine("", width)}</Text>{tags.map((tag, i) => <Text key={tag.id} color={i === selected ? "yellow" : AUXILIARY_TEXT_COLOR}>{padLine(`${i === selected ? ">" : " "} ${tag.name}${tag.predefined ? " (preset)" : ""}`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color="cyan">{padLine(buffer ? `> ${buffer}_` : "", width)}</Text></Box>;
+}
+
+function EntryViewScreen({ workbook, entry, onCancel, onQuit }: { workbook: WorkbookRow; entry: EntryRow; onCancel: () => void; onQuit: () => void }): JSX.Element {
+  const { stdout } = useStdout();
+  const [width, setWidth] = useState(() => stdout?.columns ?? 80);
+  useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => stdout.off("resize", f); }, [stdout]);
+  useInput((_input, key) => { if (key.ctrl && _input === "c") onQuit(); else if (key.escape) onCancel(); });
+  const lines = [
+    `ID: #${entry.id}`,
+    `${workbook.vocabularyLabel}: ${entry.vocabulary}`,
+    ...entry.meanings.map((meaning, index) => `${workbook.meaningAttributes[index]?.label ?? `Meaning ${index + 1}`}: ${meaning}`),
+    ...workbook.metadataAttributes.filter((a) => !a.key.startsWith("meaning_") && a.key !== "vocab").map((a) => `${a.label}: ${entry.attributes[a.key] ?? ""}`),
+    `Part of speech: ${entry.posTags.map((tag) => tag.name).join(", ") || "None"}`,
+    "",
+    `Tests: ${entry.testCount}`,
+    `Errors: ${entry.errorCount}`,
+    `Tier: ${entry.tier[0].toUpperCase()}${entry.tier.slice(1)}`,
+    `Last tested: ${formatLastTested(entry.lastTested)}`,
+  ];
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Entry #${entry.id}`, width)}</Text><Text>{padLine("", width)}</Text>{lines.map((line, index) => <Text key={`${index}-${line}`} color={index >= lines.length - 4 ? tierColor(entry.tier) : AUXILIARY_TEXT_COLOR}>{padLine(line, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Read-only view. Esc returns to the vocabulary list.", width)}</Text></Box>;
 }
 
 function App(): JSX.Element {
@@ -1333,11 +1378,12 @@ function App(): JSX.Element {
   }
 
   if (screen.kind === "vocab") {
-    return <VocabularyScreen workbook={screen.workbook} onBackToMenu={backToMenu} onQuit={quit} onOpenSettings={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onOpenTags={() => setScreen({ kind: "tags", workbook: refreshWorkbook(screen.workbook.id) })} />;
+    return <VocabularyScreen workbook={screen.workbook} onBackToMenu={backToMenu} onQuit={quit} onOpenSettings={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onOpenTags={() => setScreen({ kind: "tags", workbook: refreshWorkbook(screen.workbook.id) })} onViewEntry={(entry) => setScreen({ kind: "view", workbook: screen.workbook, entry })} />;
   }
 
   if (screen.kind === "settings") return <MetadataSettingsScreen workbook={screen.workbook} onSave={(attributes) => { const updated = backend.updateMetadataAttributes(screen.workbook.id, attributes); setScreen({ kind: "vocab", workbook: updated }); }} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
   if (screen.kind === "tags") return <PosTagScreen workbook={screen.workbook} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
+  if (screen.kind === "view") return <EntryViewScreen workbook={screen.workbook} entry={backend.getEntry(screen.entry.id) ?? screen.entry} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
 
   if (screen.kind === "create-workbook") {
     return <WorkbookCreateScreen onCreate={handleCreateWorkbook} onCancel={backToMenu} onQuit={quit} />;
