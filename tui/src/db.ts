@@ -325,6 +325,7 @@ export class VocabularyRepository {
       for (const attribute of attributes) {
         insertAttribute.run(workbookId, attribute.position, attribute.label, attribute.languageCode);
       }
+      this.ensureMetadataBackfill();
       return this.getWorkbook(workbookId);
     });
     if (!workbook) {
@@ -355,6 +356,7 @@ export class VocabularyRepository {
       this.db.prepare("DELETE FROM mvp_workbook_meaning_attributes WHERE workbook_id = ?").run(workbookId);
       const insert = this.db.prepare("INSERT INTO mvp_workbook_meaning_attributes (workbook_id, position, label, language_code) VALUES (?, ?, ?, ?)");
       for (const attribute of attributes) insert.run(workbookId, attribute.position, attribute.label, attribute.languageCode);
+      this.ensureMetadataBackfill();
     });
     const updated = this.getWorkbook(workbookId);
     if (!updated) throw new Error(`Workbook with id ${workbookId} was not found.`);
@@ -810,7 +812,8 @@ export class VocabularyRepository {
       const meanings = meaningRows.length > 0 ? meaningRows : [{ position: 1, label: "Meaning 1", language_code: null }];
       for (const meaning of meanings) {
         const position = Number(meaning.position);
-        add.run(workbookId, `meaning_${position}`, String(meaning.label ?? `Meaning ${position}`), meaning.language_code == null ? null : String(meaning.language_code), 1, position === 1 ? 1 : 0, position);
+        add.run(workbookId, `meaning_${position}`, String(meaning.label ?? `Meaning ${position}`), meaning.language_code == null ? null : String(meaning.language_code), position === 1 ? 1 : 0, position === 1 ? 1 : 0, position);
+        this.db.prepare("UPDATE mvp_workbook_attributes SET is_required = ?, is_visible = CASE WHEN attribute_key = 'meaning_1' THEN 1 ELSE is_visible END WHERE workbook_id = ? AND attribute_key = ?").run(position === 1 ? 1 : 0, workbookId, `meaning_${position}`);
       }
       const language = String(row.vocabulary_language_code ?? "").toUpperCase();
       const optional = [
