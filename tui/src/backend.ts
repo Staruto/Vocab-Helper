@@ -95,6 +95,7 @@ export class VocabularyBackend {
   setEntryPosTags(entryId: number, tagIds: number[]): void { this.repository.setEntryPosTags(entryId, tagIds); }
   setPosEnabled(workbookId: number, enabled: boolean): WorkbookRow { return this.repository.setPosEnabled(workbookId, enabled); }
   setPresetEnabled(workbookId: number, enabled: boolean): WorkbookRow { return this.repository.setPresetEnabled(workbookId, enabled); }
+  applyLanguagePreset(workbookId: number): WorkbookRow { return this.repository.applyLanguagePreset(workbookId); }
 
   close(): void {
     this.repository.close();

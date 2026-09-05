@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, render, useApp, useInput, useStdout } from "ink";
-import { CreateWorkbookInput, EntryRow, MeaningAttribute, MetadataAttribute, PosTag, VocabularyKind, WorkbookRow } from "./db.js";
+import { CreateWorkbookInput, EntryRow, LANGUAGE_PRESET_DEFINITIONS, MeaningAttribute, MetadataAttribute, PosTag, VocabularyKind, WorkbookRow } from "./db.js";
 import { VocabularyBackend } from "./backend.js";
 
 type UiMode =
@@ -992,7 +992,9 @@ function NewWorkbookWizard({ onCreate, onCancel, onQuit }: { onCreate: (input: C
   const [editBuffer, setEditBuffer] = useState("");
   const [error, setError] = useState("");
   const selectedType = VOCABULARY_TYPES[typeIndex];
-  const presetKeys = new Set(selectedType.code === "JP" && presetEnabled ? JAPANESE_OPTIONAL_ATTRIBUTES.map((item) => item.key) : []);
+  const presetDefinition = selectedType.code ? LANGUAGE_PRESET_DEFINITIONS[selectedType.code] : undefined;
+  const presetOptionalAttributes = (presetDefinition?.optionalAttributes ?? []).map((item) => ({ ...item, required: false, visible: false, displayOrder: 0 }));
+  const presetKeys = new Set(presetEnabled && selectedType.kind === "preset_language" ? presetOptionalAttributes.map((item) => item.key) : []);
   useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => stdout.off("resize", f); }, [stdout]);
 
   function go(next: CreateStage): void { setHistory((items) => [...items, stage]); setStage(next); setError(""); setSelected(0); setEditAction("none"); setEditBuffer(""); }
@@ -1028,11 +1030,11 @@ function NewWorkbookWizard({ onCreate, onCancel, onQuit }: { onCreate: (input: C
       go(selectedType.kind === "preset_language" ? "preset" : "meaning-count"); return;
     }
     if (stage === "preset") {
-      setAttributes(presetEnabled && selectedType.code === "JP" ? JAPANESE_OPTIONAL_ATTRIBUTES.map((item) => ({ ...item })) : []);
+      setAttributes(presetEnabled && selectedType.kind === "preset_language" ? presetOptionalAttributes.map((item) => ({ ...item })) : []);
       go("pos"); return;
     }
     if (stage === "pos") {
-      const defaults = posEnabled && selectedType.code === "JP" ? JAPANESE_POS_TAGS.map((name) => ({ name, predefined: true })) : [];
+      const defaults = posEnabled && selectedType.kind === "preset_language" ? (presetDefinition?.posTags ?? []).map((name) => ({ name, predefined: true })) : [];
       setTags(defaults); go(posEnabled ? "tags" : "meaning-count"); return;
     }
     if (stage === "tags") { go("meaning-count"); return; }
@@ -1099,21 +1101,21 @@ function NewWorkbookWizard({ onCreate, onCancel, onQuit }: { onCreate: (input: C
   const summary = [`Name: ${name}`, `Vocabulary: ${vocabularyLabel} — ${selectedType.label}`, `Preset attributes: ${presetEnabled && selectedType.kind === "preset_language" ? "enabled" : "disabled"}`, `Part of speech: ${posEnabled ? `enabled (${tags.length} tags)` : "disabled"}`, `Meanings: ${meanings.map((item) => item.label).join(", ")}`, `Optional attributes: ${attributes.map((item) => item.label).join(", ") || "None"}`];
   let description = "Enter a name for the new workbook.";
   let footer = "Enter next | Esc cancel";
-  if (stage === "type") { description = "Choose a vocabulary type with Up/Down. This selection is required."; footer = "↑↓ choose type | →/Enter next | Esc cancel"; }
-  if (stage === "label") { description = "Choose the label users will see for vocabulary entries. You can edit the default."; footer = "← back | → next | Enter next | Esc cancel"; }
-  if (stage === "preset") { description = "Choose whether to include the language-specific optional fields. You can change this later in Settings."; footer = "↑↓/Space toggle | ← back | →/Enter next | Esc cancel"; }
-  if (stage === "pos") { description = "Choose whether this workbook uses Part of Speech tags. You can change this later in Settings."; footer = "↑↓/Space toggle | ← back | →/Enter next | Esc cancel"; }
-  if (stage === "tags") { description = "Review and customize the starting Part of Speech tags for this workbook."; footer = "↑↓ select | A add | R rename | D delete | ←→/Enter navigate"; }
-  if (stage === "meaning-count") { description = "Choose how many meaning fields each vocabulary entry will have."; footer = "↑↓ choose number | ← back | →/Enter next | Esc cancel"; }
-  if (stage === "meaning") { description = "Name each meaning field. Use a language preset or type your own label."; footer = "↑↓ choose preset | ←→/Enter navigate | Esc cancel"; }
-  if (stage === "attributes") { description = "Add any other fields you want to store, such as examples or notes. Preset fields are marked."; footer = "↑↓ select | A add | R rename | D delete | ←→/Enter navigate"; }
+  if (stage === "type") { description = "Choose a vocabulary type with Up/Down. This selection is required."; footer = "↑↓ choose type | ←/→ to navigate questions | Esc cancel"; }
+  if (stage === "label") { description = "Choose the label users will see for vocabulary entries. You can edit the default."; footer = "←/→ to navigate questions | Enter next | Esc cancel"; }
+  if (stage === "preset") { description = "Choose whether to include the language-specific optional fields. You can change this later in Settings."; footer = "↑↓/Space toggle | ←/→ to navigate questions | Esc cancel"; }
+  if (stage === "pos") { description = "Choose whether this workbook uses Part of Speech tags. You can change this later in Settings."; footer = "↑↓/Space toggle | ←/→ to navigate questions | Esc cancel"; }
+  if (stage === "tags") { description = "Review and customize the starting Part of Speech tags for this workbook."; footer = "↑↓ select | A add | R rename | D delete | ←/→ to navigate questions"; }
+  if (stage === "meaning-count") { description = "Choose how many meaning fields each vocabulary entry will have."; footer = "↑↓ choose number | ←/→ to navigate questions | Esc cancel"; }
+  if (stage === "meaning") { description = "Name each meaning field. Use a language preset or type your own label."; footer = "↑↓ choose preset | ←/→ to navigate questions | Esc cancel"; }
+  if (stage === "attributes") { description = "Add any other fields you want to store, such as examples or notes. Preset fields are marked."; footer = "↑↓ select | A add | R rename | D delete | ←/→ to navigate questions"; }
   if (stage === "confirm") { description = "Review the workbook configuration before creating it."; footer = "← back | Enter create | Esc cancel"; }
   return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(title, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(description, width)}</Text><Text>{padLine("", width)}</Text>
     {stage === "name" ? <Text color="cyan">{padLine(`Workbook name: ${name}_`, width)}</Text> : null}
     {stage === "type" ? VOCABULARY_TYPES.map((item, index) => <Text key={item.label} color={index === typeIndex ? "yellow" : AUXILIARY_TEXT_COLOR}>{padLine(`${index === typeIndex ? ">" : " "} ${item.label}`, width)}</Text>) : null}
     {stage === "label" ? <Text color="cyan">{padLine(`Vocabulary label: ${vocabularyLabel}_`, width)}</Text> : null}
-    {stage === "preset" ? <><Text color={presetEnabled ? "green" : AUXILIARY_TEXT_COLOR}>{padLine(`Exclusive attributes: ${presetEnabled ? "Enabled" : "Disabled"}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(selectedType.code === "JP" ? "Available: Kana, Example 1, Example 2" : "No exclusive attributes are currently defined for this language.", width)}</Text></> : null}
-    {stage === "pos" ? <><Text color={posEnabled ? "green" : AUXILIARY_TEXT_COLOR}>{padLine(`Part of speech: ${posEnabled ? "Enabled" : "Disabled"}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(selectedType.code === "JP" ? `Preset tags: ${JAPANESE_POS_TAGS.join(", ")}` : "No preset tags are currently defined for this language.", width)}</Text></> : null}
+    {stage === "preset" ? <><Text color={presetEnabled ? "green" : AUXILIARY_TEXT_COLOR}>{padLine(`Exclusive attributes: ${presetEnabled ? "Enabled" : "Disabled"}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(presetOptionalAttributes.length ? `Available: ${presetOptionalAttributes.map((item) => item.label).join(", ")}` : "No exclusive attributes are currently defined for this language.", width)}</Text></> : null}
+    {stage === "pos" ? <><Text color={posEnabled ? "green" : AUXILIARY_TEXT_COLOR}>{padLine(`Part of speech: ${posEnabled ? "Enabled" : "Disabled"}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine((presetDefinition?.posTags ?? []).length ? `Preset tags: ${(presetDefinition?.posTags ?? []).join(", ")}` : "No preset tags are currently defined for this language.", width)}</Text></> : null}
     {stage === "meaning-count" ? <Text color="cyan">{padLine(`Meaning attributes: ${meaningCount}`, width)}</Text> : null}
     {stage === "meaning" ? <><Text color="cyan">{padLine(`Meaning ${meaningIndex + 1}/${meaningCount}: ${meanings[meaningIndex]?.label ?? ""}_`, width)}</Text>{meaningPalette !== null ? LANGUAGE_PRESETS.map((item, index) => <Text key={item.code} color={index === meaningPalette ? "yellow" : AUXILIARY_TEXT_COLOR}>{padLine(`${index === meaningPalette ? ">" : " "} ${item.label} (${item.code})`, width)}</Text>) : null}</> : null}
     {(stage === "tags" || stage === "attributes") ? <>{listItems.length ? listItems.map((item, index) => <Text key={`${index}-${typeof item === "string" ? item : ""}`} color={index === selected ? "yellow" : AUXILIARY_TEXT_COLOR}>{padLine(`${index === selected ? ">" : " "} ${item}`, width)}</Text>) : <Text color={AUXILIARY_TEXT_COLOR}>{padLine(stage === "tags" ? "No tags." : "No optional attributes.", width)}</Text>}<Text color="cyan">{padLine(editAction === "none" ? "" : `${editAction === "add" ? "Add" : "Rename"}: ${editBuffer}_`, width)}</Text></> : null}
@@ -1431,7 +1433,7 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
   const [attributes, setAttributes] = useState<MetadataAttribute[]>(workbook.metadataAttributes);
   const [buffer, setBuffer] = useState("");
-  const [message, setMessage] = useState("↑↓ select field | Space toggle visibility | A add field | R rename | S save | Esc back");
+  const [message, setMessage] = useState("↑↓ select field | Space visibility | A add | R rename | L apply language preset | S save | Esc back");
   const [selected, setSelected] = useState(0);
   const [editAction, setEditAction] = useState<"none" | "add" | "rename">("none");
   const [presetEnabled, setPresetEnabled] = useState(workbook.presetEnabled);
@@ -1446,13 +1448,21 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
       if (key.return && buffer.trim()) {
         if (editAction === "add") { const keyName = buffer.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_"); setAttributes((xs) => [...xs, { key: keyName, label: buffer.trim(), languageCode: null, required: false, visible: false, displayOrder: xs.length }]); }
         else setAttributes((xs) => xs.map((a, i) => i === selected ? { ...a, label: buffer.trim() } : a));
-        setBuffer(""); setEditAction("none"); setMessage("↑↓ select field | Space toggle visibility | A add field | R rename | S save | Esc back"); return;
+        setBuffer(""); setEditAction("none"); setMessage("↑↓ select field | Space visibility | A add | R rename | L apply language preset | S save | Esc back"); return;
       }
       if (!key.ctrl && !key.meta && input) setBuffer((v) => v + input);
       return;
     }
     if (input === " ") { setAttributes((xs) => xs.map((a, i) => i === selected && a.key !== "vocab" && a.key !== "meaning_1" ? { ...a, visible: !a.visible } : a)); return; }
     if (input.toLowerCase() === "s") { try { onSave(attributes); } catch (e) { setMessage(e instanceof Error ? e.message : "Could not save settings."); } return; }
+    if (input.toLowerCase() === "l") {
+      try {
+        const updated = backend.applyLanguagePreset(workbook.id);
+        setAttributes(updated.metadataAttributes);
+        setMessage("Missing language preset attributes and tags were added; existing data was preserved.");
+      } catch (e) { setMessage(e instanceof Error ? e.message : "Could not apply language preset."); }
+      return;
+    }
     if (input.toLowerCase() === "p") { const next = !presetEnabled; backend.setPresetEnabled(workbook.id, next); setPresetEnabled(next); setMessage(`Preset attributes ${next ? "enabled" : "disabled"}.`); return; }
     if (input.toLowerCase() === "r") { setBuffer(attributes[selected]?.label ?? ""); setEditAction("rename"); setMessage("Type a new label and press Enter."); return; }
     if (input.toLowerCase() === "a") { setBuffer(""); setEditAction("add"); setMessage("Type a new attribute label and press Enter."); return; }

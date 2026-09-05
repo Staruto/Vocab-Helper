@@ -46,6 +46,40 @@ export type MetadataAttribute = {
 
 export type PosTag = { id: number; name: string; predefined: boolean };
 
+export type LanguagePresetDefinition = {
+  optionalAttributes: Array<{ key: string; label: string; languageCode: string | null }>;
+  posTags: string[];
+};
+
+export const LANGUAGE_PRESET_DEFINITIONS: Record<string, LanguagePresetDefinition> = {
+  JP: {
+    optionalAttributes: [
+      { key: "kana", label: "Kana", languageCode: "JP" },
+      { key: "example_1", label: "Example 1", languageCode: "JP" },
+      { key: "example_2", label: "Example 2", languageCode: "JP" },
+    ],
+    posTags: ["名詞", "固有名詞", "イ形容詞", "ナ形容詞", "動詞 (自動詞)", "動詞 (他動詞)", "副詞", "連体詞", "接続詞", "連語", "その他"],
+  },
+  EN: {
+    optionalAttributes: [
+      { key: "example_sentence_1", label: "Example Sentence 1", languageCode: "EN" },
+      { key: "example_sentence_2", label: "Example Sentence 2", languageCode: "EN" },
+    ],
+    posTags: ["n.", "v.", "adj.", "adv.", "pron.", "prep.", "conj.", "phrase."],
+  },
+  DE: {
+    optionalAttributes: [
+      { key: "example_sentence_1", label: "Example Sentence 1", languageCode: "DE" },
+      { key: "example_sentence_2", label: "Example Sentence 2", languageCode: "DE" },
+    ],
+    posTags: ["m. noun — maskulines Substantiv", "f. noun — feminines Substantiv", "n. noun — neutrales Substantiv", "art. — Artikel", "adj. — Adjektiv", "pron. — Pronomen", "num. — Numerale", "adv. — Adverb", "prep. — Präposition", "conj. — Konjunktion", "interj. — Interjektion"],
+  },
+  ZH: { optionalAttributes: [{ key: "example_sentence_1", label: "Example Sentence 1", languageCode: "ZH" }, { key: "example_sentence_2", label: "Example Sentence 2", languageCode: "ZH" }], posTags: [] },
+  KO: { optionalAttributes: [{ key: "example_sentence_1", label: "Example Sentence 1", languageCode: "KO" }, { key: "example_sentence_2", label: "Example Sentence 2", languageCode: "KO" }], posTags: [] },
+  ES: { optionalAttributes: [{ key: "example_sentence_1", label: "Example Sentence 1", languageCode: "ES" }, { key: "example_sentence_2", label: "Example Sentence 2", languageCode: "ES" }], posTags: [] },
+  FR: { optionalAttributes: [{ key: "example_sentence_1", label: "Example Sentence 1", languageCode: "FR" }, { key: "example_sentence_2", label: "Example Sentence 2", languageCode: "FR" }], posTags: [] },
+};
+
 export type EntryRow = {
   id: number;
   workbookId: number;
@@ -377,8 +411,8 @@ export class VocabularyRepository {
     const attributes = this.normalizeMeaningAttributes(meaningAttributes);
     const workbook = this.transaction(() => {
       const result = this.db.prepare(
-        "INSERT INTO mvp_workbooks (name, vocabulary_label, vocabulary_language_code, preset_enabled) VALUES (?, ?, ?, ?)",
-      ).run(cleanedName, cleanedVocabularyLabel, vocabularyLanguageCode, presetEnabled ? 1 : 0);
+        "INSERT INTO mvp_workbooks (name, vocabulary_label, vocabulary_language_code, preset_enabled, vocabulary_kind, pos_enabled) VALUES (?, ?, ?, ?, ?, ?)",
+      ).run(cleanedName, cleanedVocabularyLabel, vocabularyLanguageCode, presetEnabled ? 1 : 0, vocabularyLanguageCode ? "preset_language" : "non_language", ["JP", "EN", "DE"].includes(vocabularyLanguageCode ?? "") ? 1 : 0);
       const workbookId = Number(result.lastInsertRowid);
       const insertAttribute = this.db.prepare(
         "INSERT INTO mvp_workbook_meaning_attributes (workbook_id, position, label, language_code) VALUES (?, ?, ?, ?)",
@@ -668,6 +702,24 @@ export class VocabularyRepository {
   setPresetEnabled(workbookId: number, enabled: boolean): WorkbookRow {
     if (!this.getWorkbook(workbookId)) throw new Error(`Workbook with id ${workbookId} was not found.`);
     this.db.prepare("UPDATE mvp_workbooks SET preset_enabled = ? WHERE id = ?").run(enabled ? 1 : 0, workbookId);
+    return this.getWorkbook(workbookId)!;
+  }
+
+  applyLanguagePreset(workbookId: number): WorkbookRow {
+    const workbook = this.getWorkbook(workbookId);
+    if (!workbook) throw new Error(`Workbook with id ${workbookId} was not found.`);
+    const definition = workbook.vocabularyLanguageCode ? LANGUAGE_PRESET_DEFINITIONS[workbook.vocabularyLanguageCode] : undefined;
+    if (!definition) return workbook;
+    this.transaction(() => {
+      const insertAttribute = this.db.prepare("INSERT OR IGNORE INTO mvp_workbook_attributes (workbook_id, attribute_key, label, language_code, is_required, is_visible, display_order) VALUES (?, ?, ?, ?, 0, 0, ?)");
+      const currentCount = Number((this.db.prepare("SELECT COUNT(*) AS count FROM mvp_workbook_attributes WHERE workbook_id = ?").get(workbookId) as Record<string, unknown>).count ?? 0);
+      definition.optionalAttributes.forEach((attribute, index) => insertAttribute.run(workbookId, attribute.key, attribute.label, attribute.languageCode, currentCount + index));
+      if (workbook.posEnabled) {
+        const insertTag = this.db.prepare("INSERT OR IGNORE INTO mvp_pos_tags (workbook_id, name, is_predefined) VALUES (?, ?, 1)");
+        for (const tag of definition.posTags) insertTag.run(workbookId, tag);
+      }
+      this.db.prepare("UPDATE mvp_workbooks SET preset_enabled = 1 WHERE id = ?").run(workbookId);
+    });
     return this.getWorkbook(workbookId)!;
   }
 
