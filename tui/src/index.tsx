@@ -1314,7 +1314,13 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
     if (feedback !== null) {
       if (key.return) {
         if (index >= questions.length) setRetry((xs) => xs.slice(1));
-        if (index < questions.length) setIndex((v) => v + 1); else if (retry.length <= 1) setRoundDone(true);
+        if (index < questions.length) {
+          const nextIndex = index + 1;
+          setIndex(nextIndex);
+          if (nextIndex >= questions.length && retry.length === 0) setRoundDone(true);
+        } else if (retry.length <= 1) {
+          setRoundDone(true);
+        }
         setFeedback(null); setAnswer("");
       }
       return;
@@ -1333,7 +1339,7 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
   });
   if (questions.length === 0) return <PracticeEmptyScreen workbook={workbook} onCancel={onCancel} onQuit={onQuit} />;
   if (roundDone) return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice — ${workbook.name}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="green">{padLine(`Final initial-round score: ${score}/${questions.length}`, width)}</Text><Text>{padLine("Press Enter or Esc to return.", width)}</Text></Box>;
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Question ${Math.min(index + 1, questions.length)}/${questions.length}${retry.length ? "  Retry round" : ""}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="yellow">{padLine(`${workbook.meaningAttributes[0]?.label ?? "Meaning 1"}: ${current?.meaning ?? ""}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="cyan">{padLine(`Answer: ${answer}_`, width)}</Text><Text>{padLine("", width)}</Text><Text color={feedback?.startsWith("Correct") ? "green" : feedback ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(feedback ?? "Enter submits. Esc cancels.", width)}</Text></Box>;
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Question ${Math.min(index + 1, questions.length)}/${questions.length}${index >= questions.length && retry.length ? "  Retry round" : ""}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="yellow">{padLine(`${workbook.meaningAttributes[0]?.label ?? "Meaning 1"}: ${current?.meaning ?? ""}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="cyan">{padLine(`Answer: ${answer}_`, width)}</Text><Text>{padLine("", width)}</Text><Text color={feedback?.startsWith("Correct") ? "green" : feedback ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(feedback ?? "Enter submits. Esc cancels.", width)}</Text></Box>;
 }
 
 function PracticeEmptyScreen({ workbook, onCancel, onQuit }: { workbook: WorkbookRow; onCancel: () => void; onQuit: () => void }): JSX.Element {
