@@ -1281,11 +1281,7 @@ function EntryViewScreen({ workbook, entry, onCancel, onQuit }: { workbook: Work
   useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => stdout.off("resize", f); }, [stdout]);
   useInput((_input, key) => { if (key.ctrl && _input === "c") onQuit(); else if (key.escape) onCancel(); });
   const lines = [
-    `ID: #${entry.id}`,
-    `${workbook.vocabularyLabel}: ${entry.vocabulary}`,
-    ...entry.meanings.map((meaning, index) => `${workbook.meaningAttributes[index]?.label ?? `Meaning ${index + 1}`}: ${meaning}`),
-    ...workbook.metadataAttributes.filter((a) => !a.key.startsWith("meaning_") && a.key !== "vocab").map((a) => `${a.label}: ${entry.attributes[a.key] ?? ""}`),
-    `Part of speech: ${entry.posTags.map((tag) => tag.name).join(", ") || "None"}`,
+    ...buildExplicitEntryLines(workbook, entry),
     "",
     `Tests: ${entry.testCount}`,
     `Errors: ${entry.errorCount}`,
@@ -1295,51 +1291,84 @@ function EntryViewScreen({ workbook, entry, onCancel, onQuit }: { workbook: Work
   return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Entry #${entry.id}`, width)}</Text><Text>{padLine("", width)}</Text>{lines.map((line, index) => <Text key={`${index}-${line}`} color={index >= lines.length - 4 ? tierColor(entry.tier) : AUXILIARY_TEXT_COLOR}>{padLine(line, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Read-only view. Esc returns to the vocabulary list.", width)}</Text></Box>;
 }
 
+function buildExplicitEntryLines(workbook: WorkbookRow, entry: EntryRow): string[] {
+  return [
+    `ID: #${entry.id}`,
+    `${workbook.vocabularyLabel}: ${entry.vocabulary}`,
+    ...entry.meanings.map((meaning, index) => `${workbook.meaningAttributes[index]?.label ?? `Meaning ${index + 1}`}: ${meaning}`),
+    ...workbook.metadataAttributes.filter((a) => !a.key.startsWith("meaning_") && a.key !== "vocab").map((a) => `${a.label}: ${entry.attributes[a.key] ?? ""}`),
+    `Part of speech: ${entry.posTags.map((tag) => tag.name).join(", ") || "None"}`,
+  ];
+}
+
 function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workbook: WorkbookRow; count: number; onCancel: () => void; onQuit: () => void; onDone: (score: number, total: number) => void }): JSX.Element {
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
   const [questions] = useState(() => backend.selectPracticeCandidates(workbook.id, count));
+  const [phase, setPhase] = useState<"initial" | "retry" | "detail" | "done">("initial");
   const [index, setIndex] = useState(0);
-  const [retry, setRetry] = useState<EntryRow[]>([]);
+  const [retryRound, setRetryRound] = useState<EntryRow[]>([]);
+  const [nextRetryRound, setNextRetryRound] = useState<EntryRow[]>([]);
+  const [retryNumber, setRetryNumber] = useState(1);
+  const [detailEntry, setDetailEntry] = useState<EntryRow | null>(null);
+  const [detailSourcePhase, setDetailSourcePhase] = useState<"initial" | "retry">("initial");
   const [answer, setAnswer] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
   const [score, setScore] = useState(0);
-  const [roundDone, setRoundDone] = useState(false);
-  const current = roundDone ? null : (index < questions.length ? questions[index] : retry[0] ?? null);
+  const current = phase === "initial" ? questions[index] : phase === "retry" ? retryRound[index] : null;
   useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => stdout.off("resize", f); }, [stdout]);
+
+  function advanceAfterAnswer(sourcePhase: "initial" | "retry" = phase as "initial" | "retry", queuedRetry = nextRetryRound): void {
+    if (sourcePhase === "initial") {
+      const nextIndex = index + 1;
+      if (nextIndex < questions.length) { setIndex(nextIndex); return; }
+      if (queuedRetry.length > 0) { setRetryRound(queuedRetry); setNextRetryRound([]); setIndex(0); setRetryNumber(1); setPhase("retry"); return; }
+      setPhase("done");
+      return;
+    }
+    if (sourcePhase === "retry") {
+      const nextIndex = index + 1;
+      if (nextIndex < retryRound.length) { setIndex(nextIndex); return; }
+      if (queuedRetry.length > 0) { setRetryRound(queuedRetry); setNextRetryRound([]); setIndex(0); setRetryNumber((n) => n + 1); return; }
+      setPhase("done");
+    }
+  }
+
   useInput((input, key) => {
     if (key.ctrl && input === "c") return onQuit();
     if (key.escape) return onCancel();
-    if (roundDone) { if (key.return || key.escape) onDone(score, questions.length); return; }
+    if (phase === "done") { if (key.return) onDone(score, questions.length); return; }
+    if (phase === "detail") {
+      if (key.return) { const source = detailSourcePhase; const queuedRetry = detailEntry ? [...nextRetryRound, detailEntry] : nextRetryRound; setDetailEntry(null); setFeedback(null); setPhase(source); advanceAfterAnswer(source, queuedRetry); }
+      return;
+    }
     if (feedback !== null) {
-      if (key.return) {
-        if (index >= questions.length) setRetry((xs) => xs.slice(1));
-        if (index < questions.length) {
-          const nextIndex = index + 1;
-          setIndex(nextIndex);
-          if (nextIndex >= questions.length && retry.length === 0) setRoundDone(true);
-        } else if (retry.length <= 1) {
-          setRoundDone(true);
-        }
-        setFeedback(null); setAnswer("");
-      }
+      if (key.return) { setFeedback(null); setAnswer(""); advanceAfterAnswer(); }
       return;
     }
     if (key.backspace || key.delete) { setAnswer((v) => v.slice(0, -1)); return; }
     if (key.return) {
-      if (!current) { setRoundDone(true); return; }
+      if (!current) { setPhase("done"); return; }
       const given = answer.trim(); const correct = given === current.vocabulary;
-      backend.recordTestResult(current.id, correct);
-      if (index < questions.length && correct) setScore((v) => v + 1);
-      if (!correct && index < questions.length) setRetry((xs) => [...xs, current]);
-      setFeedback(correct ? "Correct!" : `Incorrect — expected: ${current.vocabulary}`);
+      const updated = backend.recordTestResult(current.id, correct);
+      if (phase === "initial" && correct) setScore((v) => v + 1);
+      if (!correct) {
+        setNextRetryRound((xs) => [...xs, updated]);
+        setDetailEntry(updated);
+        setDetailSourcePhase(phase);
+        setPhase("detail");
+      } else {
+        setFeedback("Correct!");
+      }
       return;
     }
     if (!key.ctrl && !key.meta && input) setAnswer((v) => v + input);
   });
   if (questions.length === 0) return <PracticeEmptyScreen workbook={workbook} onCancel={onCancel} onQuit={onQuit} />;
-  if (roundDone) return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice — ${workbook.name}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="green">{padLine(`Final initial-round score: ${score}/${questions.length}`, width)}</Text><Text>{padLine("Press Enter or Esc to return.", width)}</Text></Box>;
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Question ${Math.min(index + 1, questions.length)}/${questions.length}${index >= questions.length && retry.length ? "  Retry round" : ""}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="yellow">{padLine(`${workbook.meaningAttributes[0]?.label ?? "Meaning 1"}: ${current?.meaning ?? ""}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="cyan">{padLine(`Answer: ${answer}_`, width)}</Text><Text>{padLine("", width)}</Text><Text color={feedback?.startsWith("Correct") ? "green" : feedback ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(feedback ?? "Enter submits. Esc cancels.", width)}</Text></Box>;
+  if (phase === "done") return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice — ${workbook.name}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="green">{padLine(`Final initial-round score: ${score}/${questions.length}`, width)}</Text><Text>{padLine("Press Enter to return.", width)}</Text></Box>;
+  if (phase === "detail" && detailEntry) return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Entry #${detailEntry.id}`, width)}</Text><Text color="red">{padLine(`Incorrect — expected: ${detailEntry.vocabulary}`, width)}</Text><Text>{padLine("", width)}</Text>{buildExplicitEntryLines(workbook, detailEntry).map((line, i) => <Text key={`${i}-${line}`} color={AUXILIARY_TEXT_COLOR}>{padLine(line, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Enter advances. Esc cancels.", width)}</Text></Box>;
+  const roundLabel = phase === "retry" ? `Retry round ${retryNumber} — Question ${index + 1}/${retryRound.length}` : `Question ${index + 1}/${questions.length}`;
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(roundLabel, width)}</Text><Text>{padLine("", width)}</Text><Text color="yellow">{padLine(`${workbook.meaningAttributes[0]?.label ?? "Meaning 1"}: ${current?.meaning ?? ""}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="cyan">{padLine(`Answer: ${answer}_`, width)}</Text><Text>{padLine("", width)}</Text><Text color="green">{padLine(feedback ?? "Enter submits. Esc cancels.", width)}</Text></Box>;
 }
 
 function PracticeEmptyScreen({ workbook, onCancel, onQuit }: { workbook: WorkbookRow; onCancel: () => void; onQuit: () => void }): JSX.Element {

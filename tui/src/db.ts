@@ -45,6 +45,7 @@ export type EntryRow = {
   errorCount: number;
   tier: "gray" | "green" | "yellow" | "red";
   lastTested: string | null;
+  nextTestDeadline: string | null;
 };
 
 class ValidationError extends Error {}
@@ -88,6 +89,7 @@ function rowToEntry(row: Record<string, unknown>): EntryRow {
     errorCount: 0,
     tier: "gray",
     lastTested: null,
+    nextTestDeadline: null,
   };
 }
 
@@ -268,6 +270,7 @@ export class VocabularyRepository {
       this.ensureColumn("mvp_workbooks", "vocabulary_label", "TEXT NOT NULL DEFAULT 'Vocabulary'");
       this.ensureColumn("mvp_workbooks", "vocabulary_language_code", "TEXT NULL");
       this.ensureColumn("mvp_workbooks", "preset_enabled", "INTEGER NOT NULL DEFAULT 0");
+      this.ensureColumn("mvp_entry_stats", "next_test_deadline", "TEXT NULL");
       this.db.exec(`
         CREATE INDEX IF NOT EXISTS idx_mvp_entries_workbook_id
           ON mvp_entries(workbook_id);
@@ -279,10 +282,8 @@ export class VocabularyRepository {
       this.repairLegacyWorkbookSplit();
       this.ensureStatsBackfill();
       this.ensureLegacyEntryMappings();
+      this.applyPendingMigrations();
       this.ensureCurrentWorkbookSetting();
-      this.db.prepare("INSERT OR IGNORE INTO mvp_schema_migrations (version) VALUES (1)").run();
-      this.db.prepare("INSERT OR IGNORE INTO mvp_schema_migrations (version) VALUES (2)").run();
-      this.db.prepare("INSERT OR IGNORE INTO mvp_schema_migrations (version) VALUES (3)").run();
     });
   }
 
@@ -672,23 +673,31 @@ export class VocabularyRepository {
     for (const row of attributes) attributeMap[String(row.attribute_key)] = String(row.value ?? "");
     if (entry.kanaText) attributeMap.kana ??= entry.kanaText;
     const tags = this.db.prepare("SELECT t.id, t.name, t.is_predefined FROM mvp_entry_pos_tags et JOIN mvp_pos_tags t ON t.id = et.tag_id WHERE et.entry_id = ? ORDER BY t.name").all(entry.id) as Record<string, unknown>[];
-    const stats = this.db.prepare("SELECT test_count, error_count, last_tested FROM mvp_entry_stats WHERE entry_id = ?").get(entry.id) as Record<string, unknown> | undefined;
+    const stats = this.db.prepare("SELECT test_count, error_count, last_tested, next_test_deadline FROM mvp_entry_stats WHERE entry_id = ?").get(entry.id) as Record<string, unknown> | undefined;
     const testCount = Math.max(0, Number(stats?.test_count ?? 0));
     const errorCount = Math.min(3, Math.max(0, Number(stats?.error_count ?? 0)));
-    return { ...entry, meanings, meaning: meanings[0] ?? entry.meaning, attributes: attributeMap, posTags: tags.map((row) => ({ id: Number(row.id), name: String(row.name), predefined: Number(row.is_predefined) === 1 })), testCount, errorCount, tier: tierFor(testCount, errorCount), lastTested: stats?.last_tested == null ? null : String(stats.last_tested) };
+    return { ...entry, meanings, meaning: meanings[0] ?? entry.meaning, attributes: attributeMap, posTags: tags.map((row) => ({ id: Number(row.id), name: String(row.name), predefined: Number(row.is_predefined) === 1 })), testCount, errorCount, tier: tierFor(testCount, errorCount), lastTested: stats?.last_tested == null ? null : String(stats.last_tested), nextTestDeadline: stats?.next_test_deadline == null ? null : String(stats.next_test_deadline) };
   }
 
-  getEntryStats(entryId: number): { testCount: number; errorCount: number; tier: EntryRow["tier"]; lastTested: string | null } {
+  getEntryStats(entryId: number): { testCount: number; errorCount: number; tier: EntryRow["tier"]; lastTested: string | null; nextTestDeadline: string | null } {
     const entry = this.getEntry(entryId);
     if (!entry) throw new Error(`Entry with id ${entryId} was not found.`);
-    return { testCount: entry.testCount, errorCount: entry.errorCount, tier: entry.tier, lastTested: entry.lastTested };
+    return { testCount: entry.testCount, errorCount: entry.errorCount, tier: entry.tier, lastTested: entry.lastTested, nextTestDeadline: entry.nextTestDeadline };
   }
 
   recordTestResult(entryId: number, isCorrect: boolean): EntryRow {
     if (!this.getEntry(entryId)) throw new Error(`Entry with id ${entryId} was not found.`);
     return this.transaction(() => {
-      this.db.prepare("INSERT INTO mvp_entry_stats (entry_id, test_count, error_count, last_tested) VALUES (?, 0, 0, CURRENT_TIMESTAMP) ON CONFLICT(entry_id) DO NOTHING").run(entryId);
-      this.db.prepare("UPDATE mvp_entry_stats SET test_count = test_count + 1, error_count = MIN(error_count + ?, 3), last_tested = CURRENT_TIMESTAMP WHERE entry_id = ?").run(isCorrect ? 0 : 1, entryId);
+      this.db.prepare("INSERT INTO mvp_entry_stats (entry_id, test_count, error_count, last_tested, next_test_deadline) VALUES (?, 0, 0, CURRENT_TIMESTAMP, NULL) ON CONFLICT(entry_id) DO NOTHING").run(entryId);
+      const current = this.db.prepare("SELECT error_count FROM mvp_entry_stats WHERE entry_id = ?").get(entryId) as Record<string, unknown>;
+      const currentErrors = Math.min(3, Math.max(0, Number(current.error_count ?? 0)));
+      if (isCorrect) {
+        const intervalDays = [15, 7, 4, 1][currentErrors];
+        const deadline = new Date(Date.now() + intervalDays * 86400000).toISOString();
+        this.db.prepare("UPDATE mvp_entry_stats SET test_count = test_count + 1, error_count = MAX(error_count - 1, 0), last_tested = CURRENT_TIMESTAMP, next_test_deadline = ? WHERE entry_id = ?").run(deadline, entryId);
+      } else {
+        this.db.prepare("UPDATE mvp_entry_stats SET test_count = test_count + 1, error_count = MIN(error_count + 1, 3), last_tested = CURRENT_TIMESTAMP WHERE entry_id = ?").run(entryId);
+      }
       return this.getEntry(entryId)!;
     });
   }
@@ -702,7 +711,7 @@ export class VocabularyRepository {
     if (entry.testCount === 0) throw new ValidationError("Untested entries cannot have their priority adjusted.");
     const next = increase ? (entry.errorCount === 0 ? 1 : 3) : (entry.errorCount >= 3 ? 2 : 0);
     return this.transaction(() => {
-      this.db.prepare("INSERT INTO mvp_entry_stats (entry_id, test_count, error_count, last_tested) VALUES (?, ?, ?, ?) ON CONFLICT(entry_id) DO UPDATE SET error_count = excluded.error_count").run(entryId, entry.testCount, next, entry.lastTested);
+      this.db.prepare("INSERT INTO mvp_entry_stats (entry_id, test_count, error_count, last_tested, next_test_deadline) VALUES (?, ?, ?, ?, ?) ON CONFLICT(entry_id) DO UPDATE SET error_count = excluded.error_count").run(entryId, entry.testCount, next, entry.lastTested, entry.nextTestDeadline);
       return this.getEntry(entryId)!;
     });
   }
@@ -710,7 +719,7 @@ export class VocabularyRepository {
   selectPracticeCandidates(workbookId: number, count: number): EntryRow[] {
     if (!this.getWorkbook(workbookId)) throw new Error(`Workbook with id ${workbookId} was not found.`);
     const safeCount = Math.max(0, Math.floor(count));
-    const rows = this.db.prepare("SELECT id, workbook_id, vocabulary, meaning, kana_text, created_at, updated_at FROM mvp_entries WHERE workbook_id = ? ORDER BY RANDOM() LIMIT ?").all(workbookId, safeCount) as Record<string, unknown>[];
+    const rows = this.db.prepare("SELECT e.id, e.workbook_id, e.vocabulary, e.meaning, e.kana_text, e.created_at, e.updated_at FROM mvp_entries e LEFT JOIN mvp_entry_stats s ON s.entry_id = e.id WHERE e.workbook_id = ? ORDER BY CASE WHEN s.next_test_deadline IS NOT NULL AND datetime(s.next_test_deadline) <= datetime('now') THEN 0 ELSE 1 END ASC, COALESCE(s.error_count, 0) DESC, RANDOM() LIMIT ?").all(workbookId, safeCount) as Record<string, unknown>[];
     return rows.map((row) => this.withEntryMeanings(rowToEntry(row)));
   }
 
@@ -743,6 +752,38 @@ export class VocabularyRepository {
     const existingColumns = new Set(rows.map((row) => String(row.name)));
     if (!existingColumns.has(columnName)) {
       this.db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+    }
+  }
+
+  private applyPendingMigrations(): void {
+    const applied = new Set((this.db.prepare("SELECT version FROM mvp_schema_migrations").all() as Record<string, unknown>[]).map((row) => Number(row.version)));
+    const migrations: Array<[number, () => void]> = [
+      [1, () => undefined],
+      [2, () => undefined],
+      [3, () => undefined],
+      [4, () => {
+        this.ensureColumn("mvp_entry_stats", "next_test_deadline", "TEXT NULL");
+        const rows = this.db.prepare("SELECT entry_id, error_count, last_tested FROM mvp_entry_stats WHERE next_test_deadline IS NULL AND last_tested IS NOT NULL").all() as Record<string, unknown>[];
+        const update = this.db.prepare("UPDATE mvp_entry_stats SET next_test_deadline = ? WHERE entry_id = ?");
+        const intervals = [15, 7, 4, 1];
+        for (const row of rows) {
+          const errors = Math.min(3, Math.max(0, Number(row.error_count ?? 0)));
+          const last = new Date(String(row.last_tested));
+          if (Number.isNaN(last.getTime())) continue;
+          update.run(new Date(last.getTime() + intervals[errors] * 86400000).toISOString(), Number(row.entry_id));
+        }
+        const entries = this.db.prepare("SELECT e.id, e.workbook_id FROM mvp_entries e JOIN mvp_workbook_meaning_attributes a ON a.workbook_id = e.workbook_id GROUP BY e.id, e.workbook_id").all() as Record<string, unknown>[];
+        const insertMeaning = this.db.prepare("INSERT OR IGNORE INTO mvp_entry_meanings (entry_id, position, value) VALUES (?, ?, '')");
+        const positions = this.db.prepare("SELECT workbook_id, position FROM mvp_workbook_meaning_attributes").all() as Record<string, unknown>[];
+        const byWorkbook = new Map<number, number[]>();
+        for (const row of positions) { const list = byWorkbook.get(Number(row.workbook_id)) ?? []; list.push(Number(row.position)); byWorkbook.set(Number(row.workbook_id), list); }
+        for (const entry of entries) for (const position of byWorkbook.get(Number(entry.workbook_id)) ?? []) insertMeaning.run(Number(entry.id), position);
+      }],
+    ];
+    for (const [version, work] of migrations) {
+      if (applied.has(version)) continue;
+      work();
+      this.db.prepare("INSERT INTO mvp_schema_migrations (version) VALUES (?)").run(version);
     }
   }
 
@@ -946,20 +987,34 @@ export class VocabularyRepository {
 
   private ensureLegacyEntryMappings(): void {
     if (!this.tableExists("vocab_entries")) return;
-    const legacy = this.db.prepare("SELECT id, japanese_text, english_text FROM vocab_entries ORDER BY id ASC").all() as Record<string, unknown>[];
-    const mvp = this.db.prepare("SELECT id, vocabulary, meaning FROM mvp_entries ORDER BY id ASC").all() as Record<string, unknown>[];
+    const legacyHasWorkbook = this.tableColumns("vocab_entries").has("workbook_id");
+    const legacy = this.db.prepare(`SELECT id, ${legacyHasWorkbook ? "workbook_id" : "NULL AS workbook_id"}, japanese_text, english_text FROM vocab_entries ORDER BY id ASC`).all() as Record<string, unknown>[];
+    const mvp = this.db.prepare("SELECT id, workbook_id, vocabulary, meaning FROM mvp_entries ORDER BY id ASC").all() as Record<string, unknown>[];
+    const mvpWorkbooks = this.db.prepare("SELECT id, name FROM mvp_workbooks").all() as Record<string, unknown>[];
+    const mvpByName = new Map(mvpWorkbooks.map((row) => [String(row.name).trim().toLocaleLowerCase(), Number(row.id)]));
+    const legacyWorkbookMap = new Map<number, number>();
+    if (this.tableExists("workbooks")) {
+      const legacyWorkbooks = this.db.prepare("SELECT id, name FROM workbooks").all() as Record<string, unknown>[];
+      for (const row of legacyWorkbooks) {
+        const mapped = mvpByName.get(String(row.name ?? "").trim().toLocaleLowerCase());
+        if (mapped !== undefined) legacyWorkbookMap.set(Number(row.id), mapped);
+      }
+    }
     const used = new Set<number>((this.db.prepare("SELECT legacy_entry_id FROM mvp_legacy_entry_map").all() as Record<string, unknown>[]).map((r) => Number(r.legacy_entry_id)));
     const byKey = new Map<string, number[]>();
     for (const row of legacy) {
-      const key = `${String(row.japanese_text ?? "").trim().toLocaleLowerCase()}\u0000${String(row.english_text ?? "").trim().toLocaleLowerCase()}`;
+      const workbookId = row.workbook_id == null ? null : legacyWorkbookMap.get(Number(row.workbook_id)) ?? null;
+      const key = `${workbookId ?? "*"}\u0000${String(row.japanese_text ?? "").trim().toLocaleLowerCase()}\u0000${String(row.english_text ?? "").trim().toLocaleLowerCase()}`;
       const list = byKey.get(key) ?? []; list.push(Number(row.id)); byKey.set(key, list);
     }
     const mappedMvp = new Set<number>((this.db.prepare("SELECT mvp_entry_id FROM mvp_legacy_entry_map").all() as Record<string, unknown>[]).map((r) => Number(r.mvp_entry_id)));
     const insert = this.db.prepare("INSERT OR IGNORE INTO mvp_legacy_entry_map (legacy_entry_id, mvp_entry_id) VALUES (?, ?)");
     for (const row of mvp) {
       const mvpId = Number(row.id); if (mappedMvp.has(mvpId)) continue;
-      const key = `${String(row.vocabulary ?? "").trim().toLocaleLowerCase()}\u0000${String(row.meaning ?? "").trim().toLocaleLowerCase()}`;
-      const candidates = byKey.get(key) ?? [];
+      const workbookId = row.workbook_id == null ? null : Number(row.workbook_id);
+      const scopedKey = `${workbookId ?? "*"}\u0000${String(row.vocabulary ?? "").trim().toLocaleLowerCase()}\u0000${String(row.meaning ?? "").trim().toLocaleLowerCase()}`;
+      const fallbackKey = `*\u0000${String(row.vocabulary ?? "").trim().toLocaleLowerCase()}\u0000${String(row.meaning ?? "").trim().toLocaleLowerCase()}`;
+      const candidates = byKey.get(scopedKey) ?? byKey.get(fallbackKey) ?? [];
       const legacyId = candidates.find((id) => !used.has(id));
       if (legacyId === undefined) continue;
       insert.run(legacyId, mvpId); used.add(legacyId); mappedMvp.add(mvpId);
