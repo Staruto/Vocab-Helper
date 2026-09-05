@@ -1097,12 +1097,18 @@ function NewWorkbookWizard({ onCreate, onCancel, onQuit }: { onCreate: (input: C
   const title = stage === "confirm" ? "Confirm creation" : `Question ${question}/4`;
   const listItems = stage === "tags" ? tags.map((item) => `${item.name}${item.predefined ? " (preset)" : ""}`) : attributes.map((item) => `${item.label}${presetKeys.has(item.key) ? " (preset)" : ""}`);
   const summary = [`Name: ${name}`, `Vocabulary: ${vocabularyLabel} — ${selectedType.label}`, `Preset attributes: ${presetEnabled && selectedType.kind === "preset_language" ? "enabled" : "disabled"}`, `Part of speech: ${posEnabled ? `enabled (${tags.length} tags)` : "disabled"}`, `Meanings: ${meanings.map((item) => item.label).join(", ")}`, `Optional attributes: ${attributes.map((item) => item.label).join(", ") || "None"}`];
-  let hint = "Left goes back. Right or Enter advances. Esc cancels.";
-  if (stage === "type") hint = "Choose a vocabulary type with Up/Down. This selection is required.";
-  if (stage === "preset") hint = "Enable language-exclusive attributes? You can change attributes later.";
-  if (stage === "pos") hint = "Enable Part of Speech? You can change this later in /setting.";
-  if (stage === "tags" || stage === "attributes") hint = "Up/Down select | A add | R rename | D delete | Left/Right navigate";
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(title, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(hint, width)}</Text><Text>{padLine("", width)}</Text>
+  let description = "Enter a name for the new workbook.";
+  let footer = "Enter next | Esc cancel";
+  if (stage === "type") { description = "Choose a vocabulary type with Up/Down. This selection is required."; footer = "↑↓ choose type | →/Enter next | Esc cancel"; }
+  if (stage === "label") { description = "Choose the label users will see for vocabulary entries. You can edit the default."; footer = "← back | → next | Enter next | Esc cancel"; }
+  if (stage === "preset") { description = "Choose whether to include the language-specific optional fields. You can change this later in Settings."; footer = "↑↓/Space toggle | ← back | →/Enter next | Esc cancel"; }
+  if (stage === "pos") { description = "Choose whether this workbook uses Part of Speech tags. You can change this later in Settings."; footer = "↑↓/Space toggle | ← back | →/Enter next | Esc cancel"; }
+  if (stage === "tags") { description = "Review and customize the starting Part of Speech tags for this workbook."; footer = "↑↓ select | A add | R rename | D delete | ←→/Enter navigate"; }
+  if (stage === "meaning-count") { description = "Choose how many meaning fields each vocabulary entry will have."; footer = "↑↓ choose number | ← back | →/Enter next | Esc cancel"; }
+  if (stage === "meaning") { description = "Name each meaning field. Use a language preset or type your own label."; footer = "↑↓ choose preset | ←→/Enter navigate | Esc cancel"; }
+  if (stage === "attributes") { description = "Add any other fields you want to store, such as examples or notes. Preset fields are marked."; footer = "↑↓ select | A add | R rename | D delete | ←→/Enter navigate"; }
+  if (stage === "confirm") { description = "Review the workbook configuration before creating it."; footer = "← back | Enter create | Esc cancel"; }
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(title, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(description, width)}</Text><Text>{padLine("", width)}</Text>
     {stage === "name" ? <Text color="cyan">{padLine(`Workbook name: ${name}_`, width)}</Text> : null}
     {stage === "type" ? VOCABULARY_TYPES.map((item, index) => <Text key={item.label} color={index === typeIndex ? "yellow" : AUXILIARY_TEXT_COLOR}>{padLine(`${index === typeIndex ? ">" : " "} ${item.label}`, width)}</Text>) : null}
     {stage === "label" ? <Text color="cyan">{padLine(`Vocabulary label: ${vocabularyLabel}_`, width)}</Text> : null}
@@ -1112,7 +1118,7 @@ function NewWorkbookWizard({ onCreate, onCancel, onQuit }: { onCreate: (input: C
     {stage === "meaning" ? <><Text color="cyan">{padLine(`Meaning ${meaningIndex + 1}/${meaningCount}: ${meanings[meaningIndex]?.label ?? ""}_`, width)}</Text>{meaningPalette !== null ? LANGUAGE_PRESETS.map((item, index) => <Text key={item.code} color={index === meaningPalette ? "yellow" : AUXILIARY_TEXT_COLOR}>{padLine(`${index === meaningPalette ? ">" : " "} ${item.label} (${item.code})`, width)}</Text>) : null}</> : null}
     {(stage === "tags" || stage === "attributes") ? <>{listItems.length ? listItems.map((item, index) => <Text key={`${index}-${typeof item === "string" ? item : ""}`} color={index === selected ? "yellow" : AUXILIARY_TEXT_COLOR}>{padLine(`${index === selected ? ">" : " "} ${item}`, width)}</Text>) : <Text color={AUXILIARY_TEXT_COLOR}>{padLine(stage === "tags" ? "No tags." : "No optional attributes.", width)}</Text>}<Text color="cyan">{padLine(editAction === "none" ? "" : `${editAction === "add" ? "Add" : "Rename"}: ${editBuffer}_`, width)}</Text></> : null}
     {stage === "confirm" ? <>{summary.map((line) => <Text key={line} color={AUXILIARY_TEXT_COLOR}>{padLine(line, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color="green">{padLine("Press Enter to create the workbook.", width)}</Text></> : null}
-    <Text>{padLine("", width)}</Text><Text color="red">{padLine(error, width)}</Text></Box>;
+    <Text>{padLine("", width)}</Text><Text color="red">{padLine(error, width)}</Text><Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footer, width)}</Text></Box>;
 }
 
 function WorkbookEditScreen({
