@@ -309,7 +309,7 @@ function buildSuggestionLine(command: CommandSpec, selected: boolean, width: num
   };
 }
 
-function buildSuggestionLines(suggestions: CommandSpec[], selectedIndex: number, width: number): Array<{ commandText: string; hintText: string }> {
+function buildSuggestionLines(suggestions: CommandSpec[], selectedIndex: number, width: number, scrollOffset = 0): Array<{ commandText: string; hintText: string }> {
   if (suggestions.length === 0) {
     return [
       { commandText: padLine("No matching commands.", width), hintText: "" },
@@ -317,8 +317,8 @@ function buildSuggestionLines(suggestions: CommandSpec[], selectedIndex: number,
     ];
   }
 
-  const rows = suggestions.slice(0, COMMAND_SUGGESTION_ROWS).map((command, index) =>
-    buildSuggestionLine(command, index === selectedIndex, width),
+  const rows = suggestions.slice(scrollOffset, scrollOffset + COMMAND_SUGGESTION_ROWS).map((command, index) =>
+    buildSuggestionLine(command, index + scrollOffset === selectedIndex, width),
   );
   while (rows.length < COMMAND_SUGGESTION_ROWS) {
     rows.push({ commandText: "", hintText: "" });
@@ -402,10 +402,16 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
 
   const commandSuggestions = useMemo(() => buildCommandSuggestions(buffer), [buffer]);
   const commandSuggestionIndex = commandSuggestions.length === 0 ? 0 : Math.min(suggestionIndex, commandSuggestions.length - 1);
+  const commandSuggestionScrollOffset = commandSuggestions.length <= COMMAND_SUGGESTION_ROWS
+    ? 0
+    : Math.min(
+        Math.max(0, commandSuggestionIndex - COMMAND_SUGGESTION_ROWS + 1),
+        commandSuggestions.length - COMMAND_SUGGESTION_ROWS,
+      );
   const commandPaletteActive = mode.kind === "command" && getCommandPrefix(buffer) !== null;
   const suggestionLines = useMemo(
-    () => buildSuggestionLines(commandSuggestions, commandSuggestionIndex, width),
-    [commandSuggestions, commandSuggestionIndex, width],
+    () => buildSuggestionLines(commandSuggestions, commandSuggestionIndex, width, commandSuggestionScrollOffset),
+    [commandSuggestions, commandSuggestionIndex, commandSuggestionScrollOffset, width],
   );
 
   useEffect(() => {
@@ -808,7 +814,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       {commandPaletteActive
         ? suggestionLines.map((line, index) => (
             <Text key={`suggestion-${index}-${line.commandText}-${line.hintText}`}>
-              {index === commandSuggestionIndex ? (
+              {index + commandSuggestionScrollOffset === commandSuggestionIndex ? (
                 <>
                   <Text color="yellow">{padLine(">", 2)}</Text>
                   <Text color="yellow">{line.commandText}</Text>
