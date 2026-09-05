@@ -1339,7 +1339,7 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
     if (key.escape) return onCancel();
     if (phase === "done") { if (key.return) onDone(score, questions.length); return; }
     if (phase === "detail") {
-      if (key.return) { const source = detailSourcePhase; const queuedRetry = detailEntry ? [...nextRetryRound, detailEntry] : nextRetryRound; setDetailEntry(null); setFeedback(null); setPhase(source); advanceAfterAnswer(source, queuedRetry); }
+      if (key.return) { const source = detailSourcePhase; const queuedRetry = detailEntry ? [...nextRetryRound, detailEntry] : nextRetryRound; setDetailEntry(null); setFeedback(null); setAnswer(""); setPhase(source); advanceAfterAnswer(source, queuedRetry); }
       return;
     }
     if (feedback !== null) {
@@ -1350,7 +1350,7 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
     if (key.return) {
       if (!current) { setPhase("done"); return; }
       const given = answer.trim(); const correct = given === current.vocabulary;
-      const updated = backend.recordTestResult(current.id, correct);
+      const updated = backend.recordTestResult(current.id, correct, phase === "initial");
       if (phase === "initial" && correct) setScore((v) => v + 1);
       if (!correct) {
         setNextRetryRound((xs) => [...xs, updated]);

@@ -685,16 +685,18 @@ export class VocabularyRepository {
     return { testCount: entry.testCount, errorCount: entry.errorCount, tier: entry.tier, lastTested: entry.lastTested, nextTestDeadline: entry.nextTestDeadline };
   }
 
-  recordTestResult(entryId: number, isCorrect: boolean): EntryRow {
+  recordTestResult(entryId: number, isCorrect: boolean, decreaseError = true): EntryRow {
     if (!this.getEntry(entryId)) throw new Error(`Entry with id ${entryId} was not found.`);
     return this.transaction(() => {
       this.db.prepare("INSERT INTO mvp_entry_stats (entry_id, test_count, error_count, last_tested, next_test_deadline) VALUES (?, 0, 0, CURRENT_TIMESTAMP, NULL) ON CONFLICT(entry_id) DO NOTHING").run(entryId);
       const current = this.db.prepare("SELECT error_count FROM mvp_entry_stats WHERE entry_id = ?").get(entryId) as Record<string, unknown>;
       const currentErrors = Math.min(3, Math.max(0, Number(current.error_count ?? 0)));
-      if (isCorrect) {
+      if (isCorrect && decreaseError) {
         const intervalDays = [15, 7, 4, 1][currentErrors];
         const deadline = new Date(Date.now() + intervalDays * 86400000).toISOString();
         this.db.prepare("UPDATE mvp_entry_stats SET test_count = test_count + 1, error_count = MAX(error_count - 1, 0), last_tested = CURRENT_TIMESTAMP, next_test_deadline = ? WHERE entry_id = ?").run(deadline, entryId);
+      } else if (isCorrect) {
+        this.db.prepare("UPDATE mvp_entry_stats SET test_count = test_count + 1, last_tested = CURRENT_TIMESTAMP WHERE entry_id = ?").run(entryId);
       } else {
         this.db.prepare("UPDATE mvp_entry_stats SET test_count = test_count + 1, error_count = MIN(error_count + 1, 3), last_tested = CURRENT_TIMESTAMP WHERE entry_id = ?").run(entryId);
       }
@@ -719,7 +721,7 @@ export class VocabularyRepository {
   selectPracticeCandidates(workbookId: number, count: number): EntryRow[] {
     if (!this.getWorkbook(workbookId)) throw new Error(`Workbook with id ${workbookId} was not found.`);
     const safeCount = Math.max(0, Math.floor(count));
-    const rows = this.db.prepare("SELECT e.id, e.workbook_id, e.vocabulary, e.meaning, e.kana_text, e.created_at, e.updated_at FROM mvp_entries e LEFT JOIN mvp_entry_stats s ON s.entry_id = e.id WHERE e.workbook_id = ? ORDER BY CASE WHEN s.next_test_deadline IS NOT NULL AND datetime(s.next_test_deadline) <= datetime('now') THEN 0 ELSE 1 END ASC, COALESCE(s.error_count, 0) DESC, RANDOM() LIMIT ?").all(workbookId, safeCount) as Record<string, unknown>[];
+    const rows = this.db.prepare("SELECT e.id, e.workbook_id, e.vocabulary, e.meaning, e.kana_text, e.created_at, e.updated_at FROM mvp_entries e LEFT JOIN mvp_entry_stats s ON s.entry_id = e.id WHERE e.workbook_id = ? ORDER BY CASE WHEN COALESCE(s.test_count, 0) = 0 THEN 0 WHEN s.next_test_deadline IS NOT NULL AND datetime(s.next_test_deadline) <= datetime('now') THEN 1 ELSE 2 END ASC, COALESCE(s.error_count, 0) DESC, RANDOM() LIMIT ?").all(workbookId, safeCount) as Record<string, unknown>[];
     return rows.map((row) => this.withEntryMeanings(rowToEntry(row)));
   }
 
