@@ -9,8 +9,24 @@ export type WorkbookRow = {
   vocabularyLabel: string;
   vocabularyLanguageCode: string | null;
   presetEnabled: boolean;
+  vocabularyKind: VocabularyKind;
+  posEnabled: boolean;
   meaningAttributes: MeaningAttribute[];
   metadataAttributes: MetadataAttribute[];
+};
+
+export type VocabularyKind = "preset_language" | "other_language" | "non_language";
+
+export type CreateWorkbookInput = {
+  name: string;
+  vocabularyKind: VocabularyKind;
+  vocabularyLabel: string;
+  vocabularyLanguageCode: string | null;
+  presetEnabled: boolean;
+  posEnabled: boolean;
+  meaningAttributes: MeaningAttribute[];
+  optionalAttributes: MetadataAttribute[];
+  posTags: Array<{ name: string; predefined: boolean }>;
 };
 
 export type MeaningAttribute = {
@@ -102,6 +118,8 @@ function rowToWorkbook(row: Record<string, unknown>): WorkbookRow {
     vocabularyLabel: String(row.vocabulary_label ?? "Vocabulary"),
     vocabularyLanguageCode: row.vocabulary_language_code == null ? null : String(row.vocabulary_language_code),
     presetEnabled: Number(row.preset_enabled ?? 0) === 1,
+    vocabularyKind: (String(row.vocabulary_kind ?? "non_language") as VocabularyKind),
+    posEnabled: Number(row.pos_enabled ?? 0) === 1,
     meaningAttributes: [],
     metadataAttributes: [],
   };
@@ -270,6 +288,8 @@ export class VocabularyRepository {
       this.ensureColumn("mvp_workbooks", "vocabulary_label", "TEXT NOT NULL DEFAULT 'Vocabulary'");
       this.ensureColumn("mvp_workbooks", "vocabulary_language_code", "TEXT NULL");
       this.ensureColumn("mvp_workbooks", "preset_enabled", "INTEGER NOT NULL DEFAULT 0");
+      this.ensureColumn("mvp_workbooks", "vocabulary_kind", "TEXT NOT NULL DEFAULT 'non_language'");
+      this.ensureColumn("mvp_workbooks", "pos_enabled", "INTEGER NOT NULL DEFAULT 0");
       this.ensureColumn("mvp_entry_stats", "next_test_deadline", "TEXT NULL");
       this.db.exec(`
         CREATE INDEX IF NOT EXISTS idx_mvp_entries_workbook_id
@@ -297,6 +317,8 @@ export class VocabularyRepository {
           w.vocabulary_label,
           w.vocabulary_language_code,
           w.preset_enabled,
+          w.vocabulary_kind,
+          w.pos_enabled,
           w.created_at,
           COUNT(e.id) AS word_count
         FROM mvp_workbooks AS w
@@ -320,6 +342,8 @@ export class VocabularyRepository {
           w.vocabulary_label,
           w.vocabulary_language_code,
           w.preset_enabled,
+          w.vocabulary_kind,
+          w.pos_enabled,
           w.created_at,
           COUNT(e.id) AS word_count
         FROM mvp_workbooks AS w
@@ -371,6 +395,58 @@ export class VocabularyRepository {
     if (this.getCurrentWorkbookId() === null) {
       this.setCurrentWorkbookId(workbook.id);
     }
+    return workbook;
+  }
+
+  createConfiguredWorkbook(input: CreateWorkbookInput): WorkbookRow {
+    const name = trimRequired(input.name, "Workbook name");
+    const vocabularyLabel = trimRequired(input.vocabularyLabel, "Vocabulary label");
+    const meanings = this.normalizeMeaningAttributes(input.meaningAttributes);
+    const allowedKinds: VocabularyKind[] = ["preset_language", "other_language", "non_language"];
+    if (!allowedKinds.includes(input.vocabularyKind)) throw new ValidationError("Choose a valid vocabulary type.");
+    if (input.vocabularyKind === "preset_language" && !input.vocabularyLanguageCode) throw new ValidationError("A preset language is required.");
+    const optional = input.optionalAttributes.map((attribute, index) => ({
+      ...attribute,
+      key: trimRequired(attribute.key, "Attribute key"),
+      label: trimRequired(attribute.label, "Attribute label"),
+      required: false,
+      visible: false,
+      displayOrder: meanings.length + index + 1,
+    }));
+    const reservedKeys = new Set(["vocab", ...meanings.map((item) => `meaning_${item.position}`)]);
+    if (optional.some((item) => reservedKeys.has(item.key)) || new Set(optional.map((item) => item.key)).size !== optional.length) {
+      throw new ValidationError("Optional attribute keys must be unique.");
+    }
+    const tags: Array<{ name: string; predefined: boolean }> = [];
+    const seenTagNames = new Set<string>();
+    for (const value of input.posTags) {
+      const tagName = trimRequired(value.name, "POS tag");
+      const normalized = tagName.toLocaleLowerCase();
+      if (!seenTagNames.has(normalized)) { seenTagNames.add(normalized); tags.push({ name: tagName, predefined: value.predefined }); }
+    }
+
+    const workbookId = this.transaction(() => {
+      const result = this.db.prepare(
+        "INSERT INTO mvp_workbooks (name, vocabulary_label, vocabulary_language_code, preset_enabled, vocabulary_kind, pos_enabled) VALUES (?, ?, ?, ?, ?, ?)",
+      ).run(name, vocabularyLabel, input.vocabularyKind === "preset_language" ? input.vocabularyLanguageCode : null, input.presetEnabled ? 1 : 0, input.vocabularyKind, input.posEnabled ? 1 : 0);
+      const id = Number(result.lastInsertRowid);
+      const insertMeaning = this.db.prepare("INSERT INTO mvp_workbook_meaning_attributes (workbook_id, position, label, language_code) VALUES (?, ?, ?, ?)");
+      const insertAttribute = this.db.prepare("INSERT INTO mvp_workbook_attributes (workbook_id, attribute_key, label, language_code, is_required, is_visible, display_order) VALUES (?, ?, ?, ?, ?, ?, ?)");
+      insertAttribute.run(id, "vocab", vocabularyLabel, input.vocabularyLanguageCode, 1, 1, 0);
+      for (const meaning of meanings) {
+        insertMeaning.run(id, meaning.position, meaning.label, meaning.languageCode);
+        insertAttribute.run(id, `meaning_${meaning.position}`, meaning.label, meaning.languageCode, meaning.position === 1 ? 1 : 0, meaning.position === 1 ? 1 : 0, meaning.position);
+      }
+      for (const attribute of optional) insertAttribute.run(id, attribute.key, attribute.label, attribute.languageCode, 0, 0, attribute.displayOrder);
+      if (input.posEnabled) {
+        const insertTag = this.db.prepare("INSERT INTO mvp_pos_tags (workbook_id, name, is_predefined) VALUES (?, ?, ?)");
+        for (const tag of tags) insertTag.run(id, tag.name, tag.predefined ? 1 : 0);
+      }
+      return id;
+    });
+    const workbook = this.getWorkbook(workbookId);
+    if (!workbook) throw new Error("Could not load inserted workbook.");
+    if (this.getCurrentWorkbookId() === null) this.setCurrentWorkbookId(workbook.id);
     return workbook;
   }
 
@@ -549,7 +625,7 @@ export class VocabularyRepository {
   listPosTags(workbookId: number): PosTag[] {
     const workbook = this.getWorkbook(workbookId);
     if (!workbook) throw new Error(`Workbook with id ${workbookId} was not found.`);
-    if (!["JP", "EN"].includes(workbook.vocabularyLanguageCode ?? "")) return [];
+    if (!workbook.posEnabled) return [];
     const rows = this.db.prepare("SELECT id, name, is_predefined FROM mvp_pos_tags WHERE workbook_id = ? ORDER BY name").all(workbookId) as Record<string, unknown>[];
     return rows.map((row) => ({ id: Number(row.id), name: String(row.name), predefined: Number(row.is_predefined) === 1 }));
   }
@@ -580,7 +656,19 @@ export class VocabularyRepository {
 
   private ensurePosSupported(workbookId: number): void {
     const workbook = this.getWorkbook(workbookId);
-    if (!workbook || !["JP", "EN"].includes(workbook.vocabularyLanguageCode ?? "")) throw new ValidationError("POS tags are unavailable for this language.");
+    if (!workbook || !workbook.posEnabled) throw new ValidationError("Part of speech is disabled for this workbook.");
+  }
+
+  setPosEnabled(workbookId: number, enabled: boolean): WorkbookRow {
+    if (!this.getWorkbook(workbookId)) throw new Error(`Workbook with id ${workbookId} was not found.`);
+    this.db.prepare("UPDATE mvp_workbooks SET pos_enabled = ? WHERE id = ?").run(enabled ? 1 : 0, workbookId);
+    return this.getWorkbook(workbookId)!;
+  }
+
+  setPresetEnabled(workbookId: number, enabled: boolean): WorkbookRow {
+    if (!this.getWorkbook(workbookId)) throw new Error(`Workbook with id ${workbookId} was not found.`);
+    this.db.prepare("UPDATE mvp_workbooks SET preset_enabled = ? WHERE id = ?").run(enabled ? 1 : 0, workbookId);
+    return this.getWorkbook(workbookId)!;
   }
 
   updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, posTagIds?: number[]): EntryRow {
@@ -781,6 +869,12 @@ export class VocabularyRepository {
         for (const row of positions) { const list = byWorkbook.get(Number(row.workbook_id)) ?? []; list.push(Number(row.position)); byWorkbook.set(Number(row.workbook_id), list); }
         for (const entry of entries) for (const position of byWorkbook.get(Number(entry.workbook_id)) ?? []) insertMeaning.run(Number(entry.id), position);
       }],
+      [5, () => {
+        this.ensureColumn("mvp_workbooks", "vocabulary_kind", "TEXT NOT NULL DEFAULT 'non_language'");
+        this.ensureColumn("mvp_workbooks", "pos_enabled", "INTEGER NOT NULL DEFAULT 0");
+        this.db.prepare(`UPDATE mvp_workbooks SET vocabulary_kind = CASE WHEN vocabulary_language_code IN ('JP','EN','ZH','KO','ES','FR','DE') THEN 'preset_language' WHEN vocabulary_language_code IS NOT NULL THEN 'other_language' ELSE 'non_language' END`).run();
+        this.db.prepare("UPDATE mvp_workbooks SET pos_enabled = 1 WHERE vocabulary_language_code IN ('JP','EN') OR EXISTS (SELECT 1 FROM mvp_pos_tags t WHERE t.workbook_id = mvp_workbooks.id)").run();
+      }],
     ];
     for (const [version, work] of migrations) {
       if (applied.has(version)) continue;
@@ -949,7 +1043,7 @@ export class VocabularyRepository {
         ["example_1", "Example 1", "JP", 3],
         ["example_2", "Example 2", "JP", 4],
       ] as const;
-      if (language === "JP" && (Number(row.preset_enabled) === 1 || !this.hasAttribute(workbookId, "kana"))) {
+      if (language === "JP" && Number(row.preset_enabled) === 1) {
         this.db.prepare("UPDATE mvp_workbooks SET preset_enabled = 1 WHERE id = ?").run(workbookId);
         for (const [key, label, code, order] of optional) add.run(workbookId, key, label, code, 0, 0, order);
       }

@@ -1,4 +1,4 @@
-import { defaultDbPath, EntryRow, MeaningAttribute, MetadataAttribute, PosTag, WorkbookRow, VocabularyRepository } from "./db.js";
+import { CreateWorkbookInput, defaultDbPath, EntryRow, MeaningAttribute, MetadataAttribute, PosTag, WorkbookRow, VocabularyRepository } from "./db.js";
 
 export class VocabularyBackend {
   private readonly repository: VocabularyRepository;
@@ -43,6 +43,8 @@ export class VocabularyBackend {
   ): WorkbookRow {
     return this.repository.createWorkbook(name, vocabularyLabel, vocabularyLanguageCode, meaningAttributes, presetEnabled);
   }
+
+  createConfiguredWorkbook(input: CreateWorkbookInput): WorkbookRow { return this.repository.createConfiguredWorkbook(input); }
 
   deleteWorkbook(workbookId: number): number | null {
     return this.repository.deleteWorkbook(workbookId);
@@ -91,6 +93,8 @@ export class VocabularyBackend {
   renamePosTag(tagId: number, name: string): void { this.repository.renamePosTag(tagId, name); }
   deletePosTag(tagId: number): void { this.repository.deletePosTag(tagId); }
   setEntryPosTags(entryId: number, tagIds: number[]): void { this.repository.setEntryPosTags(entryId, tagIds); }
+  setPosEnabled(workbookId: number, enabled: boolean): WorkbookRow { return this.repository.setPosEnabled(workbookId, enabled); }
+  setPresetEnabled(workbookId: number, enabled: boolean): WorkbookRow { return this.repository.setPresetEnabled(workbookId, enabled); }
 
   close(): void {
     this.repository.close();
