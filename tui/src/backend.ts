@@ -64,6 +64,7 @@ export class VocabularyBackend {
   setTierColorsEnabled(enabled: boolean): boolean { return this.repository.setTierColorsEnabled(enabled); }
   getEntryStats(entryId: number) { return this.repository.getEntryStats(entryId); }
   recordTestResult(entryId: number, isCorrect: boolean): EntryRow { return this.repository.recordTestResult(entryId, isCorrect); }
+  selectPracticeCandidates(workbookId: number, count: number): EntryRow[] { return this.repository.selectPracticeCandidates(workbookId, count); }
   increasePriority(entryId: number): EntryRow { return this.repository.increasePriority(entryId); }
   decreasePriority(entryId: number): EntryRow { return this.repository.decreasePriority(entryId); }
 

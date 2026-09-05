@@ -18,6 +18,7 @@ type AppScreen =
   | { kind: "settings"; workbook: WorkbookRow }
   | { kind: "tags"; workbook: WorkbookRow }
   | { kind: "view"; workbook: WorkbookRow; entry: EntryRow }
+  | { kind: "practice"; workbook: WorkbookRow; count: number }
   | { kind: "vocab"; workbook: WorkbookRow };
 
 type VocabularyScreenProps = {
@@ -27,6 +28,7 @@ type VocabularyScreenProps = {
   onOpenSettings: () => void;
   onOpenTags: () => void;
   onViewEntry: (entry: EntryRow) => void;
+  onStartPractice: (count?: number) => void;
 };
 
 type CommandSpec = {
@@ -65,6 +67,7 @@ const COMMANDS: CommandSpec[] = [
   { name: "setting", hint: "Configure workbook fields" },
   { name: "tag", hint: "Manage part-of-speech tags" },
   { name: "view", hint: "View entry details and status" },
+  { name: "test", hint: "Practice vocabulary (15 questions)" },
   { name: "quit", hint: "Exit the app" },
 ];
 const backend = new VocabularyBackend();
@@ -363,7 +366,7 @@ function buildWorkbookDeleteLines(workbook: WorkbookRow, confirm: string, width:
   ];
 }
 
-function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOpenTags, onViewEntry }: VocabularyScreenProps): JSX.Element {
+function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOpenTags, onViewEntry, onStartPractice }: VocabularyScreenProps): JSX.Element {
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
   const [rows, setRows] = useState(() => stdout?.rows ?? 24);
@@ -517,6 +520,12 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       const entry = backend.getEntry(entryId);
       if (!entry || entry.workbookId !== workbook.id) { setStatusLines(buildStatusLines(`Entry #${entryId} was not found.`)); return; }
       onViewEntry(entry);
+      return;
+    }
+
+    if (lower === "test") {
+      if (args.length > 1 || (args[0] && (!/^\d+$/.test(args[0]) || Number(args[0]) <= 0))) { setStatusLines(buildStatusLines("Usage: /test [count]")); return; }
+      onStartPractice(args[0] ? Number(args[0]) : undefined);
       return;
     }
 
@@ -1286,6 +1295,52 @@ function EntryViewScreen({ workbook, entry, onCancel, onQuit }: { workbook: Work
   return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Entry #${entry.id}`, width)}</Text><Text>{padLine("", width)}</Text>{lines.map((line, index) => <Text key={`${index}-${line}`} color={index >= lines.length - 4 ? tierColor(entry.tier) : AUXILIARY_TEXT_COLOR}>{padLine(line, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Read-only view. Esc returns to the vocabulary list.", width)}</Text></Box>;
 }
 
+function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workbook: WorkbookRow; count: number; onCancel: () => void; onQuit: () => void; onDone: (score: number, total: number) => void }): JSX.Element {
+  const { stdout } = useStdout();
+  const [width, setWidth] = useState(() => stdout?.columns ?? 80);
+  const [questions] = useState(() => backend.selectPracticeCandidates(workbook.id, count));
+  const [index, setIndex] = useState(0);
+  const [retry, setRetry] = useState<EntryRow[]>([]);
+  const [answer, setAnswer] = useState("");
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const [score, setScore] = useState(0);
+  const [roundDone, setRoundDone] = useState(false);
+  const current = roundDone ? null : (index < questions.length ? questions[index] : retry[0] ?? null);
+  useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => stdout.off("resize", f); }, [stdout]);
+  useInput((input, key) => {
+    if (key.ctrl && input === "c") return onQuit();
+    if (key.escape) return onCancel();
+    if (roundDone) { if (key.return || key.escape) onDone(score, questions.length); return; }
+    if (feedback !== null) {
+      if (key.return) {
+        if (index >= questions.length) setRetry((xs) => xs.slice(1));
+        if (index < questions.length) setIndex((v) => v + 1); else if (retry.length <= 1) setRoundDone(true);
+        setFeedback(null); setAnswer("");
+      }
+      return;
+    }
+    if (key.backspace || key.delete) { setAnswer((v) => v.slice(0, -1)); return; }
+    if (key.return) {
+      if (!current) { setRoundDone(true); return; }
+      const given = answer.trim(); const correct = given === current.vocabulary;
+      backend.recordTestResult(current.id, correct);
+      if (index < questions.length && correct) setScore((v) => v + 1);
+      if (!correct && index < questions.length) setRetry((xs) => [...xs, current]);
+      setFeedback(correct ? "Correct!" : `Incorrect — expected: ${current.vocabulary}`);
+      return;
+    }
+    if (!key.ctrl && !key.meta && input) setAnswer((v) => v + input);
+  });
+  if (questions.length === 0) return <PracticeEmptyScreen workbook={workbook} onCancel={onCancel} onQuit={onQuit} />;
+  if (roundDone) return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice — ${workbook.name}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="green">{padLine(`Final initial-round score: ${score}/${questions.length}`, width)}</Text><Text>{padLine("Press Enter or Esc to return.", width)}</Text></Box>;
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Question ${Math.min(index + 1, questions.length)}/${questions.length}${retry.length ? "  Retry round" : ""}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="yellow">{padLine(`${workbook.meaningAttributes[0]?.label ?? "Meaning 1"}: ${current?.meaning ?? ""}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="cyan">{padLine(`Answer: ${answer}_`, width)}</Text><Text>{padLine("", width)}</Text><Text color={feedback?.startsWith("Correct") ? "green" : feedback ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(feedback ?? "Enter submits. Esc cancels.", width)}</Text></Box>;
+}
+
+function PracticeEmptyScreen({ workbook, onCancel, onQuit }: { workbook: WorkbookRow; onCancel: () => void; onQuit: () => void }): JSX.Element {
+  useInput((input, key) => { if (key.ctrl && input === "c") onQuit(); else if (key.escape || key.return) onCancel(); });
+  return <Box flexDirection="column"><Text color="cyan">{`No entries available in ${workbook.name}.`}</Text><Text color={AUXILIARY_TEXT_COLOR}>Press Enter or Esc to return.</Text></Box>;
+}
+
 function App(): JSX.Element {
   const { exit } = useApp();
   const [screen, setScreen] = useState<AppScreen>(() => ({ kind: "menu" }));
@@ -1389,8 +1444,10 @@ function App(): JSX.Element {
   }
 
   if (screen.kind === "vocab") {
-    return <VocabularyScreen workbook={screen.workbook} onBackToMenu={backToMenu} onQuit={quit} onOpenSettings={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onOpenTags={() => setScreen({ kind: "tags", workbook: refreshWorkbook(screen.workbook.id) })} onViewEntry={(entry) => setScreen({ kind: "view", workbook: screen.workbook, entry })} />;
+    return <VocabularyScreen workbook={screen.workbook} onBackToMenu={backToMenu} onQuit={quit} onOpenSettings={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onOpenTags={() => setScreen({ kind: "tags", workbook: refreshWorkbook(screen.workbook.id) })} onViewEntry={(entry) => setScreen({ kind: "view", workbook: screen.workbook, entry })} onStartPractice={(count) => { const n = count ?? 15; setScreen({ kind: "practice", workbook: refreshWorkbook(screen.workbook.id), count: Math.min(n, backend.countEntries(screen.workbook.id)) }); }} />;
   }
+
+  if (screen.kind === "practice") return <PracticeScreen workbook={screen.workbook} count={screen.count} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} onDone={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} />;
 
   if (screen.kind === "settings") return <MetadataSettingsScreen workbook={screen.workbook} onSave={(attributes) => { const updated = backend.updateMetadataAttributes(screen.workbook.id, attributes); setScreen({ kind: "vocab", workbook: updated }); }} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
   if (screen.kind === "tags") return <PosTagScreen workbook={screen.workbook} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;

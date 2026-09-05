@@ -158,6 +158,7 @@ export class VocabularyRepository {
   }
 
   initialize(): void {
+    this.db.exec(`CREATE TABLE IF NOT EXISTS mvp_schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
     this.transaction(() => {
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS mvp_meta (
@@ -252,6 +253,12 @@ export class VocabularyRepository {
           CHECK (test_count >= 0), CHECK (error_count >= 0 AND error_count <= 3)
         );
 
+        CREATE TABLE IF NOT EXISTS mvp_legacy_entry_map (
+          legacy_entry_id INTEGER PRIMARY KEY,
+          mvp_entry_id INTEGER NOT NULL UNIQUE,
+          FOREIGN KEY (mvp_entry_id) REFERENCES mvp_entries(id) ON DELETE CASCADE
+        );
+
         CREATE INDEX IF NOT EXISTS idx_mvp_entries_created_at
           ON mvp_entries(created_at);
 
@@ -271,7 +278,11 @@ export class VocabularyRepository {
       this.ensureMetadataBackfill();
       this.repairLegacyWorkbookSplit();
       this.ensureStatsBackfill();
+      this.ensureLegacyEntryMappings();
       this.ensureCurrentWorkbookSetting();
+      this.db.prepare("INSERT OR IGNORE INTO mvp_schema_migrations (version) VALUES (1)").run();
+      this.db.prepare("INSERT OR IGNORE INTO mvp_schema_migrations (version) VALUES (2)").run();
+      this.db.prepare("INSERT OR IGNORE INTO mvp_schema_migrations (version) VALUES (3)").run();
     });
   }
 
@@ -675,9 +686,11 @@ export class VocabularyRepository {
 
   recordTestResult(entryId: number, isCorrect: boolean): EntryRow {
     if (!this.getEntry(entryId)) throw new Error(`Entry with id ${entryId} was not found.`);
-    this.db.prepare("INSERT INTO mvp_entry_stats (entry_id, test_count, error_count, last_tested) VALUES (?, 0, 0, CURRENT_TIMESTAMP) ON CONFLICT(entry_id) DO NOTHING").run(entryId);
-    this.db.prepare("UPDATE mvp_entry_stats SET test_count = test_count + 1, error_count = MIN(error_count + ?, 3), last_tested = CURRENT_TIMESTAMP WHERE entry_id = ?").run(isCorrect ? 0 : 1, entryId);
-    return this.getEntry(entryId)!;
+    return this.transaction(() => {
+      this.db.prepare("INSERT INTO mvp_entry_stats (entry_id, test_count, error_count, last_tested) VALUES (?, 0, 0, CURRENT_TIMESTAMP) ON CONFLICT(entry_id) DO NOTHING").run(entryId);
+      this.db.prepare("UPDATE mvp_entry_stats SET test_count = test_count + 1, error_count = MIN(error_count + ?, 3), last_tested = CURRENT_TIMESTAMP WHERE entry_id = ?").run(isCorrect ? 0 : 1, entryId);
+      return this.getEntry(entryId)!;
+    });
   }
 
   increasePriority(entryId: number): EntryRow { return this.adjustPriority(entryId, true); }
@@ -688,8 +701,17 @@ export class VocabularyRepository {
     if (!entry) throw new Error(`Entry with id ${entryId} was not found.`);
     if (entry.testCount === 0) throw new ValidationError("Untested entries cannot have their priority adjusted.");
     const next = increase ? (entry.errorCount === 0 ? 1 : 3) : (entry.errorCount >= 3 ? 2 : 0);
-    this.db.prepare("INSERT INTO mvp_entry_stats (entry_id, test_count, error_count, last_tested) VALUES (?, ?, ?, ?) ON CONFLICT(entry_id) DO UPDATE SET error_count = excluded.error_count").run(entryId, entry.testCount, next, entry.lastTested);
-    return this.getEntry(entryId)!;
+    return this.transaction(() => {
+      this.db.prepare("INSERT INTO mvp_entry_stats (entry_id, test_count, error_count, last_tested) VALUES (?, ?, ?, ?) ON CONFLICT(entry_id) DO UPDATE SET error_count = excluded.error_count").run(entryId, entry.testCount, next, entry.lastTested);
+      return this.getEntry(entryId)!;
+    });
+  }
+
+  selectPracticeCandidates(workbookId: number, count: number): EntryRow[] {
+    if (!this.getWorkbook(workbookId)) throw new Error(`Workbook with id ${workbookId} was not found.`);
+    const safeCount = Math.max(0, Math.floor(count));
+    const rows = this.db.prepare("SELECT id, workbook_id, vocabulary, meaning, kana_text, created_at, updated_at FROM mvp_entries WHERE workbook_id = ? ORDER BY RANDOM() LIMIT ?").all(workbookId, safeCount) as Record<string, unknown>[];
+    return rows.map((row) => this.withEntryMeanings(rowToEntry(row)));
   }
 
   private normalizeMeaningAttributes(attributes: MeaningAttribute[]): MeaningAttribute[] {
@@ -799,7 +821,7 @@ export class VocabularyRepository {
     const rows = this.db
       .prepare(
         `
-        SELECT ${workbookColumn}, japanese_text, kana_text, english_text, created_at
+        SELECT id, ${workbookColumn}, japanese_text, kana_text, english_text, created_at
         FROM vocab_entries
         ORDER BY id ASC
         `,
@@ -818,7 +840,7 @@ export class VocabularyRepository {
       const kanaText = trimOptional(row.kana_text == null ? null : String(row.kana_text));
       const createdAt = String(row.created_at ?? new Date().toISOString());
 
-      this.db
+      const inserted = this.db
         .prepare(
           `
           INSERT INTO mvp_entries (workbook_id, vocabulary, meaning, kana_text, created_at, updated_at)
@@ -826,6 +848,7 @@ export class VocabularyRepository {
           `,
         )
         .run(workbookId, vocabulary, meaning, kanaText, createdAt, createdAt);
+      this.db.prepare("INSERT OR IGNORE INTO mvp_legacy_entry_map (legacy_entry_id, mvp_entry_id) VALUES (?, ?)").run(Number(row.id), Number(inserted.lastInsertRowid));
     }
   }
 
@@ -892,36 +915,55 @@ export class VocabularyRepository {
   }
 
   private ensureStatsBackfill(): void {
-    if (this.getMeta("stats_import_v2_complete") === "1") return;
+    if (this.getMeta("stats_import_v3_complete") === "1") return;
     if (!this.tableExists("vocab_stats") || !this.tableExists("vocab_entries")) {
-      this.setMeta("stats_import_v2_complete", "1");
+      this.setMeta("stats_import_v3_complete", "1");
       return;
     }
 
-    // Legacy and MVP entry IDs are not guaranteed to match because the MVP
-    // importer creates new rows. Match by the stable vocabulary/meaning pair
-    // so a newly-created MVP entry cannot inherit another entry's stats.
     const legacyEntries = this.db.prepare("SELECT id, japanese_text, english_text FROM vocab_entries").all() as Record<string, unknown>[];
     const legacyStats = this.db.prepare("SELECT entry_id, test_count, error_count, last_tested FROM vocab_stats").all() as Record<string, unknown>[];
     const statsByLegacyId = new Map<number, Record<string, unknown>>();
     for (const row of legacyStats) statsByLegacyId.set(Number(row.entry_id), row);
-    const legacyByKey = new Map<string, Record<string, unknown>>();
-    for (const row of legacyEntries) {
-      const key = `${String(row.japanese_text ?? "").trim().toLocaleLowerCase()}\u0000${String(row.english_text ?? "").trim().toLocaleLowerCase()}`;
-      if (!legacyByKey.has(key)) legacyByKey.set(key, row);
+    this.ensureLegacyEntryMappings();
+    const existingMvpStats = new Map<number, Record<string, unknown>>();
+    for (const row of this.db.prepare("SELECT entry_id, test_count, error_count, last_tested FROM mvp_entry_stats").all() as Record<string, unknown>[]) {
+      existingMvpStats.set(Number(row.entry_id), row);
     }
-
     this.db.prepare("DELETE FROM mvp_entry_stats").run();
     const mvpEntries = this.db.prepare("SELECT id, vocabulary, meaning FROM mvp_entries").all() as Record<string, unknown>[];
     const insert = this.db.prepare("INSERT INTO mvp_entry_stats (entry_id, test_count, error_count, last_tested) VALUES (?, ?, ?, ?)");
     for (const entry of mvpEntries) {
-      const key = `${String(entry.vocabulary ?? "").trim().toLocaleLowerCase()}\u0000${String(entry.meaning ?? "").trim().toLocaleLowerCase()}`;
-      const legacy = legacyByKey.get(key);
-      const stats = legacy ? statsByLegacyId.get(Number(legacy.id)) : undefined;
-      if (!stats) continue;
-      insert.run(Number(entry.id), Math.max(0, Number(stats.test_count ?? 0)), Math.min(3, Math.max(0, Number(stats.error_count ?? 0))), stats.last_tested == null ? null : String(stats.last_tested));
+      const mapping = this.db.prepare("SELECT legacy_entry_id FROM mvp_legacy_entry_map WHERE mvp_entry_id = ?").get(Number(entry.id)) as Record<string, unknown> | undefined;
+      const stats = mapping ? statsByLegacyId.get(Number(mapping.legacy_entry_id)) : undefined;
+      const preserved = existingMvpStats.get(Number(entry.id));
+      const source = stats ?? preserved;
+      if (!source) continue;
+      insert.run(Number(entry.id), Math.max(0, Number(source.test_count ?? 0)), Math.min(3, Math.max(0, Number(source.error_count ?? 0))), source.last_tested == null ? null : String(source.last_tested));
     }
-    this.setMeta("stats_import_v2_complete", "1");
+    this.setMeta("stats_import_v3_complete", "1");
+  }
+
+  private ensureLegacyEntryMappings(): void {
+    if (!this.tableExists("vocab_entries")) return;
+    const legacy = this.db.prepare("SELECT id, japanese_text, english_text FROM vocab_entries ORDER BY id ASC").all() as Record<string, unknown>[];
+    const mvp = this.db.prepare("SELECT id, vocabulary, meaning FROM mvp_entries ORDER BY id ASC").all() as Record<string, unknown>[];
+    const used = new Set<number>((this.db.prepare("SELECT legacy_entry_id FROM mvp_legacy_entry_map").all() as Record<string, unknown>[]).map((r) => Number(r.legacy_entry_id)));
+    const byKey = new Map<string, number[]>();
+    for (const row of legacy) {
+      const key = `${String(row.japanese_text ?? "").trim().toLocaleLowerCase()}\u0000${String(row.english_text ?? "").trim().toLocaleLowerCase()}`;
+      const list = byKey.get(key) ?? []; list.push(Number(row.id)); byKey.set(key, list);
+    }
+    const mappedMvp = new Set<number>((this.db.prepare("SELECT mvp_entry_id FROM mvp_legacy_entry_map").all() as Record<string, unknown>[]).map((r) => Number(r.mvp_entry_id)));
+    const insert = this.db.prepare("INSERT OR IGNORE INTO mvp_legacy_entry_map (legacy_entry_id, mvp_entry_id) VALUES (?, ?)");
+    for (const row of mvp) {
+      const mvpId = Number(row.id); if (mappedMvp.has(mvpId)) continue;
+      const key = `${String(row.vocabulary ?? "").trim().toLocaleLowerCase()}\u0000${String(row.meaning ?? "").trim().toLocaleLowerCase()}`;
+      const candidates = byKey.get(key) ?? [];
+      const legacyId = candidates.find((id) => !used.has(id));
+      if (legacyId === undefined) continue;
+      insert.run(legacyId, mvpId); used.add(legacyId); mappedMvp.add(mvpId);
+    }
   }
 
   private hasAttribute(workbookId: number, key: string): boolean {
