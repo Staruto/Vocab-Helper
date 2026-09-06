@@ -1582,7 +1582,16 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
     if (key.escape) return onCancel();
     if (phase === "done") { if (key.return) onDone(score, questions.length); return; }
     if (phase === "detail") {
-      if (key.return) { const source = detailSourcePhase; const queuedRetry = detailEntry ? [...nextRetryRound, detailEntry] : nextRetryRound; setDetailEntry(null); setFeedback(null); setAnswer(""); setPhase(source); advanceAfterAnswer(source, queuedRetry); }
+      if (key.return) {
+        const source = detailSourcePhase;
+        const queuedRetry = detailEntry ? [...nextRetryRound, detailEntry] : nextRetryRound;
+        setNextRetryRound(queuedRetry);
+        setDetailEntry(null);
+        setFeedback(null);
+        setAnswer("");
+        setPhase(source);
+        advanceAfterAnswer(source, queuedRetry);
+      }
       return;
     }
     if (feedback !== null) {
