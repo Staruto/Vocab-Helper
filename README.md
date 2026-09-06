@@ -1,4 +1,4 @@
-# VocabHelper 0.1.0
+# VocabHelper 3.0.0
 
 TypeScript TUI MVP for vocabulary memorization.
 
@@ -54,5 +54,5 @@ The converter builds and validates a clean database before changing the source. 
 
 ## Legacy Code
 
-The Python CLI and GUI code remains in the repository as reference source. It is not part of the supported 0.1 runtime or release artifact; the supported experience is the TypeScript TUI under `tui/`.
+The Python CLI and GUI code remains in the repository as reference source. It is not part of the supported 3.0 runtime or release artifact; the supported experience is the TypeScript TUI under `tui/`.
 

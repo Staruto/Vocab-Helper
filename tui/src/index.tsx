@@ -44,9 +44,11 @@ type ParameterizedCommand = "edit" | "delete";
 type LanguagePreset = { code: string; label: string };
 
 const PAGE_SIZE = 20;
-const TITLE = "VocabHelper 0.1.0";
+const TITLE = "VocabHelper 3.0.0";
 const FOOTER_HINT = "Navigate pages with <- -> | Esc returns to menu";
-const AUXILIARY_TEXT_COLOR = "gray";
+const AUXILIARY_TEXT_COLOR = "#979797";
+const GRAY_TIER_COLOR = "#777777";
+const SELECTED_TEXT_COLOR = "#cea8ff";
 const COMMAND_SUGGESTION_ROWS = 6;
 const LANGUAGE_PRESETS: LanguagePreset[] = [
   { code: "JP", label: "Japanese" },
@@ -62,7 +64,7 @@ const VOCABULARY_TYPES: Array<{ kind: VocabularyKind; code: string | null; label
   { kind: "other_language", code: null, label: "Other Language" },
   { kind: "non_language", code: null, label: "Not a Language" },
 ];
-const WORKBOOK_MENU_HINT = "↑↓ select | Enter open | Ctrl+E edit | Del delete | + create | Esc quit";
+const WORKBOOK_MENU_HINT = "↑↓ select | Enter open | Ctrl+E edit | Del delete | + create | Esc exit";
 const WORKBOOK_CREATE_HINT = "Type a name and press Enter. Esc returns to the menu.";
 const WORKBOOK_DELETE_HINT = "Type yes to confirm. Enter deletes. Esc cancels.";
 const COMMANDS: CommandSpec[] = [
@@ -76,7 +78,7 @@ const COMMANDS: CommandSpec[] = [
   { name: "tag", hint: "Manage part-of-speech tags" },
   { name: "view", hint: "View entry details and status" },
   { name: "test", hint: "Practice vocabulary (15 questions)" },
-  { name: "quit", hint: "Exit the app" },
+  { name: "exit", hint: "Exit the app" },
 ];
 const backend = new VocabularyBackend();
 
@@ -264,7 +266,7 @@ function buildPendingCommandText(command: ParameterizedCommand): string {
 }
 
 function tierColor(tier: EntryRow["tier"]): string {
-  return tier === "gray" ? "gray" : tier === "green" ? "green" : tier === "yellow" ? "yellow" : "red";
+  return tier === "gray" ? GRAY_TIER_COLOR : tier === "green" ? "green" : tier === "yellow" ? "yellow" : "red";
 }
 
 function formatLastTested(value: string | null): string {
@@ -307,7 +309,7 @@ function buildCommandSuggestions(buffer: string): CommandSpec[] {
   return COMMANDS.filter((command) => command.name.startsWith(prefix));
 }
 
-function buildSuggestionLine(command: CommandSpec, selected: boolean, width: number): { commandText: string; hintText: string } {
+function buildSuggestionLine(command: CommandSpec, width: number): { commandText: string; hintText: string } {
   const totalWidth = Math.max(width, 40);
   const leftWidth = Math.max(12, Math.min(16, Math.floor(totalWidth * 0.22)));
   const rightWidth = Math.max(1, totalWidth - 3 - leftWidth);
@@ -325,8 +327,8 @@ function buildSuggestionLines(suggestions: CommandSpec[], selectedIndex: number,
     ];
   }
 
-  const rows = suggestions.slice(scrollOffset, scrollOffset + COMMAND_SUGGESTION_ROWS).map((command, index) =>
-    buildSuggestionLine(command, index + scrollOffset === selectedIndex, width),
+  const rows = suggestions.slice(scrollOffset, scrollOffset + COMMAND_SUGGESTION_ROWS).map((command) =>
+    buildSuggestionLine(command, width),
   );
   while (rows.length < COMMAND_SUGGESTION_ROWS) {
     rows.push({ commandText: "", hintText: "" });
@@ -578,7 +580,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       return;
     }
 
-    if (lower === "quit" || lower === "exit") {
+    if (lower === "exit") {
       onQuit();
       return;
     }
@@ -811,7 +813,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
         <>
           <Text>{padLine("", width)}</Text>
           {posTags.map((tag, index) => (
-            <Text key={tag.id} color={index === mode.posIndex ? "yellow" : AUXILIARY_TEXT_COLOR}>
+            <Text key={tag.id} color={index === mode.posIndex ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>
               {padLine(`${index === mode.posIndex ? ">" : " "} [${mode.selectedTagIds.includes(tag.id) ? "x" : " "}] ${tag.name}`, width)}
             </Text>
           ))}
@@ -821,19 +823,12 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       <Text>{padLine("", width)}</Text>
       {commandPaletteActive
         ? suggestionLines.map((line, index) => (
-            <Text key={`suggestion-${index}-${line.commandText}-${line.hintText}`}>
-              {index + commandSuggestionScrollOffset === commandSuggestionIndex ? (
-                <>
-                  <Text color="yellow">{padLine(">", 2)}</Text>
-                  <Text color="yellow">{line.commandText}</Text>
-                </>
-              ) : (
-                <>
-                  <Text color={AUXILIARY_TEXT_COLOR}>{padLine(" ", 2)}</Text>
-                  <Text color="white">{line.commandText}</Text>
-                </>
-              )}
-              <Text color={AUXILIARY_TEXT_COLOR}> {line.hintText}</Text>
+            <Text
+              key={`suggestion-${index}-${line.commandText}-${line.hintText}`}
+              color={index + commandSuggestionScrollOffset === commandSuggestionIndex ? SELECTED_TEXT_COLOR : undefined}
+            >
+              <Text color={index + commandSuggestionScrollOffset === commandSuggestionIndex ? SELECTED_TEXT_COLOR : "white"}>{padLine("", 2)}{line.commandText}</Text>
+              <Text color={index + commandSuggestionScrollOffset === commandSuggestionIndex ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}> {line.hintText}</Text>
             </Text>
           ))
         : null}
@@ -944,7 +939,7 @@ function WorkbookMenuScreen({
       <Text>{displayRows.header}</Text>
       <Text>{displayRows.border}</Text>
       {displayRows.rows.map((row, index) => (
-        <Text key={`${index}-${row.line}`} color={row.selected ? "yellow" : AUXILIARY_TEXT_COLOR}>
+        <Text key={`${index}-${row.line}`} color={row.selected ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>
           {padLine(row.line, width)}
         </Text>
       ))}
@@ -1137,13 +1132,13 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
   if (stage === "destructive-confirm") { description = "This change will permanently remove stored field values."; footer = "Type yes and press Enter | Esc cancel"; }
   return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(title, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(description, width)}</Text><Text>{padLine("", width)}</Text>
     {stage === "name" ? <Text color="cyan">{padLine(`Workbook name: ${name}_`, width)}</Text> : null}
-    {stage === "type" ? VOCABULARY_TYPES.map((item, index) => <Text key={item.label} color={index === typeIndex ? "yellow" : AUXILIARY_TEXT_COLOR}>{padLine(`${index === typeIndex ? ">" : " "} ${item.label}`, width)}</Text>) : null}
+    {stage === "type" ? VOCABULARY_TYPES.map((item, index) => <Text key={item.label} color={index === typeIndex ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${index === typeIndex ? ">" : " "} ${item.label}`, width)}</Text>) : null}
     {stage === "label" ? <Text color="cyan">{padLine(`Vocabulary label: ${vocabularyLabel}_`, width)}</Text> : null}
     {stage === "preset" ? <><Text color={presetEnabled ? "green" : AUXILIARY_TEXT_COLOR}>{padLine(`Exclusive attributes: ${presetEnabled ? "Enabled" : "Disabled"}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(presetOptionalAttributes.length ? `Available: ${presetOptionalAttributes.map((item) => item.label).join(", ")}` : "No exclusive attributes are currently defined for this language.", width)}</Text></> : null}
     {stage === "pos" ? <><Text color={posEnabled ? "green" : AUXILIARY_TEXT_COLOR}>{padLine(`Part of speech: ${posEnabled ? "Enabled" : "Disabled"}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine((presetDefinition?.posTags ?? []).length ? `Preset tags: ${(presetDefinition?.posTags ?? []).join(", ")}` : "No preset tags are currently defined for this language.", width)}</Text></> : null}
     {stage === "meaning-count" ? <Text color="cyan">{padLine(`Meaning attributes: ${meaningCount}`, width)}</Text> : null}
-    {stage === "meaning" ? <><Text color="cyan">{padLine(`Meaning ${meaningIndex + 1}/${meaningCount}: ${meanings[meaningIndex]?.label ?? ""}_`, width)}</Text>{meaningPalette !== null ? LANGUAGE_PRESETS.map((item, index) => <Text key={item.code} color={index === meaningPalette ? "yellow" : AUXILIARY_TEXT_COLOR}>{padLine(`${index === meaningPalette ? ">" : " "} ${item.label} (${item.code})`, width)}</Text>) : null}</> : null}
-    {(stage === "tags" || stage === "attributes") ? <>{listItems.length ? listItems.map((item, index) => <Text key={`${index}-${typeof item === "string" ? item : ""}`} color={index === selected ? "yellow" : AUXILIARY_TEXT_COLOR}>{padLine(`${index === selected ? ">" : " "} ${item}`, width)}</Text>) : <Text color={AUXILIARY_TEXT_COLOR}>{padLine(stage === "tags" ? "No tags." : "No optional attributes.", width)}</Text>}<Text color="cyan">{padLine(editAction === "none" ? "" : `${editAction === "add" ? "Add" : "Rename"}: ${editBuffer}_`, width)}</Text></> : null}
+    {stage === "meaning" ? <><Text color="cyan">{padLine(`Meaning ${meaningIndex + 1}/${meaningCount}: ${meanings[meaningIndex]?.label ?? ""}_`, width)}</Text>{meaningPalette !== null ? LANGUAGE_PRESETS.map((item, index) => <Text key={item.code} color={index === meaningPalette ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${index === meaningPalette ? ">" : " "} ${item.label} (${item.code})`, width)}</Text>) : null}</> : null}
+    {(stage === "tags" || stage === "attributes") ? <>{listItems.length ? listItems.map((item, index) => <Text key={`${index}-${typeof item === "string" ? item : ""}`} color={index === selected ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${index === selected ? ">" : " "} ${item}`, width)}</Text>) : <Text color={AUXILIARY_TEXT_COLOR}>{padLine(stage === "tags" ? "No tags." : "No optional attributes.", width)}</Text>}<Text color="cyan">{padLine(editAction === "none" ? "" : `${editAction === "add" ? "Add" : "Rename"}: ${editBuffer}_`, width)}</Text></> : null}
     {stage === "confirm" ? <>{summary.map((line) => <Text key={line} color={AUXILIARY_TEXT_COLOR}>{padLine(line, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color="green">{padLine(`Press Enter to ${existingWorkbook ? "save changes" : "create the workbook"}.`, width)}</Text></> : null}
     {stage === "destructive-confirm" ? <>{destructiveFields.map((field) => <Text key={field.label} color="red">{padLine(`${field.label}: ${field.valueCount} populated value(s)`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color="cyan">{padLine(`Confirmation: ${confirmBuffer}_`, width)}</Text></> : null}
     <Text>{padLine("", width)}</Text><Text color="red">{padLine(error, width)}</Text><Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footer, width)}</Text></Box>;
@@ -1338,7 +1333,7 @@ function WorkbookEditScreen({
         <>
           <Text>{padLine("", width)}</Text>
           {LANGUAGE_PRESETS.map((preset, index) => (
-            <Text key={preset.code} color={index === paletteIndex ? "yellow" : AUXILIARY_TEXT_COLOR}>
+            <Text key={preset.code} color={index === paletteIndex ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>
               {padLine(`${index === paletteIndex ? ">" : " "} ${preset.label} (${preset.code})`, width)}
             </Text>
           ))}
@@ -1437,7 +1432,7 @@ function SettingsHomeScreen({ workbook, onAttributes, onPos, onAppearance, onCan
   const sections = ["Attributes", "Part of Speech", "Appearance"];
   useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => stdout.off("resize", f); }, [stdout]);
   useInput((input, key) => { if (key.ctrl && input === "c") onQuit(); else if (key.escape) onCancel(); else if (key.upArrow) setSelected((v) => v <= 0 ? sections.length - 1 : v - 1); else if (key.downArrow) setSelected((v) => (v + 1) % sections.length); else if (key.return) [onAttributes, onPos, onAppearance][selected](); });
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Settings — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Choose a settings section.", width)}</Text><Text>{padLine("", width)}</Text>{sections.map((section, index) => <Text key={section} color={index === selected ? "yellow" : AUXILIARY_TEXT_COLOR}>{padLine(`${index === selected ? ">" : " "} ${section}`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Up/Down select | Enter open | Esc back", width)}</Text></Box>;
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Settings — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Choose a settings section.", width)}</Text><Text>{padLine("", width)}</Text>{sections.map((section, index) => <Text key={section} color={index === selected ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${index === selected ? ">" : " "} ${section}`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Up/Down select | Enter open | Esc back", width)}</Text></Box>;
 }
 
 function PosSettingsScreen({ workbook, onToggle, onManage, onCancel, onQuit }: { workbook: WorkbookRow; onToggle: (enabled: boolean) => void; onManage: () => void; onCancel: () => void; onQuit: () => void }): JSX.Element {
@@ -1495,7 +1490,7 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
     if (key.backspace || key.delete) { setBuffer((v) => v.slice(0, -1)); return; }
     if (!key.ctrl && !key.meta && input) setBuffer((v) => v + input);
   });
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Attributes — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text><Text>{padLine("", width)}</Text>{attributes.map((a, i) => <Text key={a.key} color={i === selected ? "yellow" : AUXILIARY_TEXT_COLOR}>{padLine(`${i === selected ? ">" : " "} ${a.label} [${a.visible ? "shown" : "hidden"}]${a.required ? " (required)" : ""}`, width)}</Text>)}<Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Preset attributes: ${presetEnabled ? "enabled" : "disabled"} (Ctrl+P toggles)`, width)}</Text><Text>{padLine("", width)}</Text><Text color="cyan">{padLine(buffer ? `> ${buffer}_` : "", width)}</Text></Box>;
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Attributes — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text><Text>{padLine("", width)}</Text>{attributes.map((a, i) => <Text key={a.key} color={i === selected ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${i === selected ? ">" : " "} ${a.label} [${a.visible ? "shown" : "hidden"}]${a.required ? " (required)" : ""}`, width)}</Text>)}<Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Preset attributes: ${presetEnabled ? "enabled" : "disabled"} (Ctrl+P toggles)`, width)}</Text><Text>{padLine("", width)}</Text><Text color="cyan">{padLine(buffer ? `> ${buffer}_` : "", width)}</Text></Box>;
 }
 
 function PosTagScreen({ workbook, onCancel, onQuit }: { workbook: WorkbookRow; onCancel: () => void; onQuit: () => void }): JSX.Element {
@@ -1520,7 +1515,7 @@ function PosTagScreen({ workbook, onCancel, onQuit }: { workbook: WorkbookRow; o
     if (key.ctrl && input.toLowerCase() === "r" && tags[selected]) { setAction("rename"); setBuffer(tags[selected].name); setMessage("Type replacement name and press Enter."); return; }
     if (key.delete && tags[selected]) { backend.deletePosTag(tags[selected].id); setTags(backend.listPosTags(workbook.id)); setSelected(0); }
   });
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Part of speech — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text><Text>{padLine("", width)}</Text>{tags.map((tag, i) => <Text key={tag.id} color={i === selected ? "yellow" : AUXILIARY_TEXT_COLOR}>{padLine(`${i === selected ? ">" : " "} ${tag.name}${tag.predefined ? " (preset)" : ""}`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color="cyan">{padLine(buffer ? `> ${buffer}_` : "", width)}</Text></Box>;
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Part of speech — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text><Text>{padLine("", width)}</Text>{tags.map((tag, i) => <Text key={tag.id} color={i === selected ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${i === selected ? ">" : " "} ${tag.name}${tag.predefined ? " (preset)" : ""}`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color="cyan">{padLine(buffer ? `> ${buffer}_` : "", width)}</Text></Box>;
 }
 
 function EntryViewScreen({ workbook, entry, onCancel, onQuit }: { workbook: WorkbookRow; entry: EntryRow; onCancel: () => void; onQuit: () => void }): JSX.Element {
