@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, render, useApp, useInput, useStdout } from "ink";
-import { CreateWorkbookInput, EntryRow, LANGUAGE_PRESET_DEFINITIONS, MeaningAttribute, MetadataAttribute, PosTag, VocabularyKind, WorkbookRow } from "./db.js";
+import { CreateWorkbookInput, EntryRow, LANGUAGE_PRESET_DEFINITIONS, MeaningAttribute, MetadataAttribute, PosTag, VocabularyKind, WorkbookConfigurationInput, WorkbookDataLossError, WorkbookRow } from "./db.js";
 import { VocabularyBackend } from "./backend.js";
 
 type UiMode =
@@ -44,7 +44,7 @@ type ParameterizedCommand = "edit" | "delete";
 type LanguagePreset = { code: string; label: string };
 
 const PAGE_SIZE = 20;
-const TITLE = "VocabHelper MVP";
+const TITLE = "VocabHelper 0.1.0";
 const FOOTER_HINT = "Navigate pages with <- -> | Esc returns to menu";
 const AUXILIARY_TEXT_COLOR = "gray";
 const COMMAND_SUGGESTION_ROWS = 6;
@@ -62,13 +62,7 @@ const VOCABULARY_TYPES: Array<{ kind: VocabularyKind; code: string | null; label
   { kind: "other_language", code: null, label: "Other Language" },
   { kind: "non_language", code: null, label: "Not a Language" },
 ];
-const JAPANESE_OPTIONAL_ATTRIBUTES: MetadataAttribute[] = [
-  { key: "kana", label: "Kana", languageCode: "JP", required: false, visible: false, displayOrder: 0 },
-  { key: "example_1", label: "Example 1", languageCode: "JP", required: false, visible: false, displayOrder: 1 },
-  { key: "example_2", label: "Example 2", languageCode: "JP", required: false, visible: false, displayOrder: 2 },
-];
-const JAPANESE_POS_TAGS = ["名詞", "固有名詞", "イ形容詞", "ナ形容詞", "動詞 (自動詞)", "動詞 (他動詞)", "副詞", "連体詞", "接続詞", "連語", "その他"];
-const WORKBOOK_MENU_HINT = "↑↓ select | Enter open | E edit | Del delete | + create | Esc quit";
+const WORKBOOK_MENU_HINT = "↑↓ select | Enter open | Ctrl+E edit | Del delete | + create | Esc quit";
 const WORKBOOK_CREATE_HINT = "Type a name and press Enter. Esc returns to the menu.";
 const WORKBOOK_DELETE_HINT = "Type yes to confirm. Enter deletes. Esc cancels.";
 const COMMANDS: CommandSpec[] = [
@@ -923,7 +917,7 @@ function WorkbookMenuScreen({
       return;
     }
 
-    if (input.toLowerCase() === "e") {
+    if (key.ctrl && input.toLowerCase() === "e") {
       const selected = selectedIndex < workbooks.length ? workbooks[selectedIndex] : null;
       if (selected) onEditWorkbook(selected);
       return;
@@ -969,28 +963,32 @@ function WorkbookMenuScreen({
   );
 }
 
-type CreateStage = "name" | "type" | "label" | "preset" | "pos" | "tags" | "meaning-count" | "meaning" | "attributes" | "confirm";
+type CreateStage = "name" | "type" | "label" | "preset" | "pos" | "tags" | "meaning-count" | "meaning" | "attributes" | "confirm" | "destructive-confirm";
 
-function NewWorkbookWizard({ onCreate, onCancel, onQuit }: { onCreate: (input: CreateWorkbookInput) => void; onCancel: () => void; onQuit: () => void }): JSX.Element {
+function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existingWorkbook?: WorkbookRow; onSave: (input: WorkbookConfigurationInput, confirmDataLoss: boolean) => void; onCancel: () => void; onQuit: () => void }): JSX.Element {
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
   const [stage, setStage] = useState<CreateStage>("name");
   const [history, setHistory] = useState<CreateStage[]>([]);
-  const [name, setName] = useState("");
-  const [typeIndex, setTypeIndex] = useState(0);
-  const [vocabularyLabel, setVocabularyLabel] = useState("");
-  const [presetEnabled, setPresetEnabled] = useState(true);
-  const [posEnabled, setPosEnabled] = useState(true);
-  const [tags, setTags] = useState<Array<{ name: string; predefined: boolean }>>([]);
-  const [meaningCount, setMeaningCount] = useState(1);
-  const [meanings, setMeanings] = useState<MeaningAttribute[]>([{ position: 1, label: "Meaning 1", languageCode: null }]);
+  const initialTypeIndex = existingWorkbook ? Math.max(0, VOCABULARY_TYPES.findIndex((item) => item.kind === existingWorkbook.vocabularyKind && item.code === existingWorkbook.vocabularyLanguageCode)) : 0;
+  const [name, setName] = useState(existingWorkbook?.name ?? "");
+  const [typeIndex, setTypeIndex] = useState(initialTypeIndex);
+  const [vocabularyLabel, setVocabularyLabel] = useState(existingWorkbook?.vocabularyLabel ?? "");
+  const [presetEnabled, setPresetEnabled] = useState(existingWorkbook?.presetEnabled ?? true);
+  const [posEnabled, setPosEnabled] = useState(existingWorkbook?.posEnabled ?? true);
+  const [tags, setTags] = useState<Array<{ id?: number; name: string; predefined: boolean }>>(() => existingWorkbook ? backend.listStoredPosTags(existingWorkbook.id) : []);
+  const [meaningCount, setMeaningCount] = useState(existingWorkbook?.meaningAttributes.length ?? 1);
+  const [meanings, setMeanings] = useState<MeaningAttribute[]>(existingWorkbook?.meaningAttributes ?? [{ position: 1, label: "Meaning 1", languageCode: null }]);
   const [meaningIndex, setMeaningIndex] = useState(0);
   const [meaningPalette, setMeaningPalette] = useState<number | null>(null);
-  const [attributes, setAttributes] = useState<MetadataAttribute[]>([]);
+  const [attributes, setAttributes] = useState<MetadataAttribute[]>(() => existingWorkbook?.metadataAttributes.filter((item) => item.key !== "vocab" && !item.key.startsWith("meaning_")) ?? []);
   const [selected, setSelected] = useState(0);
   const [editAction, setEditAction] = useState<"none" | "add" | "rename">("none");
   const [editBuffer, setEditBuffer] = useState("");
   const [error, setError] = useState("");
+  const [confirmBuffer, setConfirmBuffer] = useState("");
+  const [pendingConfiguration, setPendingConfiguration] = useState<WorkbookConfigurationInput | null>(null);
+  const [destructiveFields, setDestructiveFields] = useState<Array<{ label: string; valueCount: number }>>([]);
   const selectedType = VOCABULARY_TYPES[typeIndex];
   const presetDefinition = selectedType.code ? LANGUAGE_PRESET_DEFINITIONS[selectedType.code] : undefined;
   const presetOptionalAttributes = (presetDefinition?.optionalAttributes ?? []).map((item) => ({ ...item, required: false, visible: false, displayOrder: 0 }));
@@ -1016,11 +1014,27 @@ function NewWorkbookWizard({ onCreate, onCancel, onQuit }: { onCreate: (input: C
     }
     setEditAction("none"); setEditBuffer(""); setError("");
   }
+  function configuration(): WorkbookConfigurationInput {
+    return { name: name.trim(), vocabularyKind: selectedType.kind, vocabularyLabel: vocabularyLabel.trim(), vocabularyLanguageCode: selectedType.code,
+      presetEnabled: selectedType.kind === "preset_language" && presetEnabled, posEnabled, meaningAttributes: meanings.slice(0, meaningCount),
+      optionalAttributes: attributes, posTags: tags };
+  }
+  function submit(config: WorkbookConfigurationInput, confirmed: boolean): void {
+    try { onSave(config, confirmed); }
+    catch (caught) {
+      if (caught instanceof WorkbookDataLossError) {
+        setPendingConfiguration(config); setDestructiveFields(caught.impact.populatedFields); setConfirmBuffer(""); setStage("destructive-confirm"); setError("");
+      } else setError(caught instanceof Error ? caught.message : "Could not save workbook.");
+    }
+  }
   function advance(): void {
     if (stage === "name") { if (!name.trim()) { setError("Workbook name is required."); return; } go("type"); return; }
     if (stage === "type") {
-      const defaultLabel = selectedType.kind === "preset_language" ? selectedType.label : "Vocabulary";
-      setVocabularyLabel(defaultLabel);
+      const typeChanged = !existingWorkbook || selectedType.kind !== existingWorkbook.vocabularyKind || selectedType.code !== existingWorkbook.vocabularyLanguageCode;
+      if (typeChanged) {
+        setVocabularyLabel(selectedType.kind === "preset_language" ? selectedType.label : "Vocabulary");
+        if (!existingWorkbook) { setAttributes([]); setTags([]); setPresetEnabled(selectedType.kind === "preset_language"); }
+      }
       if (selectedType.kind === "other_language") setPosEnabled(true);
       if (selectedType.kind === "non_language") setPosEnabled(false);
       go("label"); return;
@@ -1030,12 +1044,14 @@ function NewWorkbookWizard({ onCreate, onCancel, onQuit }: { onCreate: (input: C
       go(selectedType.kind === "preset_language" ? "preset" : "meaning-count"); return;
     }
     if (stage === "preset") {
-      setAttributes(presetEnabled && selectedType.kind === "preset_language" ? presetOptionalAttributes.map((item) => ({ ...item })) : []);
+      if (presetEnabled && selectedType.kind === "preset_language") setAttributes((current) => [...current, ...presetOptionalAttributes.filter((preset) => !current.some((field) => field.key === preset.key)).map((field) => ({ ...field, provenance: "preset" as const }))]);
+      else if (!existingWorkbook) setAttributes([]);
       go("pos"); return;
     }
     if (stage === "pos") {
-      const defaults = posEnabled && selectedType.kind === "preset_language" ? (presetDefinition?.posTags ?? []).map((name) => ({ name, predefined: true })) : [];
-      setTags(defaults); go(posEnabled ? "tags" : "meaning-count"); return;
+      if (posEnabled && selectedType.kind === "preset_language") setTags((current) => [...current, ...(presetDefinition?.posTags ?? []).filter((name) => !current.some((tag) => tag.name.toLocaleLowerCase() === name.toLocaleLowerCase())).map((tagName) => ({ name: tagName, predefined: true }))]);
+      else if (!existingWorkbook && !posEnabled) setTags([]);
+      go(posEnabled ? "tags" : "meaning-count"); return;
     }
     if (stage === "tags") { go("meaning-count"); return; }
     if (stage === "meaning-count") {
@@ -1050,13 +1066,21 @@ function NewWorkbookWizard({ onCreate, onCancel, onQuit }: { onCreate: (input: C
     }
     if (stage === "attributes") { go("confirm"); return; }
     if (stage === "confirm") {
-      onCreate({ name: name.trim(), vocabularyKind: selectedType.kind, vocabularyLabel: vocabularyLabel.trim(), vocabularyLanguageCode: selectedType.code, presetEnabled: selectedType.kind === "preset_language" && presetEnabled, posEnabled, meaningAttributes: meanings, optionalAttributes: attributes, posTags: posEnabled ? tags : [] });
+      submit(configuration(), false);
     }
   }
 
   useInput((input, key) => {
     if (key.ctrl && input === "c") return onQuit();
     if (key.escape) return onCancel();
+    if (stage === "destructive-confirm") {
+      if (key.backspace || key.delete) setConfirmBuffer((value) => value.slice(0, -1));
+      else if (key.return) {
+        if (confirmBuffer.trim().toLowerCase() !== "yes") setError("Type yes to confirm removal of populated fields.");
+        else if (pendingConfiguration) submit(pendingConfiguration, true);
+      } else if (!key.ctrl && !key.meta && input) { setConfirmBuffer((value) => value + input); setError(""); }
+      return;
+    }
     if (key.leftArrow) { if (editAction !== "none") { setEditAction("none"); setEditBuffer(""); } else if (stage === "meaning" && meaningIndex > 0) { setMeaningIndex((index) => index - 1); setMeaningPalette(null); } else back(); return; }
     if (key.rightArrow) { if (editAction === "none") advance(); return; }
     if (editAction !== "none") {
@@ -1076,9 +1100,9 @@ function NewWorkbookWizard({ onCreate, onCancel, onQuit }: { onCreate: (input: C
       const items = stage === "tags" ? tags : attributes;
       if (key.upArrow) { setSelected((value) => Math.max(0, value - 1)); return; }
       if (key.downArrow) { setSelected((value) => Math.min(Math.max(0, items.length - 1), value + 1)); return; }
-      if (input.toLowerCase() === "a") { setEditAction("add"); setEditBuffer(""); return; }
-      if (input.toLowerCase() === "r" && items.length) { setEditAction("rename"); setEditBuffer(stage === "tags" ? tags[selected].name : attributes[selected].label); return; }
-      if ((input.toLowerCase() === "d" || key.delete) && items.length) { stage === "tags" ? setTags((values) => values.filter((_, i) => i !== selected)) : setAttributes((values) => values.filter((_, i) => i !== selected)); setSelected((value) => Math.max(0, value - 1)); return; }
+      if (key.ctrl && input.toLowerCase() === "a") { setEditAction("add"); setEditBuffer(""); return; }
+      if (key.ctrl && input.toLowerCase() === "r" && items.length) { setEditAction("rename"); setEditBuffer(stage === "tags" ? tags[selected].name : attributes[selected].label); return; }
+      if (key.delete && items.length) { stage === "tags" ? setTags((values) => values.filter((_, i) => i !== selected)) : setAttributes((values) => values.filter((_, i) => i !== selected)); setSelected((value) => Math.max(0, value - 1)); return; }
     }
     if (key.return) { advance(); return; }
     if (key.backspace || key.delete) {
@@ -1096,20 +1120,21 @@ function NewWorkbookWizard({ onCreate, onCancel, onQuit }: { onCreate: (input: C
   });
 
   const question = ["name"].includes(stage) ? 1 : ["type", "label", "preset", "pos", "tags"].includes(stage) ? 2 : ["meaning-count", "meaning"].includes(stage) ? 3 : stage === "attributes" ? 4 : 4;
-  const title = stage === "confirm" ? "Confirm creation" : `Question ${question}/4`;
+  const title = stage === "destructive-confirm" ? "Confirm data removal" : stage === "confirm" ? `Confirm ${existingWorkbook ? "changes" : "creation"}` : `Question ${question}/4`;
   const listItems = stage === "tags" ? tags.map((item) => `${item.name}${item.predefined ? " (preset)" : ""}`) : attributes.map((item) => `${item.label}${presetKeys.has(item.key) ? " (preset)" : ""}`);
   const summary = [`Name: ${name}`, `Vocabulary: ${vocabularyLabel} — ${selectedType.label}`, `Preset attributes: ${presetEnabled && selectedType.kind === "preset_language" ? "enabled" : "disabled"}`, `Part of speech: ${posEnabled ? `enabled (${tags.length} tags)` : "disabled"}`, `Meanings: ${meanings.map((item) => item.label).join(", ")}`, `Optional attributes: ${attributes.map((item) => item.label).join(", ") || "None"}`];
-  let description = "Enter a name for the new workbook.";
+  let description = `Enter a name for the ${existingWorkbook ? "workbook" : "new workbook"}.`;
   let footer = "Enter next | Esc cancel";
   if (stage === "type") { description = "Choose a vocabulary type with Up/Down. This selection is required."; footer = "↑↓ choose type | ←/→ to navigate questions | Esc cancel"; }
   if (stage === "label") { description = "Choose the label users will see for vocabulary entries. You can edit the default."; footer = "←/→ to navigate questions | Enter next | Esc cancel"; }
   if (stage === "preset") { description = "Choose whether to include the language-specific optional fields. You can change this later in Settings."; footer = "↑↓/Space toggle | ←/→ to navigate questions | Esc cancel"; }
   if (stage === "pos") { description = "Choose whether this workbook uses Part of Speech tags. You can change this later in Settings."; footer = "↑↓/Space toggle | ←/→ to navigate questions | Esc cancel"; }
-  if (stage === "tags") { description = "Review and customize the starting Part of Speech tags for this workbook."; footer = "↑↓ select | A add | R rename | D delete | ←/→ to navigate questions"; }
+  if (stage === "tags") { description = "Review and customize the Part of Speech tags for this workbook."; footer = "↑↓ select | Ctrl+A add | Ctrl+R rename | Del delete | ←/→ navigate"; }
   if (stage === "meaning-count") { description = "Choose how many meaning fields each vocabulary entry will have."; footer = "↑↓ choose number | ←/→ to navigate questions | Esc cancel"; }
   if (stage === "meaning") { description = "Name each meaning field. Use a language preset or type your own label."; footer = "↑↓ choose preset | ←/→ to navigate questions | Esc cancel"; }
-  if (stage === "attributes") { description = "Add any other fields you want to store, such as examples or notes. Preset fields are marked."; footer = "↑↓ select | A add | R rename | D delete | ←/→ to navigate questions"; }
-  if (stage === "confirm") { description = "Review the workbook configuration before creating it."; footer = "← back | Enter create | Esc cancel"; }
+  if (stage === "attributes") { description = "Add any other fields you want to store, such as examples or notes. Preset fields are marked."; footer = "↑↓ select | Ctrl+A add | Ctrl+R rename | Del delete | ←/→ navigate"; }
+  if (stage === "confirm") { description = `Review the workbook configuration before ${existingWorkbook ? "saving" : "creating"} it.`; footer = `← back | Enter ${existingWorkbook ? "save" : "create"} | Esc cancel`; }
+  if (stage === "destructive-confirm") { description = "This change will permanently remove stored field values."; footer = "Type yes and press Enter | Esc cancel"; }
   return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(title, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(description, width)}</Text><Text>{padLine("", width)}</Text>
     {stage === "name" ? <Text color="cyan">{padLine(`Workbook name: ${name}_`, width)}</Text> : null}
     {stage === "type" ? VOCABULARY_TYPES.map((item, index) => <Text key={item.label} color={index === typeIndex ? "yellow" : AUXILIARY_TEXT_COLOR}>{padLine(`${index === typeIndex ? ">" : " "} ${item.label}`, width)}</Text>) : null}
@@ -1119,7 +1144,8 @@ function NewWorkbookWizard({ onCreate, onCancel, onQuit }: { onCreate: (input: C
     {stage === "meaning-count" ? <Text color="cyan">{padLine(`Meaning attributes: ${meaningCount}`, width)}</Text> : null}
     {stage === "meaning" ? <><Text color="cyan">{padLine(`Meaning ${meaningIndex + 1}/${meaningCount}: ${meanings[meaningIndex]?.label ?? ""}_`, width)}</Text>{meaningPalette !== null ? LANGUAGE_PRESETS.map((item, index) => <Text key={item.code} color={index === meaningPalette ? "yellow" : AUXILIARY_TEXT_COLOR}>{padLine(`${index === meaningPalette ? ">" : " "} ${item.label} (${item.code})`, width)}</Text>) : null}</> : null}
     {(stage === "tags" || stage === "attributes") ? <>{listItems.length ? listItems.map((item, index) => <Text key={`${index}-${typeof item === "string" ? item : ""}`} color={index === selected ? "yellow" : AUXILIARY_TEXT_COLOR}>{padLine(`${index === selected ? ">" : " "} ${item}`, width)}</Text>) : <Text color={AUXILIARY_TEXT_COLOR}>{padLine(stage === "tags" ? "No tags." : "No optional attributes.", width)}</Text>}<Text color="cyan">{padLine(editAction === "none" ? "" : `${editAction === "add" ? "Add" : "Rename"}: ${editBuffer}_`, width)}</Text></> : null}
-    {stage === "confirm" ? <>{summary.map((line) => <Text key={line} color={AUXILIARY_TEXT_COLOR}>{padLine(line, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color="green">{padLine("Press Enter to create the workbook.", width)}</Text></> : null}
+    {stage === "confirm" ? <>{summary.map((line) => <Text key={line} color={AUXILIARY_TEXT_COLOR}>{padLine(line, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color="green">{padLine(`Press Enter to ${existingWorkbook ? "save changes" : "create the workbook"}.`, width)}</Text></> : null}
+    {stage === "destructive-confirm" ? <>{destructiveFields.map((field) => <Text key={field.label} color="red">{padLine(`${field.label}: ${field.valueCount} populated value(s)`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color="cyan">{padLine(`Confirmation: ${confirmBuffer}_`, width)}</Text></> : null}
     <Text>{padLine("", width)}</Text><Text color="red">{padLine(error, width)}</Text><Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footer, width)}</Text></Box>;
 }
 
@@ -1433,7 +1459,7 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
   const [attributes, setAttributes] = useState<MetadataAttribute[]>(workbook.metadataAttributes);
   const [buffer, setBuffer] = useState("");
-  const [message, setMessage] = useState("↑↓ select field | Space visibility | A add | R rename | L apply language preset | S save | Esc back");
+  const [message, setMessage] = useState("↑↓ select field | Space visibility | Ctrl+A add | Ctrl+R rename | Ctrl+L apply preset | Ctrl+S save | Esc back");
   const [selected, setSelected] = useState(0);
   const [editAction, setEditAction] = useState<"none" | "add" | "rename">("none");
   const [presetEnabled, setPresetEnabled] = useState(workbook.presetEnabled);
@@ -1448,14 +1474,14 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
       if (key.return && buffer.trim()) {
         if (editAction === "add") { const keyName = buffer.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_"); setAttributes((xs) => [...xs, { key: keyName, label: buffer.trim(), languageCode: null, required: false, visible: false, displayOrder: xs.length }]); }
         else setAttributes((xs) => xs.map((a, i) => i === selected ? { ...a, label: buffer.trim() } : a));
-        setBuffer(""); setEditAction("none"); setMessage("↑↓ select field | Space visibility | A add | R rename | L apply language preset | S save | Esc back"); return;
+        setBuffer(""); setEditAction("none"); setMessage("↑↓ select field | Space visibility | Ctrl+A add | Ctrl+R rename | Ctrl+L apply preset | Ctrl+S save | Esc back"); return;
       }
       if (!key.ctrl && !key.meta && input) setBuffer((v) => v + input);
       return;
     }
     if (input === " ") { setAttributes((xs) => xs.map((a, i) => i === selected && a.key !== "vocab" && a.key !== "meaning_1" ? { ...a, visible: !a.visible } : a)); return; }
-    if (input.toLowerCase() === "s") { try { onSave(attributes); } catch (e) { setMessage(e instanceof Error ? e.message : "Could not save settings."); } return; }
-    if (input.toLowerCase() === "l") {
+    if (key.ctrl && input.toLowerCase() === "s") { try { onSave(attributes); } catch (e) { setMessage(e instanceof Error ? e.message : "Could not save settings."); } return; }
+    if (key.ctrl && input.toLowerCase() === "l") {
       try {
         const updated = backend.applyLanguagePreset(workbook.id);
         setAttributes(updated.metadataAttributes);
@@ -1463,19 +1489,37 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
       } catch (e) { setMessage(e instanceof Error ? e.message : "Could not apply language preset."); }
       return;
     }
-    if (input.toLowerCase() === "p") { const next = !presetEnabled; backend.setPresetEnabled(workbook.id, next); setPresetEnabled(next); setMessage(`Preset attributes ${next ? "enabled" : "disabled"}.`); return; }
-    if (input.toLowerCase() === "r") { setBuffer(attributes[selected]?.label ?? ""); setEditAction("rename"); setMessage("Type a new label and press Enter."); return; }
-    if (input.toLowerCase() === "a") { setBuffer(""); setEditAction("add"); setMessage("Type a new attribute label and press Enter."); return; }
+    if (key.ctrl && input.toLowerCase() === "p") { const next = !presetEnabled; backend.setPresetEnabled(workbook.id, next); setPresetEnabled(next); setMessage(`Preset attributes ${next ? "enabled" : "disabled"}.`); return; }
+    if (key.ctrl && input.toLowerCase() === "r") { setBuffer(attributes[selected]?.label ?? ""); setEditAction("rename"); setMessage("Type a new label and press Enter."); return; }
+    if (key.ctrl && input.toLowerCase() === "a") { setBuffer(""); setEditAction("add"); setMessage("Type a new attribute label and press Enter."); return; }
     if (key.backspace || key.delete) { setBuffer((v) => v.slice(0, -1)); return; }
     if (!key.ctrl && !key.meta && input) setBuffer((v) => v + input);
   });
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Attributes — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text><Text>{padLine("", width)}</Text>{attributes.map((a, i) => <Text key={a.key} color={i === selected ? "yellow" : AUXILIARY_TEXT_COLOR}>{padLine(`${i === selected ? ">" : " "} ${a.label} [${a.visible ? "shown" : "hidden"}]${a.required ? " (required)" : ""}`, width)}</Text>)}<Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Preset attributes: ${presetEnabled ? "enabled" : "disabled"} (P toggles)`, width)}</Text><Text>{padLine("", width)}</Text><Text color="cyan">{padLine(buffer ? `> ${buffer}_` : "", width)}</Text></Box>;
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Attributes — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text><Text>{padLine("", width)}</Text>{attributes.map((a, i) => <Text key={a.key} color={i === selected ? "yellow" : AUXILIARY_TEXT_COLOR}>{padLine(`${i === selected ? ">" : " "} ${a.label} [${a.visible ? "shown" : "hidden"}]${a.required ? " (required)" : ""}`, width)}</Text>)}<Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Preset attributes: ${presetEnabled ? "enabled" : "disabled"} (Ctrl+P toggles)`, width)}</Text><Text>{padLine("", width)}</Text><Text color="cyan">{padLine(buffer ? `> ${buffer}_` : "", width)}</Text></Box>;
 }
 
 function PosTagScreen({ workbook, onCancel, onQuit }: { workbook: WorkbookRow; onCancel: () => void; onQuit: () => void }): JSX.Element {
-  const { stdout } = useStdout(); const [width, setWidth] = useState(() => stdout?.columns ?? 80); const [tags, setTags] = useState<PosTag[]>(() => backend.listPosTags(workbook.id)); const [selected, setSelected] = useState(0); const [buffer, setBuffer] = useState(""); const [message, setMessage] = useState(tags.length ? "↑↓ select | A add | R rename | D delete | Esc back" : "No POS tags. Press A to add one, or Esc to return.");
+  const { stdout } = useStdout(); const [width, setWidth] = useState(() => stdout?.columns ?? 80); const [tags, setTags] = useState<PosTag[]>(() => backend.listPosTags(workbook.id)); const [selected, setSelected] = useState(0); const [buffer, setBuffer] = useState(""); const [action, setAction] = useState<"none" | "add" | "rename">("none"); const [message, setMessage] = useState(tags.length ? "↑↓ select | Ctrl+A add | Ctrl+R rename | Del delete | Esc back" : "No POS tags. Press Ctrl+A to add one, or Esc to return.");
   useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => stdout.off("resize", f); }, [stdout]);
-  useInput((input, key) => { if (key.ctrl && input === "c") return onQuit(); if (key.escape) return onCancel(); if (key.upArrow) return setSelected((v) => Math.max(0, v - 1)); if (key.downArrow) return setSelected((v) => Math.min(tags.length - 1, v + 1)); if (input.toLowerCase() === "a" || input.toLowerCase() === "r") { setBuffer(""); setMessage(input.toLowerCase() === "a" ? "Type tag name and press Enter." : "Type replacement name and press Enter."); return; } if (input.toLowerCase() === "d" && tags[selected]) { backend.deletePosTag(tags[selected].id); setTags(backend.listPosTags(workbook.id)); setSelected(0); return; } if (key.backspace || key.delete) { setBuffer((v) => v.slice(0, -1)); return; } if (key.return && buffer.trim()) { try { if (message.startsWith("Type tag")) backend.addPosTag(workbook.id, buffer); else if (tags[selected]) backend.renamePosTag(tags[selected].id, buffer); setTags(backend.listPosTags(workbook.id)); setBuffer(""); setMessage("↑↓ select | A add | R rename | D delete | Esc back"); } catch (e) { setMessage(e instanceof Error ? e.message : "Could not update tag."); } return; } if (!key.ctrl && !key.meta && input) setBuffer((v) => v + input); });
+  useInput((input, key) => {
+    if (key.ctrl && input === "c") return onQuit();
+    if (key.escape) { if (action !== "none") { setAction("none"); setBuffer(""); setMessage("↑↓ select | Ctrl+A add | Ctrl+R rename | Del delete | Esc back"); } else onCancel(); return; }
+    if (action !== "none") {
+      if (key.backspace || key.delete) setBuffer((value) => value.slice(0, -1));
+      else if (key.return && buffer.trim()) {
+        try {
+          if (action === "add") backend.addPosTag(workbook.id, buffer); else if (tags[selected]) backend.renamePosTag(tags[selected].id, buffer);
+          setTags(backend.listPosTags(workbook.id)); setBuffer(""); setAction("none"); setMessage("↑↓ select | Ctrl+A add | Ctrl+R rename | Del delete | Esc back");
+        } catch (caught) { setMessage(caught instanceof Error ? caught.message : "Could not update tag."); }
+      } else if (!key.ctrl && !key.meta && input) setBuffer((value) => value + input);
+      return;
+    }
+    if (key.upArrow) return setSelected((value) => Math.max(0, value - 1));
+    if (key.downArrow) return setSelected((value) => Math.min(Math.max(0, tags.length - 1), value + 1));
+    if (key.ctrl && input.toLowerCase() === "a") { setAction("add"); setBuffer(""); setMessage("Type tag name and press Enter."); return; }
+    if (key.ctrl && input.toLowerCase() === "r" && tags[selected]) { setAction("rename"); setBuffer(tags[selected].name); setMessage("Type replacement name and press Enter."); return; }
+    if (key.delete && tags[selected]) { backend.deletePosTag(tags[selected].id); setTags(backend.listPosTags(workbook.id)); setSelected(0); }
+  });
   return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Part of speech — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text><Text>{padLine("", width)}</Text>{tags.map((tag, i) => <Text key={tag.id} color={i === selected ? "yellow" : AUXILIARY_TEXT_COLOR}>{padLine(`${i === selected ? ">" : " "} ${tag.name}${tag.predefined ? " (preset)" : ""}`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color="cyan">{padLine(buffer ? `> ${buffer}_` : "", width)}</Text></Box>;
 }
 
@@ -1557,7 +1601,6 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
       const updated = backend.recordTestResult(current.id, correct, phase === "initial");
       if (phase === "initial" && correct) setScore((v) => v + 1);
       if (!correct) {
-        setNextRetryRound((xs) => [...xs, updated]);
         setDetailEntry(updated);
         setDetailSourcePhase(phase);
         setPhase("detail");
@@ -1639,14 +1682,8 @@ function App(): JSX.Element {
     setScreen({ kind: "menu" });
   }
 
-  function handleUpdateWorkbook(
-    workbookId: number,
-    name: string,
-    vocabularyLabel: string,
-    vocabularyLanguageCode: string | null,
-    meaningAttributes: MeaningAttribute[],
-  ): void {
-    const updated = backend.updateWorkbookSettings(workbookId, name, vocabularyLabel, vocabularyLanguageCode, meaningAttributes);
+  function handleUpdateWorkbook(workbookId: number, input: WorkbookConfigurationInput, confirmDataLoss: boolean): void {
+    const updated = backend.updateConfiguredWorkbook(workbookId, input, confirmDataLoss);
     const nextWorkbooks = backend.listWorkbooks();
     setWorkbooks(nextWorkbooks);
     const nextIndex = nextWorkbooks.findIndex((item) => item.id === updated.id);
@@ -1691,14 +1728,14 @@ function App(): JSX.Element {
   if (screen.kind === "view") return <EntryViewScreen workbook={screen.workbook} entry={backend.getEntry(screen.entry.id) ?? screen.entry} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
 
   if (screen.kind === "create-workbook") {
-    return <NewWorkbookWizard onCreate={handleCreateWorkbook} onCancel={backToMenu} onQuit={quit} />;
+    return <WorkbookWizard onSave={(input) => handleCreateWorkbook(input)} onCancel={backToMenu} onQuit={quit} />;
   }
 
   if (screen.kind === "edit-workbook") {
     return (
-      <WorkbookEditScreen
+      <WorkbookWizard
         existingWorkbook={screen.workbook}
-        onCreate={(name, label, languageCode, attributes) => handleUpdateWorkbook(screen.workbook.id, name, label, languageCode, attributes)}
+        onSave={(input, confirmDataLoss) => handleUpdateWorkbook(screen.workbook.id, input, confirmDataLoss)}
         onCancel={backToMenu}
         onQuit={quit}
       />

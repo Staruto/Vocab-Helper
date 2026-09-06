@@ -1,5 +1,6 @@
 {
   "name": "vocabhelper-tui",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -8,7 +9,10 @@
   "scripts": {
     "dev": "tsx src/index.tsx",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test": "tsx --test src/*.test.ts",
+    "db:convert": "tsx src/convert-db.ts",
+    "db:convert:apply": "tsx src/convert-db.ts --apply"
   },
   "dependencies": {
     "ink": "^5.0.0",

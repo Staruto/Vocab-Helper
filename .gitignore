@@ -4,6 +4,9 @@ __pycache__/
 .vscode/
 .pytest_cache/
 vocab.db
+vocab.db.backup-*
+vocab.db.v1.tmp
+*.conversion-report.json
 build/
 dist/
 *.spec

@@ -1,23 +1,12 @@
 import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-
-export type WorkbookRow = {
-  id: number;
-  name: string;
-  wordCount: number;
-  createdAt: string;
-  vocabularyLabel: string;
-  vocabularyLanguageCode: string | null;
-  presetEnabled: boolean;
-  vocabularyKind: VocabularyKind;
-  posEnabled: boolean;
-  meaningAttributes: MeaningAttribute[];
-  metadataAttributes: MetadataAttribute[];
-};
+import { runSchemaMigrations } from "./schema.js";
 
 export type VocabularyKind = "preset_language" | "other_language" | "non_language";
-
-export type CreateWorkbookInput = {
+export type MeaningAttribute = { position: number; label: string; languageCode: string | null };
+export type MetadataAttribute = { key: string; label: string; languageCode: string | null; required: boolean; visible: boolean; displayOrder: number; provenance?: "preset" | "custom" };
+export type PosTag = { id: number; name: string; predefined: boolean };
+export type WorkbookConfigurationInput = {
   name: string;
   vocabularyKind: VocabularyKind;
   vocabularyLabel: string;
@@ -26,155 +15,73 @@ export type CreateWorkbookInput = {
   posEnabled: boolean;
   meaningAttributes: MeaningAttribute[];
   optionalAttributes: MetadataAttribute[];
-  posTags: Array<{ name: string; predefined: boolean }>;
+  posTags: Array<{ id?: number; name: string; predefined: boolean }>;
 };
-
-export type MeaningAttribute = {
-  position: number;
-  label: string;
-  languageCode: string | null;
+export type CreateWorkbookInput = WorkbookConfigurationInput;
+export type WorkbookUpdateImpact = { populatedFields: Array<{ key: string; label: string; valueCount: number }> };
+export type WorkbookRow = {
+  id: number; name: string; wordCount: number; createdAt: string;
+  vocabularyLabel: string; vocabularyLanguageCode: string | null;
+  presetEnabled: boolean; vocabularyKind: VocabularyKind; posEnabled: boolean;
+  meaningAttributes: MeaningAttribute[]; metadataAttributes: MetadataAttribute[];
 };
-
-export type MetadataAttribute = {
-  key: string;
-  label: string;
-  languageCode: string | null;
-  required: boolean;
-  visible: boolean;
-  displayOrder: number;
+export type EntryRow = {
+  id: number; workbookId: number; vocabulary: string; meaning: string; meanings: string[];
+  kanaText: string | null; attributes: Record<string, string>; posTags: PosTag[];
+  createdAt: string; updatedAt: string; testCount: number; errorCount: number;
+  tier: "gray" | "green" | "yellow" | "red"; lastTested: string | null; nextTestDeadline: string | null;
 };
+export type LanguagePresetDefinition = { optionalAttributes: Array<{ key: string; label: string; languageCode: string | null }>; posTags: string[] };
 
-export type PosTag = { id: number; name: string; predefined: boolean };
-
-export type LanguagePresetDefinition = {
-  optionalAttributes: Array<{ key: string; label: string; languageCode: string | null }>;
-  posTags: string[];
-};
+function exampleFields(languageCode: string): LanguagePresetDefinition["optionalAttributes"] {
+  return [
+    { key: "example_sentence_1", label: "Example Sentence 1", languageCode },
+    { key: "example_sentence_2", label: "Example Sentence 2", languageCode },
+  ];
+}
 
 export const LANGUAGE_PRESET_DEFINITIONS: Record<string, LanguagePresetDefinition> = {
   JP: {
-    optionalAttributes: [
-      { key: "kana", label: "Kana", languageCode: "JP" },
-      { key: "example_1", label: "Example 1", languageCode: "JP" },
-      { key: "example_2", label: "Example 2", languageCode: "JP" },
-    ],
+    optionalAttributes: [{ key: "kana", label: "Kana", languageCode: "JP" }, ...exampleFields("JP")],
     posTags: ["名詞", "固有名詞", "イ形容詞", "ナ形容詞", "動詞 (自動詞)", "動詞 (他動詞)", "副詞", "連体詞", "接続詞", "連語", "その他"],
   },
-  EN: {
-    optionalAttributes: [
-      { key: "example_sentence_1", label: "Example Sentence 1", languageCode: "EN" },
-      { key: "example_sentence_2", label: "Example Sentence 2", languageCode: "EN" },
-    ],
-    posTags: ["n.", "v.", "adj.", "adv.", "pron.", "prep.", "conj.", "phrase."],
-  },
+  EN: { optionalAttributes: exampleFields("EN"), posTags: ["n.", "v.", "adj.", "adv.", "pron.", "prep.", "conj.", "phrase."] },
   DE: {
-    optionalAttributes: [
-      { key: "example_sentence_1", label: "Example Sentence 1", languageCode: "DE" },
-      { key: "example_sentence_2", label: "Example Sentence 2", languageCode: "DE" },
-    ],
-    posTags: ["m. noun — maskulines Substantiv", "f. noun — feminines Substantiv", "n. noun — neutrales Substantiv", "art. — Artikel", "adj. — Adjektiv", "pron. — Pronomen", "num. — Numerale", "adv. — Adverb", "prep. — Präposition", "conj. — Konjunktion", "interj. — Interjektion"],
+    optionalAttributes: exampleFields("DE"),
+    posTags: ["m. noun - maskulines Substantiv", "f. noun - feminines Substantiv", "n. noun - neutrales Substantiv", "art. - Artikel", "adj. - Adjektiv", "pron. - Pronomen", "num. - Numerale", "adv. - Adverb", "prep. - Präposition", "conj. - Konjunktion", "interj. - Interjektion"],
   },
-  ZH: { optionalAttributes: [{ key: "example_sentence_1", label: "Example Sentence 1", languageCode: "ZH" }, { key: "example_sentence_2", label: "Example Sentence 2", languageCode: "ZH" }], posTags: [] },
-  KO: { optionalAttributes: [{ key: "example_sentence_1", label: "Example Sentence 1", languageCode: "KO" }, { key: "example_sentence_2", label: "Example Sentence 2", languageCode: "KO" }], posTags: [] },
-  ES: { optionalAttributes: [{ key: "example_sentence_1", label: "Example Sentence 1", languageCode: "ES" }, { key: "example_sentence_2", label: "Example Sentence 2", languageCode: "ES" }], posTags: [] },
-  FR: { optionalAttributes: [{ key: "example_sentence_1", label: "Example Sentence 1", languageCode: "FR" }, { key: "example_sentence_2", label: "Example Sentence 2", languageCode: "FR" }], posTags: [] },
+  ZH: { optionalAttributes: exampleFields("ZH"), posTags: [] },
+  KO: { optionalAttributes: exampleFields("KO"), posTags: [] },
+  ES: { optionalAttributes: exampleFields("ES"), posTags: [] },
+  FR: { optionalAttributes: exampleFields("FR"), posTags: [] },
 };
 
-export type EntryRow = {
-  id: number;
-  workbookId: number;
-  vocabulary: string;
-  meaning: string;
-  meanings: string[];
-  kanaText: string | null;
-  attributes: Record<string, string>;
-  posTags: PosTag[];
-  createdAt: string;
-  updatedAt: string;
-  testCount: number;
-  errorCount: number;
-  tier: "gray" | "green" | "yellow" | "red";
-  lastTested: string | null;
-  nextTestDeadline: string | null;
-};
+export class WorkbookDataLossError extends Error {
+  constructor(readonly impact: WorkbookUpdateImpact) {
+    super("This change removes populated workbook fields and requires confirmation.");
+  }
+}
+export class ValidationError extends Error {}
 
-class ValidationError extends Error {}
-
-function tierFor(testCount: number, errorCount: number): EntryRow["tier"] {
-  if (testCount <= 0) return "gray";
-  if (errorCount <= 0) return "green";
-  if (errorCount <= 2) return "yellow";
-  return "red";
+export function defaultDbPath(): string {
+  return process.env.VOCAB_HELPER_DB_PATH?.trim() || resolve(process.cwd(), "..", "vocab.db");
 }
 
 function trimRequired(value: string, label: string): string {
   const cleaned = value.trim();
-  if (!cleaned) {
-    throw new ValidationError(`${label} is required.`);
-  }
+  if (!cleaned) throw new ValidationError(`${label} is required.`);
   return cleaned;
 }
-
-function trimOptional(value: string | null | undefined): string | null {
-  if (value == null) {
-    return null;
-  }
-  const cleaned = value.trim();
-  return cleaned || null;
+function trimOptional(value: string | null | undefined): string | null { return value?.trim() || null; }
+function tierFor(testCount: number, errorCount: number): EntryRow["tier"] {
+  if (testCount <= 0) return "gray";
+  if (errorCount <= 0) return "green";
+  return errorCount <= 2 ? "yellow" : "red";
 }
-
-function rowToEntry(row: Record<string, unknown>): EntryRow {
-  return {
-    id: Number(row.id),
-    workbookId: Number(row.workbook_id),
-    vocabulary: String(row.vocabulary ?? ""),
-    meaning: String(row.meaning ?? ""),
-    meanings: [],
-    kanaText: row.kana_text == null ? null : String(row.kana_text),
-    attributes: {},
-    posTags: [],
-    createdAt: String(row.created_at ?? ""),
-    updatedAt: String(row.updated_at ?? ""),
-    testCount: 0,
-    errorCount: 0,
-    tier: "gray",
-    lastTested: null,
-    nextTestDeadline: null,
-  };
-}
-
-function rowToWorkbook(row: Record<string, unknown>): WorkbookRow {
-  return {
-    id: Number(row.id),
-    name: String(row.name ?? ""),
-    wordCount: Number(row.word_count ?? 0),
-    createdAt: String(row.created_at ?? ""),
-    vocabularyLabel: String(row.vocabulary_label ?? "Vocabulary"),
-    vocabularyLanguageCode: row.vocabulary_language_code == null ? null : String(row.vocabulary_language_code),
-    presetEnabled: Number(row.preset_enabled ?? 0) === 1,
-    vocabularyKind: (String(row.vocabulary_kind ?? "non_language") as VocabularyKind),
-    posEnabled: Number(row.pos_enabled ?? 0) === 1,
-    meaningAttributes: [],
-    metadataAttributes: [],
-  };
-}
-
-const LANGUAGE_PRESETS = [
-  { code: "JP", label: "Japanese" },
-  { code: "EN", label: "English" },
-  { code: "ZH", label: "Chinese" },
-  { code: "KO", label: "Korean" },
-  { code: "ES", label: "Spanish" },
-  { code: "FR", label: "French" },
-  { code: "DE", label: "German" },
-] as const;
-const JAPANESE_POS_TAGS = ["名詞", "固有名詞", "イ形容詞", "ナ形容詞", "動詞 (自動詞)", "動詞 (他動詞)", "副詞", "連体詞", "接続詞", "連語", "その他"];
-
-export function defaultDbPath(): string {
-  if (process.env.VOCAB_HELPER_DB_PATH?.trim()) {
-    return process.env.VOCAB_HELPER_DB_PATH.trim();
-  }
-  return resolve(process.cwd(), "..", "vocab.db");
+function transaction<T>(db: DatabaseSync, work: () => T): T {
+  db.exec("BEGIN IMMEDIATE");
+  try { const result = work(); db.exec("COMMIT"); return result; }
+  catch (error) { try { db.exec("ROLLBACK"); } catch { /* Preserve the original error. */ } throw error; }
 }
 
 export class VocabularyRepository {
@@ -183,1109 +90,358 @@ export class VocabularyRepository {
 
   constructor(private readonly dbPath: string = defaultDbPath()) {
     this.db = new DatabaseSync(dbPath);
-    this.db.exec("PRAGMA foreign_keys = ON;");
-    this.initialize();
+    runSchemaMigrations(this.db);
   }
-
-  close(): void {
-    if (this.closed) {
-      return;
-    }
-    this.db.close();
-    this.closed = true;
-  }
-
-  private transaction<T>(work: () => T): T {
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const result = work();
-      this.db.exec("COMMIT");
-      return result;
-    } catch (error) {
-      try {
-        this.db.exec("ROLLBACK");
-      } catch {
-        // Ignore rollback errors so the original failure is preserved.
-      }
-      throw error;
-    }
-  }
-
-  initialize(): void {
-    this.db.exec(`CREATE TABLE IF NOT EXISTS mvp_schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
-    this.transaction(() => {
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS mvp_meta (
-          key TEXT PRIMARY KEY,
-          value TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS mvp_workbooks (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT NOT NULL COLLATE NOCASE UNIQUE,
-          vocabulary_label TEXT NOT NULL DEFAULT 'Vocabulary',
-          vocabulary_language_code TEXT NULL,
-          preset_enabled INTEGER NOT NULL DEFAULT 0,
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS mvp_workbook_meaning_attributes (
-          workbook_id INTEGER NOT NULL,
-          position INTEGER NOT NULL,
-          label TEXT NOT NULL,
-          language_code TEXT NULL,
-          PRIMARY KEY (workbook_id, position),
-          FOREIGN KEY (workbook_id) REFERENCES mvp_workbooks(id) ON DELETE CASCADE,
-          CHECK (position >= 1),
-          CHECK (trim(label) <> '')
-        );
-
-        CREATE TABLE IF NOT EXISTS mvp_entries (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          workbook_id INTEGER NULL,
-          vocabulary TEXT NOT NULL CHECK (trim(vocabulary) <> ''),
-          meaning TEXT NOT NULL CHECK (trim(meaning) <> ''),
-          kana_text TEXT NULL,
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY (workbook_id) REFERENCES mvp_workbooks(id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS mvp_entry_meanings (
-          entry_id INTEGER NOT NULL,
-          position INTEGER NOT NULL,
-          value TEXT NOT NULL DEFAULT '',
-          PRIMARY KEY (entry_id, position),
-          FOREIGN KEY (entry_id) REFERENCES mvp_entries(id) ON DELETE CASCADE,
-          CHECK (position >= 1)
-        );
-
-        CREATE TABLE IF NOT EXISTS mvp_workbook_attributes (
-          workbook_id INTEGER NOT NULL,
-          attribute_key TEXT NOT NULL,
-          label TEXT NOT NULL,
-          language_code TEXT NULL,
-          is_required INTEGER NOT NULL DEFAULT 0,
-          is_visible INTEGER NOT NULL DEFAULT 0,
-          display_order INTEGER NOT NULL DEFAULT 0,
-          PRIMARY KEY (workbook_id, attribute_key),
-          FOREIGN KEY (workbook_id) REFERENCES mvp_workbooks(id) ON DELETE CASCADE,
-          CHECK (trim(attribute_key) <> ''), CHECK (trim(label) <> '')
-        );
-
-        CREATE TABLE IF NOT EXISTS mvp_entry_attributes (
-          entry_id INTEGER NOT NULL,
-          attribute_key TEXT NOT NULL,
-          value TEXT NOT NULL DEFAULT '',
-          PRIMARY KEY (entry_id, attribute_key),
-          FOREIGN KEY (entry_id) REFERENCES mvp_entries(id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS mvp_pos_tags (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          workbook_id INTEGER NOT NULL,
-          name TEXT NOT NULL COLLATE NOCASE,
-          is_predefined INTEGER NOT NULL DEFAULT 0,
-          UNIQUE (workbook_id, name),
-          FOREIGN KEY (workbook_id) REFERENCES mvp_workbooks(id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS mvp_entry_pos_tags (
-          entry_id INTEGER NOT NULL,
-          tag_id INTEGER NOT NULL,
-          PRIMARY KEY (entry_id, tag_id),
-          FOREIGN KEY (entry_id) REFERENCES mvp_entries(id) ON DELETE CASCADE,
-          FOREIGN KEY (tag_id) REFERENCES mvp_pos_tags(id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS mvp_entry_stats (
-          entry_id INTEGER PRIMARY KEY,
-          test_count INTEGER NOT NULL DEFAULT 0,
-          error_count INTEGER NOT NULL DEFAULT 0,
-          last_tested TEXT NULL,
-          FOREIGN KEY (entry_id) REFERENCES mvp_entries(id) ON DELETE CASCADE,
-          CHECK (test_count >= 0), CHECK (error_count >= 0 AND error_count <= 3)
-        );
-
-        CREATE TABLE IF NOT EXISTS mvp_legacy_entry_map (
-          legacy_entry_id INTEGER PRIMARY KEY,
-          mvp_entry_id INTEGER NOT NULL UNIQUE,
-          FOREIGN KEY (mvp_entry_id) REFERENCES mvp_entries(id) ON DELETE CASCADE
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_mvp_entries_created_at
-          ON mvp_entries(created_at);
-
-      `);
-
-      this.ensureColumn("mvp_entries", "workbook_id", "INTEGER NULL");
-      this.ensureColumn("mvp_workbooks", "vocabulary_label", "TEXT NOT NULL DEFAULT 'Vocabulary'");
-      this.ensureColumn("mvp_workbooks", "vocabulary_language_code", "TEXT NULL");
-      this.ensureColumn("mvp_workbooks", "preset_enabled", "INTEGER NOT NULL DEFAULT 0");
-      this.ensureColumn("mvp_workbooks", "vocabulary_kind", "TEXT NOT NULL DEFAULT 'non_language'");
-      this.ensureColumn("mvp_workbooks", "pos_enabled", "INTEGER NOT NULL DEFAULT 0");
-      this.ensureColumn("mvp_entry_stats", "next_test_deadline", "TEXT NULL");
-      this.db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_mvp_entries_workbook_id
-          ON mvp_entries(workbook_id);
-      `);
-      this.importLegacyDataIfNeeded();
-      this.ensureWorkbookBackfill();
-      this.ensureWorkbookSchemaBackfill();
-      this.ensureMetadataBackfill();
-      this.repairLegacyWorkbookSplit();
-      this.ensureStatsBackfill();
-      this.ensureLegacyEntryMappings();
-      this.applyPendingMigrations();
-      this.ensureCurrentWorkbookSetting();
-    });
-  }
+  close(): void { if (!this.closed) this.db.close(); this.closed = true; }
+  initialize(): void { runSchemaMigrations(this.db); }
 
   listWorkbooks(): WorkbookRow[] {
-    const rows = this.db
-      .prepare(
-        `
-        SELECT
-          w.id,
-          w.name,
-          w.vocabulary_label,
-          w.vocabulary_language_code,
-          w.preset_enabled,
-          w.vocabulary_kind,
-          w.pos_enabled,
-          w.created_at,
-          COUNT(e.id) AS word_count
-        FROM mvp_workbooks AS w
-        LEFT JOIN mvp_entries AS e
-          ON e.workbook_id = w.id
-        GROUP BY w.id, w.name, w.created_at
-        ORDER BY w.id ASC
-        `,
-      )
-      .all() as Record<string, unknown>[];
-    return rows.map((row) => this.withWorkbookAttributes(rowToWorkbook(row)));
+    const rows = this.db.prepare("SELECT w.*, COUNT(e.id) AS word_count FROM workbooks w LEFT JOIN entries e ON e.workbook_id = w.id GROUP BY w.id ORDER BY w.id").all() as Record<string, unknown>[];
+    return rows.map((row) => this.hydrateWorkbook(row));
   }
-
   getWorkbook(workbookId: number): WorkbookRow | null {
-    const row = this.db
-      .prepare(
-        `
-        SELECT
-          w.id,
-          w.name,
-          w.vocabulary_label,
-          w.vocabulary_language_code,
-          w.preset_enabled,
-          w.vocabulary_kind,
-          w.pos_enabled,
-          w.created_at,
-          COUNT(e.id) AS word_count
-        FROM mvp_workbooks AS w
-        LEFT JOIN mvp_entries AS e
-          ON e.workbook_id = w.id
-        WHERE w.id = ?
-        GROUP BY w.id, w.name, w.created_at
-        `,
-      )
-      .get(workbookId) as Record<string, unknown> | undefined;
-    return row ? this.withWorkbookAttributes(rowToWorkbook(row)) : null;
+    const row = this.db.prepare("SELECT w.*, COUNT(e.id) AS word_count FROM workbooks w LEFT JOIN entries e ON e.workbook_id = w.id WHERE w.id = ? GROUP BY w.id").get(workbookId) as Record<string, unknown> | undefined;
+    return row ? this.hydrateWorkbook(row) : null;
   }
+  listMeaningAttributes(workbookId: number): MeaningAttribute[] { return this.requireWorkbook(workbookId).meaningAttributes; }
 
-  listMeaningAttributes(workbookId: number): MeaningAttribute[] {
-    const workbook = this.getWorkbook(workbookId);
-    if (!workbook) {
-      throw new Error(`Workbook with id ${workbookId} was not found.`);
-    }
-    return workbook.meaningAttributes;
-  }
-
-  createWorkbook(
-    name: string,
-    vocabularyLabel = "Vocabulary",
-    vocabularyLanguageCode: string | null = null,
-    meaningAttributes: MeaningAttribute[] = [{ position: 1, label: "Meaning 1", languageCode: null }],
-    presetEnabled = vocabularyLanguageCode === "JP",
-  ): WorkbookRow {
-    const cleanedName = trimRequired(name, "Workbook name");
-    const cleanedVocabularyLabel = trimOptional(vocabularyLabel) ?? "Vocabulary";
-    const attributes = this.normalizeMeaningAttributes(meaningAttributes);
-    const workbook = this.transaction(() => {
-      const result = this.db.prepare(
-        "INSERT INTO mvp_workbooks (name, vocabulary_label, vocabulary_language_code, preset_enabled, vocabulary_kind, pos_enabled) VALUES (?, ?, ?, ?, ?, ?)",
-      ).run(cleanedName, cleanedVocabularyLabel, vocabularyLanguageCode, presetEnabled ? 1 : 0, vocabularyLanguageCode ? "preset_language" : "non_language", ["JP", "EN", "DE"].includes(vocabularyLanguageCode ?? "") ? 1 : 0);
-      const workbookId = Number(result.lastInsertRowid);
-      const insertAttribute = this.db.prepare(
-        "INSERT INTO mvp_workbook_meaning_attributes (workbook_id, position, label, language_code) VALUES (?, ?, ?, ?)",
-      );
-      for (const attribute of attributes) {
-        insertAttribute.run(workbookId, attribute.position, attribute.label, attribute.languageCode);
-      }
-      this.ensureMetadataBackfill();
-      return this.getWorkbook(workbookId);
-    });
-    if (!workbook) {
-      throw new Error("Could not load inserted workbook.");
-    }
-    if (this.getCurrentWorkbookId() === null) {
-      this.setCurrentWorkbookId(workbook.id);
-    }
-    return workbook;
-  }
-
-  createConfiguredWorkbook(input: CreateWorkbookInput): WorkbookRow {
-    const name = trimRequired(input.name, "Workbook name");
-    const vocabularyLabel = trimRequired(input.vocabularyLabel, "Vocabulary label");
-    const meanings = this.normalizeMeaningAttributes(input.meaningAttributes);
-    const allowedKinds: VocabularyKind[] = ["preset_language", "other_language", "non_language"];
-    if (!allowedKinds.includes(input.vocabularyKind)) throw new ValidationError("Choose a valid vocabulary type.");
-    if (input.vocabularyKind === "preset_language" && !input.vocabularyLanguageCode) throw new ValidationError("A preset language is required.");
-    const optional = input.optionalAttributes.map((attribute, index) => ({
-      ...attribute,
-      key: trimRequired(attribute.key, "Attribute key"),
-      label: trimRequired(attribute.label, "Attribute label"),
-      required: false,
-      visible: false,
-      displayOrder: meanings.length + index + 1,
-    }));
-    const reservedKeys = new Set(["vocab", ...meanings.map((item) => `meaning_${item.position}`)]);
-    if (optional.some((item) => reservedKeys.has(item.key)) || new Set(optional.map((item) => item.key)).size !== optional.length) {
-      throw new ValidationError("Optional attribute keys must be unique.");
-    }
-    const tags: Array<{ name: string; predefined: boolean }> = [];
-    const seenTagNames = new Set<string>();
-    for (const value of input.posTags) {
-      const tagName = trimRequired(value.name, "POS tag");
-      const normalized = tagName.toLocaleLowerCase();
-      if (!seenTagNames.has(normalized)) { seenTagNames.add(normalized); tags.push({ name: tagName, predefined: value.predefined }); }
-    }
-
-    const workbookId = this.transaction(() => {
-      const result = this.db.prepare(
-        "INSERT INTO mvp_workbooks (name, vocabulary_label, vocabulary_language_code, preset_enabled, vocabulary_kind, pos_enabled) VALUES (?, ?, ?, ?, ?, ?)",
-      ).run(name, vocabularyLabel, input.vocabularyKind === "preset_language" ? input.vocabularyLanguageCode : null, input.presetEnabled ? 1 : 0, input.vocabularyKind, input.posEnabled ? 1 : 0);
+  createConfiguredWorkbook(input: WorkbookConfigurationInput): WorkbookRow {
+    const config = this.normalizeConfiguration(input);
+    const now = new Date().toISOString();
+    const workbookId = transaction(this.db, () => {
+      const result = this.db.prepare(`INSERT INTO workbooks
+        (name, vocabulary_kind, vocabulary_label, vocabulary_language_code, preset_enabled, pos_enabled, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(config.name, config.vocabularyKind, config.vocabularyLabel, config.vocabularyLanguageCode, config.presetEnabled ? 1 : 0, config.posEnabled ? 1 : 0, now, now);
       const id = Number(result.lastInsertRowid);
-      const insertMeaning = this.db.prepare("INSERT INTO mvp_workbook_meaning_attributes (workbook_id, position, label, language_code) VALUES (?, ?, ?, ?)");
-      const insertAttribute = this.db.prepare("INSERT INTO mvp_workbook_attributes (workbook_id, attribute_key, label, language_code, is_required, is_visible, display_order) VALUES (?, ?, ?, ?, ?, ?, ?)");
-      insertAttribute.run(id, "vocab", vocabularyLabel, input.vocabularyLanguageCode, 1, 1, 0);
-      for (const meaning of meanings) {
-        insertMeaning.run(id, meaning.position, meaning.label, meaning.languageCode);
-        insertAttribute.run(id, `meaning_${meaning.position}`, meaning.label, meaning.languageCode, meaning.position === 1 ? 1 : 0, meaning.position === 1 ? 1 : 0, meaning.position);
-      }
-      for (const attribute of optional) insertAttribute.run(id, attribute.key, attribute.label, attribute.languageCode, 0, 0, attribute.displayOrder);
-      if (input.posEnabled) {
-        const insertTag = this.db.prepare("INSERT INTO mvp_pos_tags (workbook_id, name, is_predefined) VALUES (?, ?, ?)");
-        for (const tag of tags) insertTag.run(id, tag.name, tag.predefined ? 1 : 0);
-      }
+      this.writeFields(id, config);
+      this.writeInitialTags(id, config.posTags);
+      this.db.prepare("UPDATE app_settings SET current_workbook_id = COALESCE(current_workbook_id, ?) WHERE singleton_id = 1").run(id);
       return id;
     });
-    const workbook = this.getWorkbook(workbookId);
-    if (!workbook) throw new Error("Could not load inserted workbook.");
-    if (this.getCurrentWorkbookId() === null) this.setCurrentWorkbookId(workbook.id);
-    return workbook;
+    return this.requireWorkbook(workbookId);
+  }
+  createWorkbook(name: string, vocabularyLabel = "Vocabulary", vocabularyLanguageCode: string | null = null, meaningAttributes: MeaningAttribute[] = [{ position: 1, label: "Meaning 1", languageCode: null }], presetEnabled = vocabularyLanguageCode === "JP"): WorkbookRow {
+    const kind: VocabularyKind = vocabularyLanguageCode ? "preset_language" : "non_language";
+    const preset = vocabularyLanguageCode ? LANGUAGE_PRESET_DEFINITIONS[vocabularyLanguageCode] : undefined;
+    return this.createConfiguredWorkbook({
+      name, vocabularyKind: kind, vocabularyLabel, vocabularyLanguageCode, meaningAttributes, presetEnabled,
+      posEnabled: kind !== "non_language",
+      optionalAttributes: presetEnabled ? (preset?.optionalAttributes ?? []).map((field, index) => ({ ...field, required: false, visible: false, displayOrder: index + 1, provenance: "preset" })) : [],
+      posTags: (preset?.posTags ?? []).map((tagName) => ({ name: tagName, predefined: true })),
+    });
   }
 
-  updateWorkbookSettings(
-    workbookId: number,
-    name: string,
-    vocabularyLabel: string,
-    vocabularyLanguageCode: string | null,
-    meaningAttributes: MeaningAttribute[],
-    presetEnabled = vocabularyLanguageCode === "JP",
-  ): WorkbookRow {
-    if (!this.getWorkbook(workbookId)) {
-      throw new Error(`Workbook with id ${workbookId} was not found.`);
-    }
-    const attributes = this.normalizeMeaningAttributes(meaningAttributes);
-    const cleanedName = trimRequired(name, "Workbook name");
-    this.transaction(() => {
-      this.db.prepare("UPDATE mvp_workbooks SET name = ?, vocabulary_label = ?, vocabulary_language_code = ?, preset_enabled = ? WHERE id = ?")
-        .run(cleanedName, trimOptional(vocabularyLabel) ?? "Vocabulary", vocabularyLanguageCode, presetEnabled ? 1 : 0, workbookId);
-      this.db.prepare("DELETE FROM mvp_workbook_meaning_attributes WHERE workbook_id = ?").run(workbookId);
-      const insert = this.db.prepare("INSERT INTO mvp_workbook_meaning_attributes (workbook_id, position, label, language_code) VALUES (?, ?, ?, ?)");
-      for (const attribute of attributes) insert.run(workbookId, attribute.position, attribute.label, attribute.languageCode);
-      this.ensureMetadataBackfill();
+  previewWorkbookUpdate(workbookId: number, input: WorkbookConfigurationInput): WorkbookUpdateImpact {
+    this.requireWorkbook(workbookId);
+    const config = this.normalizeConfiguration(input);
+    const retained = new Set([...config.meaningAttributes.map((field) => `meaning_${field.position}`), ...config.optionalAttributes.map((field) => field.key)]);
+    const rows = this.db.prepare(`SELECT f.field_key, f.label, COUNT(CASE WHEN trim(v.value) <> '' THEN 1 END) AS value_count
+      FROM workbook_fields f LEFT JOIN entry_field_values v ON v.field_id = f.id
+      WHERE f.workbook_id = ? GROUP BY f.id ORDER BY f.role, f.position`).all(workbookId) as Record<string, unknown>[];
+    return { populatedFields: rows.filter((row) => !retained.has(String(row.field_key)) && Number(row.value_count) > 0)
+      .map((row) => ({ key: String(row.field_key), label: String(row.label), valueCount: Number(row.value_count) })) };
+  }
+
+  updateConfiguredWorkbook(workbookId: number, input: WorkbookConfigurationInput, confirmDataLoss = false): WorkbookRow {
+    const config = this.normalizeConfiguration(input);
+    transaction(this.db, () => {
+      const impact = this.previewWorkbookUpdate(workbookId, config);
+      if (impact.populatedFields.length > 0 && !confirmDataLoss) throw new WorkbookDataLossError(impact);
+      this.db.prepare(`UPDATE workbooks SET name = ?, vocabulary_kind = ?, vocabulary_label = ?, vocabulary_language_code = ?,
+        preset_enabled = ?, pos_enabled = ?, updated_at = ? WHERE id = ?`)
+        .run(config.name, config.vocabularyKind, config.vocabularyLabel, config.vocabularyLanguageCode, config.presetEnabled ? 1 : 0, config.posEnabled ? 1 : 0, new Date().toISOString(), workbookId);
+      this.syncFields(workbookId, config);
+      this.syncTags(workbookId, config.posTags);
     });
-    const updated = this.getWorkbook(workbookId);
-    if (!updated) throw new Error(`Workbook with id ${workbookId} was not found.`);
-    return updated;
+    return this.requireWorkbook(workbookId);
+  }
+  updateWorkbookSettings(workbookId: number, name: string, vocabularyLabel: string, vocabularyLanguageCode: string | null, meaningAttributes: MeaningAttribute[], presetEnabled = vocabularyLanguageCode === "JP"): WorkbookRow {
+    const current = this.requireWorkbook(workbookId);
+    return this.updateConfiguredWorkbook(workbookId, {
+      name, vocabularyLabel, vocabularyLanguageCode, meaningAttributes, presetEnabled,
+      vocabularyKind: vocabularyLanguageCode ? "preset_language" : current.vocabularyKind, posEnabled: current.posEnabled,
+      optionalAttributes: current.metadataAttributes.filter((field) => field.key !== "vocab" && !field.key.startsWith("meaning_")),
+      posTags: this.listStoredPosTags(workbookId),
+    });
   }
 
   deleteWorkbook(workbookId: number): number | null {
-    const workbook = this.getWorkbook(workbookId);
-    if (!workbook) {
-      throw new Error(`Workbook with id ${workbookId} was not found.`);
-    }
-
-    return this.transaction(() => {
-      const currentWorkbookId = this.readCurrentWorkbookId();
-      this.db.prepare("DELETE FROM mvp_entries WHERE workbook_id = ?").run(workbookId);
-      this.db.prepare("DELETE FROM mvp_workbooks WHERE id = ?").run(workbookId);
-
-      const remainingWorkbookId = this.firstWorkbookId();
-      const nextCurrentWorkbookId = currentWorkbookId === workbookId ? remainingWorkbookId : currentWorkbookId ?? remainingWorkbookId;
-      this.writeCurrentWorkbookId(nextCurrentWorkbookId);
-      return nextCurrentWorkbookId;
+    this.requireWorkbook(workbookId);
+    return transaction(this.db, () => {
+      this.db.prepare("DELETE FROM workbooks WHERE id = ?").run(workbookId);
+      const current = this.readCurrentWorkbookId();
+      const next = current ?? this.firstWorkbookId();
+      this.db.prepare("UPDATE app_settings SET current_workbook_id = ? WHERE singleton_id = 1").run(next);
+      return next;
     });
   }
-
-  getCurrentWorkbookId(): number | null {
-    const currentWorkbookId = this.readCurrentWorkbookId();
-    if (currentWorkbookId !== null && this.getWorkbook(currentWorkbookId)) {
-      return currentWorkbookId;
-    }
-
-    const fallbackWorkbookId = this.firstWorkbookId();
-    this.writeCurrentWorkbookId(fallbackWorkbookId);
-    return fallbackWorkbookId;
-  }
-
+  getCurrentWorkbookId(): number | null { return this.readCurrentWorkbookId() ?? this.firstWorkbookId(); }
   setCurrentWorkbookId(workbookId: number): WorkbookRow {
-    const workbook = this.getWorkbook(workbookId);
-    if (!workbook) {
-      throw new Error(`Workbook with id ${workbookId} was not found.`);
-    }
-    this.writeCurrentWorkbookId(workbook.id);
+    const workbook = this.requireWorkbook(workbookId);
+    this.db.prepare("UPDATE app_settings SET current_workbook_id = ? WHERE singleton_id = 1").run(workbookId);
     return workbook;
   }
 
   listEntries(workbookId?: number): EntryRow[] {
-    const resolvedWorkbookId = this.resolveWorkbookId(workbookId);
-    if (resolvedWorkbookId === null) {
-      return [];
-    }
-
-    const rows = this.db
-      .prepare(
-        `
-        SELECT id, workbook_id, vocabulary, meaning, kana_text, created_at, updated_at
-        FROM mvp_entries
-        WHERE workbook_id = ?
-        ORDER BY id ASC
-        `,
-      )
-      .all(resolvedWorkbookId) as Record<string, unknown>[];
-    return rows.map((row) => this.withEntryMeanings(rowToEntry(row)));
+    const resolved = workbookId ?? this.getCurrentWorkbookId();
+    if (resolved === null) return [];
+    this.requireWorkbook(resolved);
+    const ids = this.db.prepare("SELECT id FROM entries WHERE workbook_id = ? ORDER BY id").all(resolved) as Array<{ id: number }>;
+    return ids.map((row) => this.getEntry(Number(row.id))!);
   }
-
   countEntries(workbookId?: number): number {
-    if (workbookId === undefined) {
-      const row = this.db.prepare("SELECT COUNT(*) AS count FROM mvp_entries").get() as Record<string, unknown>;
-      return Number(row.count ?? 0);
-    }
-
-    const row = this.db.prepare("SELECT COUNT(*) AS count FROM mvp_entries WHERE workbook_id = ?").get(workbookId) as Record<string, unknown>;
-    return Number(row.count ?? 0);
+    const row = workbookId === undefined ? this.db.prepare("SELECT COUNT(*) AS count FROM entries").get() : this.db.prepare("SELECT COUNT(*) AS count FROM entries WHERE workbook_id = ?").get(workbookId);
+    return Number((row as { count?: number } | undefined)?.count ?? 0);
   }
-
   getTierColorsEnabled(): boolean {
-    return this.getMeta("tier_colors_enabled") !== "0";
+    return Number((this.db.prepare("SELECT tier_colors_enabled FROM app_settings WHERE singleton_id = 1").get() as { tier_colors_enabled: number }).tier_colors_enabled) === 1;
   }
-
   setTierColorsEnabled(enabled: boolean): boolean {
-    this.setMeta("tier_colors_enabled", enabled ? "1" : "0");
+    this.db.prepare("UPDATE app_settings SET tier_colors_enabled = ? WHERE singleton_id = 1").run(enabled ? 1 : 0);
     return enabled;
   }
 
   getEntry(entryId: number): EntryRow | null {
-    const row = this.db
-      .prepare(
-        `
-        SELECT id, workbook_id, vocabulary, meaning, kana_text, created_at, updated_at
-        FROM mvp_entries
-        WHERE id = ?
-        `,
-      )
-      .get(entryId) as Record<string, unknown> | undefined;
-    return row ? this.withEntryMeanings(rowToEntry(row)) : null;
-  }
-
-  addEntry(workbookId: number, vocabulary: string, meaning: string, meanings?: string[], attributes: Record<string, string> = {}, posTagIds: number[] = []): EntryRow {
-    if (!this.getWorkbook(workbookId)) {
-      throw new Error(`Workbook with id ${workbookId} was not found.`);
-    }
-
-    const cleanedVocabulary = trimRequired(vocabulary, "Vocabulary");
-    const values = meanings && meanings.length > 0 ? meanings : [meaning];
-    const cleanedMeanings = values.map((value) => trimOptional(value) ?? "");
-    cleanedMeanings[0] = trimRequired(cleanedMeanings[0], "Meaning");
-    const now = new Date().toISOString();
-
-    const result = this.transaction(() => {
-      const inserted = this.db.prepare(
-        `
-        INSERT INTO mvp_entries (workbook_id, vocabulary, meaning, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?)
-        `,
-      ).run(workbookId, cleanedVocabulary, cleanedMeanings[0], now, now);
-      const entryId = Number(inserted.lastInsertRowid);
-      const insertMeaning = this.db.prepare("INSERT INTO mvp_entry_meanings (entry_id, position, value) VALUES (?, ?, ?)");
-      cleanedMeanings.forEach((value, index) => insertMeaning.run(entryId, index + 1, value));
-      this.saveEntryAttributes(entryId, attributes);
-      const addTag = this.db.prepare("INSERT OR IGNORE INTO mvp_entry_pos_tags (entry_id, tag_id) VALUES (?, ?)");
-      for (const tagId of [...new Set(posTagIds)]) addTag.run(entryId, tagId);
-      return entryId;
-    });
-
-    const inserted = this.getEntry(result);
-    if (!inserted) {
-      throw new Error("Could not load inserted entry.");
-    }
-    return inserted;
-  }
-
-  listMetadataAttributes(workbookId: number): MetadataAttribute[] {
-    const workbook = this.getWorkbook(workbookId);
-    if (!workbook) throw new Error(`Workbook with id ${workbookId} was not found.`);
-    return workbook.metadataAttributes;
-  }
-
-  updateMetadataAttributes(workbookId: number, attributes: MetadataAttribute[]): WorkbookRow {
-    const workbook = this.getWorkbook(workbookId);
-    if (!workbook) throw new Error(`Workbook with id ${workbookId} was not found.`);
-    const normalized = attributes.map((attribute, index) => ({ ...attribute, key: attribute.key.trim(), label: trimRequired(attribute.label, "Attribute label"), displayOrder: index }));
-    if (!normalized.some((a) => a.key === "vocab") || !normalized.some((a) => a.key === "meaning_1")) throw new ValidationError("Vocab and Meaning 1 cannot be removed.");
-    if (!normalized.find((a) => a.key === "vocab")?.required || !normalized.find((a) => a.key === "meaning_1")?.required) throw new ValidationError("Vocab and Meaning 1 are required.");
-    if (new Set(normalized.map((a) => a.key)).size !== normalized.length) throw new ValidationError("Attribute keys must be unique.");
-    this.transaction(() => {
-      const save = this.db.prepare("INSERT INTO mvp_workbook_attributes (workbook_id, attribute_key, label, language_code, is_required, is_visible, display_order) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(workbook_id, attribute_key) DO UPDATE SET label=excluded.label, language_code=excluded.language_code, is_required=excluded.is_required, is_visible=excluded.is_visible, display_order=excluded.display_order");
-      for (const a of normalized) save.run(workbookId, a.key, a.label, a.languageCode, a.required ? 1 : 0, a.visible ? 1 : 0, a.displayOrder);
-      const keys = normalized.map((a) => a.key);
-      const existing = this.db.prepare("SELECT attribute_key FROM mvp_workbook_attributes WHERE workbook_id = ?").all(workbookId) as Record<string, unknown>[];
-      for (const row of existing) if (!keys.includes(String(row.attribute_key))) this.db.prepare("DELETE FROM mvp_workbook_attributes WHERE workbook_id = ? AND attribute_key = ?").run(workbookId, String(row.attribute_key));
-    });
-    return this.getWorkbook(workbookId)!;
-  }
-
-  listPosTags(workbookId: number): PosTag[] {
-    const workbook = this.getWorkbook(workbookId);
-    if (!workbook) throw new Error(`Workbook with id ${workbookId} was not found.`);
-    if (!workbook.posEnabled) return [];
-    const rows = this.db.prepare("SELECT id, name, is_predefined FROM mvp_pos_tags WHERE workbook_id = ? ORDER BY name").all(workbookId) as Record<string, unknown>[];
-    return rows.map((row) => ({ id: Number(row.id), name: String(row.name), predefined: Number(row.is_predefined) === 1 }));
-  }
-
-  addPosTag(workbookId: number, name: string): PosTag {
-    const clean = trimRequired(name, "POS tag");
-    this.ensurePosSupported(workbookId);
-    const result = this.db.prepare("INSERT INTO mvp_pos_tags (workbook_id, name, is_predefined) VALUES (?, ?, 0)").run(workbookId, clean);
-    return { id: Number(result.lastInsertRowid), name: clean, predefined: false };
-  }
-
-  renamePosTag(tagId: number, name: string): void { this.db.prepare("UPDATE mvp_pos_tags SET name = ? WHERE id = ?").run(trimRequired(name, "POS tag"), tagId); }
-  deletePosTag(tagId: number): void { this.db.prepare("DELETE FROM mvp_pos_tags WHERE id = ?").run(tagId); }
-  setEntryPosTags(entryId: number, tagIds: number[]): void {
-    this.db.prepare("DELETE FROM mvp_entry_pos_tags WHERE entry_id = ?").run(entryId);
-    const add = this.db.prepare("INSERT OR IGNORE INTO mvp_entry_pos_tags (entry_id, tag_id) VALUES (?, ?)");
-    for (const id of [...new Set(tagIds)]) add.run(entryId, id);
-  }
-
-  private saveEntryAttributes(entryId: number, attributes: Record<string, string>): void {
-    const save = this.db.prepare("INSERT INTO mvp_entry_attributes (entry_id, attribute_key, value) VALUES (?, ?, ?) ON CONFLICT(entry_id, attribute_key) DO UPDATE SET value=excluded.value");
-    const remove = this.db.prepare("DELETE FROM mvp_entry_attributes WHERE entry_id = ? AND attribute_key = ?");
-    for (const [key, value] of Object.entries(attributes)) {
-      const clean = value.trim();
-      if (clean) save.run(entryId, key, clean); else remove.run(entryId, key);
-    }
-  }
-
-  private ensurePosSupported(workbookId: number): void {
-    const workbook = this.getWorkbook(workbookId);
-    if (!workbook || !workbook.posEnabled) throw new ValidationError("Part of speech is disabled for this workbook.");
-  }
-
-  setPosEnabled(workbookId: number, enabled: boolean): WorkbookRow {
-    if (!this.getWorkbook(workbookId)) throw new Error(`Workbook with id ${workbookId} was not found.`);
-    this.db.prepare("UPDATE mvp_workbooks SET pos_enabled = ? WHERE id = ?").run(enabled ? 1 : 0, workbookId);
-    return this.getWorkbook(workbookId)!;
-  }
-
-  setPresetEnabled(workbookId: number, enabled: boolean): WorkbookRow {
-    if (!this.getWorkbook(workbookId)) throw new Error(`Workbook with id ${workbookId} was not found.`);
-    this.db.prepare("UPDATE mvp_workbooks SET preset_enabled = ? WHERE id = ?").run(enabled ? 1 : 0, workbookId);
-    return this.getWorkbook(workbookId)!;
-  }
-
-  applyLanguagePreset(workbookId: number): WorkbookRow {
-    const workbook = this.getWorkbook(workbookId);
-    if (!workbook) throw new Error(`Workbook with id ${workbookId} was not found.`);
-    const definition = workbook.vocabularyLanguageCode ? LANGUAGE_PRESET_DEFINITIONS[workbook.vocabularyLanguageCode] : undefined;
-    if (!definition) return workbook;
-    this.transaction(() => {
-      const insertAttribute = this.db.prepare("INSERT OR IGNORE INTO mvp_workbook_attributes (workbook_id, attribute_key, label, language_code, is_required, is_visible, display_order) VALUES (?, ?, ?, ?, 0, 0, ?)");
-      const currentCount = Number((this.db.prepare("SELECT COUNT(*) AS count FROM mvp_workbook_attributes WHERE workbook_id = ?").get(workbookId) as Record<string, unknown>).count ?? 0);
-      definition.optionalAttributes.forEach((attribute, index) => insertAttribute.run(workbookId, attribute.key, attribute.label, attribute.languageCode, currentCount + index));
-      if (workbook.posEnabled) {
-        const insertTag = this.db.prepare("INSERT OR IGNORE INTO mvp_pos_tags (workbook_id, name, is_predefined) VALUES (?, ?, 1)");
-        for (const tag of definition.posTags) insertTag.run(workbookId, tag);
-      }
-      this.db.prepare("UPDATE mvp_workbooks SET preset_enabled = 1 WHERE id = ?").run(workbookId);
-    });
-    return this.getWorkbook(workbookId)!;
-  }
-
-  updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, posTagIds?: number[]): EntryRow {
-    const cleanedVocabulary = trimRequired(vocabulary, "Vocabulary");
-    const values = meanings && meanings.length > 0 ? meanings : [meaning];
-    const cleanedMeanings = values.map((value) => trimOptional(value) ?? "");
-    cleanedMeanings[0] = trimRequired(cleanedMeanings[0], "Meaning");
-    const existing = this.getEntry(entryId);
-    if (!existing) {
-      throw new Error(`Entry with id ${entryId} was not found.`);
-    }
-
-    this.transaction(() => {
-      this.db
-        .prepare(
-        `
-        UPDATE mvp_entries
-        SET vocabulary = ?, meaning = ?, updated_at = ?
-        WHERE id = ?
-        `,
-        )
-        .run(cleanedVocabulary, cleanedMeanings[0], new Date().toISOString(), entryId);
-      this.db.prepare("DELETE FROM mvp_entry_meanings WHERE entry_id = ?").run(entryId);
-      const insertMeaning = this.db.prepare("INSERT INTO mvp_entry_meanings (entry_id, position, value) VALUES (?, ?, ?)");
-      cleanedMeanings.forEach((value, index) => insertMeaning.run(entryId, index + 1, value));
-      if (attributes) this.saveEntryAttributes(entryId, attributes);
-      if (posTagIds) {
-        this.db.prepare("DELETE FROM mvp_entry_pos_tags WHERE entry_id = ?").run(entryId);
-        const addTag = this.db.prepare("INSERT OR IGNORE INTO mvp_entry_pos_tags (entry_id, tag_id) VALUES (?, ?)");
-        for (const tagId of [...new Set(posTagIds)]) addTag.run(entryId, tagId);
-      }
-    });
-
-    const updated = this.getEntry(entryId);
-    if (!updated) {
-      throw new Error(`Entry with id ${entryId} was not found.`);
-    }
-    return updated;
-  }
-
-  private withWorkbookAttributes(workbook: WorkbookRow): WorkbookRow {
-    const rows = this.db.prepare(
-      "SELECT position, label, language_code FROM mvp_workbook_meaning_attributes WHERE workbook_id = ? ORDER BY position ASC",
-    ).all(workbook.id) as Record<string, unknown>[];
-    const definitions = this.db.prepare(
-      "SELECT attribute_key, label, language_code, is_required, is_visible, display_order FROM mvp_workbook_attributes WHERE workbook_id = ? ORDER BY display_order ASC, attribute_key ASC",
-    ).all(workbook.id) as Record<string, unknown>[];
-    if (definitions.length === 0) {
-      const defaults = [
-        { key: "vocab", label: workbook.vocabularyLabel, languageCode: workbook.vocabularyLanguageCode, required: true, visible: true, order: 0 },
-        { key: "meaning_1", label: workbook.meaningAttributes[0]?.label ?? "Meaning 1", languageCode: workbook.meaningAttributes[0]?.languageCode ?? null, required: true, visible: true, order: 1 },
-      ];
-      if (workbook.presetEnabled && workbook.vocabularyLanguageCode === "JP") {
-        defaults.push({ key: "kana", label: "Kana", languageCode: "JP", required: false, visible: false, order: 2 });
-        defaults.push({ key: "example_1", label: "Example 1", languageCode: "JP", required: false, visible: false, order: 3 });
-        defaults.push({ key: "example_2", label: "Example 2", languageCode: "JP", required: false, visible: false, order: 4 });
-      }
-      const insert = this.db.prepare("INSERT OR IGNORE INTO mvp_workbook_attributes (workbook_id, attribute_key, label, language_code, is_required, is_visible, display_order) VALUES (?, ?, ?, ?, ?, ?, ?)");
-      for (const item of defaults) insert.run(workbook.id, item.key, item.label, item.languageCode, item.required ? 1 : 0, item.visible ? 1 : 0, item.order);
-    }
-    if (workbook.presetEnabled && workbook.vocabularyLanguageCode === "JP") {
-      const count = Number((this.db.prepare("SELECT COUNT(*) AS count FROM mvp_pos_tags WHERE workbook_id = ?").get(workbook.id) as Record<string, unknown>).count ?? 0);
-      if (count === 0) {
-        const insertTag = this.db.prepare("INSERT OR IGNORE INTO mvp_pos_tags (workbook_id, name, is_predefined) VALUES (?, ?, 1)");
-        for (const tag of JAPANESE_POS_TAGS) insertTag.run(workbook.id, tag);
-      }
-    }
-    const metadataRows = this.db.prepare(
-      "SELECT attribute_key, label, language_code, is_required, is_visible, display_order FROM mvp_workbook_attributes WHERE workbook_id = ? ORDER BY display_order ASC, attribute_key ASC",
-    ).all(workbook.id) as Record<string, unknown>[];
+    const row = this.db.prepare("SELECT e.*, s.test_count, s.error_count, s.last_tested, s.next_test_deadline FROM entries e JOIN entry_stats s ON s.entry_id = e.id WHERE e.id = ?").get(entryId) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    const workbookId = Number(row.workbook_id);
+    const fields = this.db.prepare(`SELECT f.field_key, f.role, f.position, v.value FROM workbook_fields f
+      LEFT JOIN entry_field_values v ON v.field_id = f.id AND v.entry_id = ? WHERE f.workbook_id = ? ORDER BY f.role, f.position`).all(entryId, workbookId) as Record<string, unknown>[];
+    const meanings = fields.filter((field) => field.role === "meaning").map((field) => String(field.value ?? ""));
+    const attributes: Record<string, string> = {};
+    for (const field of fields.filter((item) => item.role === "optional")) attributes[String(field.field_key)] = String(field.value ?? "");
+    const tags = this.db.prepare("SELECT t.id, t.name, t.is_predefined FROM entry_pos_tags et JOIN pos_tags t ON t.id = et.tag_id WHERE et.entry_id = ? ORDER BY t.name").all(entryId) as Record<string, unknown>[];
+    const testCount = Number(row.test_count); const errorCount = Number(row.error_count);
     return {
-      ...workbook,
-      meaningAttributes: rows.map((row) => ({
-        position: Number(row.position),
-        label: String(row.label),
-        languageCode: row.language_code == null ? null : String(row.language_code),
-          })),
-      metadataAttributes: metadataRows.map((row) => ({
-        key: String(row.attribute_key), label: String(row.label), languageCode: row.language_code == null ? null : String(row.language_code),
-        required: Number(row.is_required) === 1, visible: Number(row.is_visible) === 1, displayOrder: Number(row.display_order),
-      })),
+      id: Number(row.id), workbookId, vocabulary: String(row.vocabulary), meaning: meanings[0] ?? "", meanings,
+      kanaText: attributes.kana || null, attributes,
+      posTags: tags.map((tag) => ({ id: Number(tag.id), name: String(tag.name), predefined: Number(tag.is_predefined) === 1 })),
+      createdAt: String(row.created_at), updatedAt: String(row.updated_at), testCount, errorCount, tier: tierFor(testCount, errorCount),
+      lastTested: row.last_tested == null ? null : String(row.last_tested), nextTestDeadline: row.next_test_deadline == null ? null : String(row.next_test_deadline),
     };
   }
 
-  private withEntryMeanings(entry: EntryRow): EntryRow {
-    const rows = this.db.prepare("SELECT position, value FROM mvp_entry_meanings WHERE entry_id = ? ORDER BY position ASC").all(entry.id) as Record<string, unknown>[];
-    const meanings = rows.length > 0 ? rows.map((row) => String(row.value ?? "")) : [entry.meaning];
-    const attributes = this.db.prepare("SELECT attribute_key, value FROM mvp_entry_attributes WHERE entry_id = ?").all(entry.id) as Record<string, unknown>[];
-    const attributeMap: Record<string, string> = {};
-    for (const row of attributes) attributeMap[String(row.attribute_key)] = String(row.value ?? "");
-    if (entry.kanaText) attributeMap.kana ??= entry.kanaText;
-    const tags = this.db.prepare("SELECT t.id, t.name, t.is_predefined FROM mvp_entry_pos_tags et JOIN mvp_pos_tags t ON t.id = et.tag_id WHERE et.entry_id = ? ORDER BY t.name").all(entry.id) as Record<string, unknown>[];
-    const stats = this.db.prepare("SELECT test_count, error_count, last_tested, next_test_deadline FROM mvp_entry_stats WHERE entry_id = ?").get(entry.id) as Record<string, unknown> | undefined;
-    const testCount = Math.max(0, Number(stats?.test_count ?? 0));
-    const errorCount = Math.min(3, Math.max(0, Number(stats?.error_count ?? 0)));
-    return { ...entry, meanings, meaning: meanings[0] ?? entry.meaning, attributes: attributeMap, posTags: tags.map((row) => ({ id: Number(row.id), name: String(row.name), predefined: Number(row.is_predefined) === 1 })), testCount, errorCount, tier: tierFor(testCount, errorCount), lastTested: stats?.last_tested == null ? null : String(stats.last_tested), nextTestDeadline: stats?.next_test_deadline == null ? null : String(stats.next_test_deadline) };
+  addEntry(workbookId: number, vocabulary: string, meaning: string, meanings?: string[], attributes: Record<string, string> = {}, posTagIds: number[] = []): EntryRow {
+    const workbook = this.requireWorkbook(workbookId);
+    const values = this.normalizeEntryMeanings(workbook, meanings?.length ? meanings : [meaning]);
+    this.validateEntryAssociations(workbookId, attributes, posTagIds);
+    const now = new Date().toISOString();
+    const id = transaction(this.db, () => {
+      const result = this.db.prepare("INSERT INTO entries (workbook_id, vocabulary, created_at, updated_at) VALUES (?, ?, ?, ?)").run(workbookId, trimRequired(vocabulary, "Vocabulary"), now, now);
+      const entryId = Number(result.lastInsertRowid);
+      this.saveEntryValues(entryId, workbookId, values, attributes); this.saveEntryTags(entryId, workbookId, posTagIds);
+      this.db.prepare("INSERT INTO entry_stats (entry_id) VALUES (?)").run(entryId);
+      return entryId;
+    });
+    return this.getEntry(id)!;
+  }
+  updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[], attributes: Record<string, string> = {}, posTagIds: number[] = []): EntryRow {
+    const existing = this.requireEntry(entryId); const workbook = this.requireWorkbook(existing.workbookId);
+    const values = this.normalizeEntryMeanings(workbook, meanings?.length ? meanings : [meaning]);
+    this.validateEntryAssociations(existing.workbookId, attributes, posTagIds);
+    transaction(this.db, () => {
+      this.db.prepare("UPDATE entries SET vocabulary = ?, updated_at = ? WHERE id = ?").run(trimRequired(vocabulary, "Vocabulary"), new Date().toISOString(), entryId);
+      this.db.prepare("DELETE FROM entry_field_values WHERE entry_id = ?").run(entryId);
+      this.saveEntryValues(entryId, existing.workbookId, values, attributes); this.saveEntryTags(entryId, existing.workbookId, posTagIds);
+    });
+    return this.getEntry(entryId)!;
+  }
+  deleteEntry(entryId: number): void { this.requireEntry(entryId); this.db.prepare("DELETE FROM entries WHERE id = ?").run(entryId); }
+
+  listMetadataAttributes(workbookId: number): MetadataAttribute[] { return this.requireWorkbook(workbookId).metadataAttributes; }
+  updateMetadataAttributes(workbookId: number, attributes: MetadataAttribute[]): WorkbookRow {
+    const workbook = this.requireWorkbook(workbookId); const vocab = attributes.find((field) => field.key === "vocab");
+    const meanings = attributes.filter((field) => field.key.startsWith("meaning_")).sort((a, b) => a.displayOrder - b.displayOrder).map((field, index) => ({ position: index + 1, label: field.label, languageCode: field.languageCode }));
+    if (!vocab || meanings.length === 0) throw new ValidationError("Vocabulary and Meaning 1 cannot be removed.");
+    return this.updateConfiguredWorkbook(workbookId, {
+      name: workbook.name, vocabularyKind: workbook.vocabularyKind, vocabularyLabel: vocab.label, vocabularyLanguageCode: workbook.vocabularyLanguageCode,
+      presetEnabled: workbook.presetEnabled, posEnabled: workbook.posEnabled, meaningAttributes: meanings,
+      optionalAttributes: attributes.filter((field) => field.key !== "vocab" && !field.key.startsWith("meaning_")), posTags: this.listStoredPosTags(workbookId),
+    });
   }
 
-  getEntryStats(entryId: number): { testCount: number; errorCount: number; tier: EntryRow["tier"]; lastTested: string | null; nextTestDeadline: string | null } {
-    const entry = this.getEntry(entryId);
-    if (!entry) throw new Error(`Entry with id ${entryId} was not found.`);
+  listPosTags(workbookId: number): PosTag[] { return this.requireWorkbook(workbookId).posEnabled ? this.listStoredPosTags(workbookId) : []; }
+  listStoredPosTags(workbookId: number): PosTag[] {
+    this.requireWorkbook(workbookId);
+    const rows = this.db.prepare("SELECT id, name, is_predefined FROM pos_tags WHERE workbook_id = ? ORDER BY name").all(workbookId) as Record<string, unknown>[];
+    return rows.map((row) => ({ id: Number(row.id), name: String(row.name), predefined: Number(row.is_predefined) === 1 }));
+  }
+  addPosTag(workbookId: number, name: string): PosTag {
+    this.ensurePosSupported(workbookId); const clean = trimRequired(name, "POS tag");
+    const result = this.db.prepare("INSERT INTO pos_tags (workbook_id, name, is_predefined) VALUES (?, ?, 0)").run(workbookId, clean);
+    return { id: Number(result.lastInsertRowid), name: clean, predefined: false };
+  }
+  renamePosTag(tagId: number, name: string): void {
+    const result = this.db.prepare("UPDATE pos_tags SET name = ? WHERE id = ?").run(trimRequired(name, "POS tag"), tagId);
+    if (Number(result.changes) === 0) throw new Error(`Part-of-speech tag ${tagId} was not found.`);
+  }
+  deletePosTag(tagId: number): void {
+    const result = this.db.prepare("DELETE FROM pos_tags WHERE id = ?").run(tagId);
+    if (Number(result.changes) === 0) throw new Error(`Part-of-speech tag ${tagId} was not found.`);
+  }
+  setEntryPosTags(entryId: number, tagIds: number[]): void {
+    const entry = this.requireEntry(entryId); this.validateEntryAssociations(entry.workbookId, {}, tagIds);
+    transaction(this.db, () => this.saveEntryTags(entryId, entry.workbookId, tagIds));
+  }
+  setPosEnabled(workbookId: number, enabled: boolean): WorkbookRow {
+    this.requireWorkbook(workbookId); this.db.prepare("UPDATE workbooks SET pos_enabled = ?, updated_at = ? WHERE id = ?").run(enabled ? 1 : 0, new Date().toISOString(), workbookId);
+    return this.requireWorkbook(workbookId);
+  }
+  setPresetEnabled(workbookId: number, enabled: boolean): WorkbookRow {
+    const workbook = this.requireWorkbook(workbookId);
+    if (workbook.vocabularyKind !== "preset_language" && enabled) throw new ValidationError("Only preset-language workbooks can enable preset fields.");
+    this.db.prepare("UPDATE workbooks SET preset_enabled = ?, updated_at = ? WHERE id = ?").run(enabled ? 1 : 0, new Date().toISOString(), workbookId);
+    return this.requireWorkbook(workbookId);
+  }
+  applyLanguagePreset(workbookId: number): WorkbookRow {
+    const workbook = this.requireWorkbook(workbookId); const preset = workbook.vocabularyLanguageCode ? LANGUAGE_PRESET_DEFINITIONS[workbook.vocabularyLanguageCode] : undefined;
+    if (!preset) throw new ValidationError("This workbook does not use a supported language preset.");
+    transaction(this.db, () => {
+      let position = Number((this.db.prepare("SELECT COALESCE(MAX(position), 0) AS position FROM workbook_fields WHERE workbook_id = ? AND role = 'optional'").get(workbookId) as { position: number }).position);
+      const addField = this.db.prepare("INSERT OR IGNORE INTO workbook_fields (workbook_id, field_key, role, position, label, language_code, is_required, is_visible, provenance) VALUES (?, ?, 'optional', ?, ?, ?, 0, 0, 'preset')");
+      for (const field of preset.optionalAttributes) addField.run(workbookId, field.key, ++position, field.label, field.languageCode);
+      const addTag = this.db.prepare("INSERT OR IGNORE INTO pos_tags (workbook_id, name, is_predefined) VALUES (?, ?, 1)");
+      for (const tag of preset.posTags) addTag.run(workbookId, tag);
+      this.db.prepare("UPDATE workbooks SET preset_enabled = 1, updated_at = ? WHERE id = ?").run(new Date().toISOString(), workbookId);
+    });
+    return this.requireWorkbook(workbookId);
+  }
+
+  getEntryStats(entryId: number) {
+    const entry = this.requireEntry(entryId);
     return { testCount: entry.testCount, errorCount: entry.errorCount, tier: entry.tier, lastTested: entry.lastTested, nextTestDeadline: entry.nextTestDeadline };
   }
-
   recordTestResult(entryId: number, isCorrect: boolean, decreaseError = true): EntryRow {
-    if (!this.getEntry(entryId)) throw new Error(`Entry with id ${entryId} was not found.`);
-    return this.transaction(() => {
-      this.db.prepare("INSERT INTO mvp_entry_stats (entry_id, test_count, error_count, last_tested, next_test_deadline) VALUES (?, 0, 0, CURRENT_TIMESTAMP, NULL) ON CONFLICT(entry_id) DO NOTHING").run(entryId);
-      const current = this.db.prepare("SELECT error_count FROM mvp_entry_stats WHERE entry_id = ?").get(entryId) as Record<string, unknown>;
-      const currentErrors = Math.min(3, Math.max(0, Number(current.error_count ?? 0)));
+    this.requireEntry(entryId);
+    transaction(this.db, () => {
+      const errors = Number((this.db.prepare("SELECT error_count FROM entry_stats WHERE entry_id = ?").get(entryId) as { error_count: number }).error_count);
+      const now = new Date().toISOString();
       if (isCorrect && decreaseError) {
-        const intervalDays = [15, 7, 4, 1][currentErrors];
-        const deadline = new Date(Date.now() + intervalDays * 86400000).toISOString();
-        this.db.prepare("UPDATE mvp_entry_stats SET test_count = test_count + 1, error_count = MAX(error_count - 1, 0), last_tested = CURRENT_TIMESTAMP, next_test_deadline = ? WHERE entry_id = ?").run(deadline, entryId);
-      } else if (isCorrect) {
-        this.db.prepare("UPDATE mvp_entry_stats SET test_count = test_count + 1, last_tested = CURRENT_TIMESTAMP WHERE entry_id = ?").run(entryId);
-      } else {
-        this.db.prepare("UPDATE mvp_entry_stats SET test_count = test_count + 1, error_count = MIN(error_count + 1, 3), last_tested = CURRENT_TIMESTAMP WHERE entry_id = ?").run(entryId);
-      }
-      return this.getEntry(entryId)!;
+        const deadline = new Date(Date.now() + [15, 7, 4, 1][errors] * 86400000).toISOString();
+        this.db.prepare("UPDATE entry_stats SET test_count = test_count + 1, error_count = MAX(error_count - 1, 0), last_tested = ?, next_test_deadline = ? WHERE entry_id = ?").run(now, deadline, entryId);
+      } else if (isCorrect) this.db.prepare("UPDATE entry_stats SET test_count = test_count + 1, last_tested = ? WHERE entry_id = ?").run(now, entryId);
+      else this.db.prepare("UPDATE entry_stats SET test_count = test_count + 1, error_count = MIN(error_count + 1, 3), last_tested = ? WHERE entry_id = ?").run(now, entryId);
     });
+    return this.requireEntry(entryId);
   }
-
   increasePriority(entryId: number): EntryRow { return this.adjustPriority(entryId, true); }
   decreasePriority(entryId: number): EntryRow { return this.adjustPriority(entryId, false); }
+  selectPracticeCandidates(workbookId: number, count: number): EntryRow[] {
+    this.requireWorkbook(workbookId);
+    const rows = this.db.prepare(`SELECT e.id FROM entries e JOIN entry_stats s ON s.entry_id = e.id WHERE e.workbook_id = ?
+      ORDER BY CASE WHEN s.test_count = 0 THEN 0 WHEN s.next_test_deadline IS NOT NULL AND datetime(s.next_test_deadline) <= datetime('now') THEN 1 ELSE 2 END,
+      s.error_count DESC, RANDOM() LIMIT ?`).all(workbookId, Math.max(0, Math.floor(count))) as Array<{ id: number }>;
+    return rows.map((row) => this.getEntry(Number(row.id))!);
+  }
 
   private adjustPriority(entryId: number, increase: boolean): EntryRow {
-    const entry = this.getEntry(entryId);
-    if (!entry) throw new Error(`Entry with id ${entryId} was not found.`);
+    const entry = this.requireEntry(entryId);
     if (entry.testCount === 0) throw new ValidationError("Untested entries cannot have their priority adjusted.");
     const next = increase ? (entry.errorCount === 0 ? 1 : 3) : (entry.errorCount >= 3 ? 2 : 0);
-    return this.transaction(() => {
-      this.db.prepare("INSERT INTO mvp_entry_stats (entry_id, test_count, error_count, last_tested, next_test_deadline) VALUES (?, ?, ?, ?, ?) ON CONFLICT(entry_id) DO UPDATE SET error_count = excluded.error_count").run(entryId, entry.testCount, next, entry.lastTested, entry.nextTestDeadline);
-      return this.getEntry(entryId)!;
-    });
+    this.db.prepare("UPDATE entry_stats SET error_count = ? WHERE entry_id = ?").run(next, entryId);
+    return this.requireEntry(entryId);
   }
-
-  selectPracticeCandidates(workbookId: number, count: number): EntryRow[] {
-    if (!this.getWorkbook(workbookId)) throw new Error(`Workbook with id ${workbookId} was not found.`);
-    const safeCount = Math.max(0, Math.floor(count));
-    const rows = this.db.prepare("SELECT e.id, e.workbook_id, e.vocabulary, e.meaning, e.kana_text, e.created_at, e.updated_at FROM mvp_entries e LEFT JOIN mvp_entry_stats s ON s.entry_id = e.id WHERE e.workbook_id = ? ORDER BY CASE WHEN COALESCE(s.test_count, 0) = 0 THEN 0 WHEN s.next_test_deadline IS NOT NULL AND datetime(s.next_test_deadline) <= datetime('now') THEN 1 ELSE 2 END ASC, COALESCE(s.error_count, 0) DESC, RANDOM() LIMIT ?").all(workbookId, safeCount) as Record<string, unknown>[];
-    return rows.map((row) => this.withEntryMeanings(rowToEntry(row)));
-  }
-
-  private normalizeMeaningAttributes(attributes: MeaningAttribute[]): MeaningAttribute[] {
-    if (attributes.length < 1 || attributes.length > 5) {
-      throw new ValidationError("Meaning attributes must contain between 1 and 5 items.");
-    }
-    const normalized = attributes.map((attribute, index) => ({
-      position: index + 1,
-      label: trimRequired(attribute.label, `Meaning ${index + 1} label`),
-      languageCode: attribute.languageCode?.trim().toUpperCase() || null,
-    }));
-    if (new Set(normalized.map((attribute) => attribute.label.toLocaleLowerCase())).size !== normalized.length) {
-      throw new ValidationError("Meaning attribute labels must be unique.");
-    }
-    return normalized;
-  }
-
-  deleteEntry(entryId: number): void {
-    const existing = this.getEntry(entryId);
-    if (!existing) {
-      throw new Error(`Entry with id ${entryId} was not found.`);
-    }
-
-    this.db.prepare("DELETE FROM mvp_entries WHERE id = ?").run(entryId);
-  }
-
-  private ensureColumn(tableName: string, columnName: string, definition: string): void {
-    const rows = this.db.prepare(`PRAGMA table_info(${tableName})`).all() as Record<string, unknown>[];
-    const existingColumns = new Set(rows.map((row) => String(row.name)));
-    if (!existingColumns.has(columnName)) {
-      this.db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
-    }
-  }
-
-  private applyPendingMigrations(): void {
-    const applied = new Set((this.db.prepare("SELECT version FROM mvp_schema_migrations").all() as Record<string, unknown>[]).map((row) => Number(row.version)));
-    const migrations: Array<[number, () => void]> = [
-      [1, () => undefined],
-      [2, () => undefined],
-      [3, () => undefined],
-      [4, () => {
-        this.ensureColumn("mvp_entry_stats", "next_test_deadline", "TEXT NULL");
-        const rows = this.db.prepare("SELECT entry_id, error_count, last_tested FROM mvp_entry_stats WHERE next_test_deadline IS NULL AND last_tested IS NOT NULL").all() as Record<string, unknown>[];
-        const update = this.db.prepare("UPDATE mvp_entry_stats SET next_test_deadline = ? WHERE entry_id = ?");
-        const intervals = [15, 7, 4, 1];
-        for (const row of rows) {
-          const errors = Math.min(3, Math.max(0, Number(row.error_count ?? 0)));
-          const last = new Date(String(row.last_tested));
-          if (Number.isNaN(last.getTime())) continue;
-          update.run(new Date(last.getTime() + intervals[errors] * 86400000).toISOString(), Number(row.entry_id));
-        }
-        const entries = this.db.prepare("SELECT e.id, e.workbook_id FROM mvp_entries e JOIN mvp_workbook_meaning_attributes a ON a.workbook_id = e.workbook_id GROUP BY e.id, e.workbook_id").all() as Record<string, unknown>[];
-        const insertMeaning = this.db.prepare("INSERT OR IGNORE INTO mvp_entry_meanings (entry_id, position, value) VALUES (?, ?, '')");
-        const positions = this.db.prepare("SELECT workbook_id, position FROM mvp_workbook_meaning_attributes").all() as Record<string, unknown>[];
-        const byWorkbook = new Map<number, number[]>();
-        for (const row of positions) { const list = byWorkbook.get(Number(row.workbook_id)) ?? []; list.push(Number(row.position)); byWorkbook.set(Number(row.workbook_id), list); }
-        for (const entry of entries) for (const position of byWorkbook.get(Number(entry.workbook_id)) ?? []) insertMeaning.run(Number(entry.id), position);
-      }],
-      [5, () => {
-        this.ensureColumn("mvp_workbooks", "vocabulary_kind", "TEXT NOT NULL DEFAULT 'non_language'");
-        this.ensureColumn("mvp_workbooks", "pos_enabled", "INTEGER NOT NULL DEFAULT 0");
-        this.db.prepare(`UPDATE mvp_workbooks SET vocabulary_kind = CASE WHEN vocabulary_language_code IN ('JP','EN','ZH','KO','ES','FR','DE') THEN 'preset_language' WHEN vocabulary_language_code IS NOT NULL THEN 'other_language' ELSE 'non_language' END`).run();
-        this.db.prepare("UPDATE mvp_workbooks SET pos_enabled = 1 WHERE vocabulary_language_code IN ('JP','EN') OR EXISTS (SELECT 1 FROM mvp_pos_tags t WHERE t.workbook_id = mvp_workbooks.id)").run();
-      }],
+  private hydrateWorkbook(row: Record<string, unknown>): WorkbookRow {
+    const id = Number(row.id);
+    const fields = this.db.prepare("SELECT * FROM workbook_fields WHERE workbook_id = ? ORDER BY role, position").all(id) as Record<string, unknown>[];
+    const meanings = fields.filter((field) => field.role === "meaning").map((field) => ({ position: Number(field.position), label: String(field.label), languageCode: field.language_code == null ? null : String(field.language_code) }));
+    const vocabularyLabel = String(row.vocabulary_label); const vocabularyLanguageCode = row.vocabulary_language_code == null ? null : String(row.vocabulary_language_code);
+    const metadata: MetadataAttribute[] = [
+      { key: "vocab", label: vocabularyLabel, languageCode: vocabularyLanguageCode, required: true, visible: true, displayOrder: 0, provenance: "custom" },
+      ...fields.map((field) => ({
+        key: String(field.field_key), label: String(field.label), languageCode: field.language_code == null ? null : String(field.language_code),
+        required: Number(field.is_required) === 1, visible: Number(field.is_visible) === 1,
+        displayOrder: field.role === "meaning" ? Number(field.position) : meanings.length + Number(field.position), provenance: String(field.provenance) as "preset" | "custom",
+      })),
     ];
-    for (const [version, work] of migrations) {
-      if (applied.has(version)) continue;
-      work();
-      this.db.prepare("INSERT INTO mvp_schema_migrations (version) VALUES (?)").run(version);
-    }
+    return {
+      id, name: String(row.name), wordCount: Number(row.word_count ?? 0), createdAt: String(row.created_at), vocabularyLabel, vocabularyLanguageCode,
+      presetEnabled: Number(row.preset_enabled) === 1, vocabularyKind: String(row.vocabulary_kind) as VocabularyKind, posEnabled: Number(row.pos_enabled) === 1,
+      meaningAttributes: meanings, metadataAttributes: metadata,
+    };
   }
-
-  private tableExists(tableName: string): boolean {
-    const row = this.db
-      .prepare(
-        `
-        SELECT 1 AS present
-        FROM sqlite_master
-        WHERE type = 'table'
-          AND name = ?
-        `,
-      )
-      .get(tableName) as Record<string, unknown> | undefined;
-    return Boolean(row);
+  private normalizeConfiguration(input: WorkbookConfigurationInput): WorkbookConfigurationInput {
+    const kinds: VocabularyKind[] = ["preset_language", "other_language", "non_language"];
+    if (!kinds.includes(input.vocabularyKind)) throw new ValidationError("Choose a valid vocabulary type.");
+    const code = input.vocabularyKind === "preset_language" ? trimRequired(input.vocabularyLanguageCode ?? "", "Preset language").toUpperCase() : null;
+    if (input.vocabularyKind === "preset_language" && !LANGUAGE_PRESET_DEFINITIONS[code!]) throw new ValidationError("Choose a supported language preset.");
+    const meanings = this.normalizeMeaningAttributes(input.meaningAttributes); const keys = new Set<string>();
+    const optional = input.optionalAttributes.map((field, index) => {
+      const key = trimRequired(field.key, "Attribute key").toLowerCase();
+      if (key === "vocab" || key.startsWith("meaning_") || keys.has(key)) throw new ValidationError("Optional attribute keys must be unique.");
+      keys.add(key);
+      return { ...field, key, label: trimRequired(field.label, "Attribute label"), languageCode: trimOptional(field.languageCode)?.toUpperCase() ?? null, required: false, displayOrder: index + 1, provenance: field.provenance ?? "custom" };
+    });
+    const tagNames = new Set<string>();
+    const tags = input.posTags.map((tag) => ({ ...tag, name: trimRequired(tag.name, "POS tag") })).filter((tag) => { const key = tag.name.toLocaleLowerCase(); if (tagNames.has(key)) return false; tagNames.add(key); return true; });
+    return {
+      ...input, name: trimRequired(input.name, "Workbook name"), vocabularyLabel: trimRequired(input.vocabularyLabel, "Vocabulary label"), vocabularyLanguageCode: code,
+      presetEnabled: input.vocabularyKind === "preset_language" && input.presetEnabled, posEnabled: input.vocabularyKind === "non_language" ? false : input.posEnabled,
+      meaningAttributes: meanings, optionalAttributes: optional, posTags: tags,
+    };
   }
-
-  private importLegacyDataIfNeeded(): void {
-    if (this.getMeta("legacy_import_complete") === "1") {
-      return;
-    }
-
-    if (this.countEntries() > 0 || this.countWorkbooks() > 0) {
-      this.setMeta("legacy_import_complete", "1");
-      return;
-    }
-
-    const legacyEntriesExist = this.tableExists("vocab_entries");
-    const legacyWorkbooksExist = this.tableExists("workbooks");
-    if (!legacyEntriesExist && !legacyWorkbooksExist) {
-      this.setMeta("legacy_import_complete", "1");
-      return;
-    }
-
-    const workbookIdMap = legacyWorkbooksExist ? this.importLegacyWorkbooks() : new Map<number, number>();
-    const fallbackWorkbookId = this.ensureDefaultWorkbookIfNeeded(workbookIdMap.size > 0 ? null : "Default");
-
-    if (legacyEntriesExist) {
-      this.importLegacyEntries(workbookIdMap, fallbackWorkbookId);
-    }
-
-    const legacyCurrentWorkbookId = this.readLegacyCurrentWorkbookId();
-    const currentWorkbookId =
-      legacyCurrentWorkbookId !== null ? workbookIdMap.get(legacyCurrentWorkbookId) ?? fallbackWorkbookId : fallbackWorkbookId ?? this.firstWorkbookId();
-    this.writeCurrentWorkbookId(currentWorkbookId);
-    this.setMeta("legacy_import_complete", "1");
+  private normalizeMeaningAttributes(attributes: MeaningAttribute[]): MeaningAttribute[] {
+    if (attributes.length < 1 || attributes.length > 5) throw new ValidationError("Meaning attributes must contain between 1 and 5 items.");
+    const fields = attributes.map((field, index) => ({ position: index + 1, label: trimRequired(field.label, `Meaning ${index + 1} label`), languageCode: trimOptional(field.languageCode)?.toUpperCase() ?? null }));
+    if (new Set(fields.map((field) => field.label.toLocaleLowerCase())).size !== fields.length) throw new ValidationError("Meaning attribute labels must be unique.");
+    return fields;
   }
-
-  private importLegacyWorkbooks(): Map<number, number> {
-    const workbookIdMap = new Map<number, number>();
-    const rows = this.db
-      .prepare(
-        `
-        SELECT id, name, created_at
-        FROM workbooks
-        ORDER BY id ASC
-        `,
-      )
-      .all() as Record<string, unknown>[];
-
-    for (const row of rows) {
-      const legacyId = Number(row.id);
-      const name = trimRequired(String(row.name ?? `Workbook ${legacyId}`), "Workbook name");
-      const createdAt = String(row.created_at ?? new Date().toISOString());
-      const result = this.db.prepare("INSERT INTO mvp_workbooks (name, created_at) VALUES (?, ?)").run(name, createdAt);
-      workbookIdMap.set(legacyId, Number(result.lastInsertRowid));
-    }
-
-    return workbookIdMap;
+  private writeFields(workbookId: number, config: WorkbookConfigurationInput): void {
+    const insert = this.db.prepare("INSERT INTO workbook_fields (workbook_id, field_key, role, position, label, language_code, is_required, is_visible, provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    for (const field of config.meaningAttributes) insert.run(workbookId, `meaning_${field.position}`, "meaning", field.position, field.label, field.languageCode, field.position === 1 ? 1 : 0, field.position === 1 ? 1 : 0, "custom");
+    config.optionalAttributes.forEach((field, index) => insert.run(workbookId, field.key, "optional", index + 1, field.label, field.languageCode, 0, field.visible ? 1 : 0, field.provenance ?? "custom"));
   }
-
-  private importLegacyEntries(workbookIdMap: Map<number, number>, fallbackWorkbookId: number | null): void {
-    const columns = this.tableColumns("vocab_entries");
-    const hasWorkbookId = columns.has("workbook_id");
-    const workbookColumn = hasWorkbookId ? "workbook_id" : "NULL AS workbook_id";
-    const rows = this.db
-      .prepare(
-        `
-        SELECT id, ${workbookColumn}, japanese_text, kana_text, english_text, created_at
-        FROM vocab_entries
-        ORDER BY id ASC
-        `,
-      )
-      .all() as Record<string, unknown>[];
-
-    for (const row of rows) {
-      const legacyWorkbookId = row.workbook_id == null ? null : Number(row.workbook_id);
-      const workbookId = (legacyWorkbookId === null ? null : workbookIdMap.get(legacyWorkbookId)) ?? fallbackWorkbookId ?? this.firstWorkbookId();
-      if (workbookId === null) {
-        continue;
-      }
-
-      const vocabulary = trimRequired(String(row.japanese_text ?? ""), "Vocabulary");
-      const meaning = trimRequired(String(row.english_text ?? ""), "Meaning");
-      const kanaText = trimOptional(row.kana_text == null ? null : String(row.kana_text));
-      const createdAt = String(row.created_at ?? new Date().toISOString());
-
-      const inserted = this.db
-        .prepare(
-          `
-          INSERT INTO mvp_entries (workbook_id, vocabulary, meaning, kana_text, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?)
-          `,
-        )
-        .run(workbookId, vocabulary, meaning, kanaText, createdAt, createdAt);
-      this.db.prepare("INSERT OR IGNORE INTO mvp_legacy_entry_map (legacy_entry_id, mvp_entry_id) VALUES (?, ?)").run(Number(row.id), Number(inserted.lastInsertRowid));
-    }
+  private syncFields(workbookId: number, config: WorkbookConfigurationInput): void {
+    const desired = new Set([...config.meaningAttributes.map((field) => `meaning_${field.position}`), ...config.optionalAttributes.map((field) => field.key)]);
+    const existing = this.db.prepare("SELECT field_key FROM workbook_fields WHERE workbook_id = ?").all(workbookId) as Array<{ field_key: string }>;
+    for (const row of existing) if (!desired.has(String(row.field_key))) this.db.prepare("DELETE FROM workbook_fields WHERE workbook_id = ? AND field_key = ?").run(workbookId, row.field_key);
+    const maxPosition = Number((this.db.prepare("SELECT COALESCE(MAX(position), 0) AS value FROM workbook_fields WHERE workbook_id = ?").get(workbookId) as { value: number }).value);
+    this.db.prepare("UPDATE workbook_fields SET position = position + ? WHERE workbook_id = ?").run(maxPosition + 100, workbookId);
+    const save = this.db.prepare(`INSERT INTO workbook_fields (workbook_id, field_key, role, position, label, language_code, is_required, is_visible, provenance)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(workbook_id, field_key) DO UPDATE SET role=excluded.role, position=excluded.position,
+      label=excluded.label, language_code=excluded.language_code, is_required=excluded.is_required, is_visible=excluded.is_visible, provenance=excluded.provenance`);
+    for (const field of config.meaningAttributes) save.run(workbookId, `meaning_${field.position}`, "meaning", field.position, field.label, field.languageCode, field.position === 1 ? 1 : 0, field.position === 1 ? 1 : 0, "custom");
+    config.optionalAttributes.forEach((field, index) => save.run(workbookId, field.key, "optional", index + 1, field.label, field.languageCode, 0, field.visible ? 1 : 0, field.provenance ?? "custom"));
   }
-
-  private tableColumns(tableName: string): Set<string> {
-    const rows = this.db.prepare(`PRAGMA table_info(${tableName})`).all() as Record<string, unknown>[];
-    return new Set(rows.map((row) => String(row.name)));
+  private writeInitialTags(workbookId: number, tags: WorkbookConfigurationInput["posTags"]): void {
+    const insert = this.db.prepare("INSERT INTO pos_tags (workbook_id, name, is_predefined) VALUES (?, ?, ?)");
+    for (const tag of tags) insert.run(workbookId, tag.name, tag.predefined ? 1 : 0);
   }
-
-  private ensureWorkbookBackfill(): void {
-    if (this.countEntries() === 0) {
-      return;
-    }
-
-    const defaultWorkbookId = this.ensureDefaultWorkbookIfNeeded("Default");
-    if (defaultWorkbookId !== null) {
-      this.db.prepare("UPDATE mvp_entries SET workbook_id = ? WHERE workbook_id IS NULL").run(defaultWorkbookId);
-    }
-  }
-
-  private ensureWorkbookSchemaBackfill(): void {
-    const workbooks = this.db.prepare("SELECT id FROM mvp_workbooks ORDER BY id ASC").all() as Record<string, unknown>[];
-    const insertAttribute = this.db.prepare(
-      "INSERT OR IGNORE INTO mvp_workbook_meaning_attributes (workbook_id, position, label, language_code) VALUES (?, 1, 'Meaning 1', NULL)",
-    );
-    for (const row of workbooks) {
-      const workbookId = Number(row.id);
-      insertAttribute.run(workbookId);
-    }
-
-    const entries = this.db.prepare("SELECT id, meaning FROM mvp_entries").all() as Record<string, unknown>[];
-    const insertMeaning = this.db.prepare(
-      "INSERT OR IGNORE INTO mvp_entry_meanings (entry_id, position, value) VALUES (?, 1, ?)",
-    );
-    for (const row of entries) {
-      insertMeaning.run(Number(row.id), String(row.meaning ?? ""));
-    }
-  }
-
-  private ensureMetadataBackfill(): void {
-    const workbooks = this.db.prepare("SELECT id, vocabulary_language_code, preset_enabled FROM mvp_workbooks ORDER BY id ASC").all() as Record<string, unknown>[];
-    const add = this.db.prepare("INSERT OR IGNORE INTO mvp_workbook_attributes (workbook_id, attribute_key, label, language_code, is_required, is_visible, display_order) VALUES (?, ?, ?, ?, ?, ?, ?)");
-    for (const row of workbooks) {
-      const workbookId = Number(row.id);
-      const meaningRows = this.db.prepare("SELECT position, label, language_code FROM mvp_workbook_meaning_attributes WHERE workbook_id = ? ORDER BY position ASC").all(workbookId) as Record<string, unknown>[];
-      add.run(workbookId, "vocab", "Vocabulary", String(row.vocabulary_language_code ?? "") || null, 1, 1, 0);
-      const meanings = meaningRows.length > 0 ? meaningRows : [{ position: 1, label: "Meaning 1", language_code: null }];
-      for (const meaning of meanings) {
-        const position = Number(meaning.position);
-        add.run(workbookId, `meaning_${position}`, String(meaning.label ?? `Meaning ${position}`), meaning.language_code == null ? null : String(meaning.language_code), position === 1 ? 1 : 0, position === 1 ? 1 : 0, position);
-        this.db.prepare("UPDATE mvp_workbook_attributes SET is_required = ?, is_visible = CASE WHEN attribute_key = 'meaning_1' THEN 1 ELSE is_visible END WHERE workbook_id = ? AND attribute_key = ?").run(position === 1 ? 1 : 0, workbookId, `meaning_${position}`);
-      }
-      const language = String(row.vocabulary_language_code ?? "").toUpperCase();
-      const optional = [
-        ["kana", "Kana", "JP", 2],
-        ["example_1", "Example 1", "JP", 3],
-        ["example_2", "Example 2", "JP", 4],
-      ] as const;
-      if (language === "JP" && Number(row.preset_enabled) === 1) {
-        this.db.prepare("UPDATE mvp_workbooks SET preset_enabled = 1 WHERE id = ?").run(workbookId);
-        for (const [key, label, code, order] of optional) add.run(workbookId, key, label, code, 0, 0, order);
-      }
-      this.db.prepare("UPDATE mvp_entries SET kana_text = kana_text WHERE workbook_id = ?").run(workbookId);
-    }
-  }
-
-  private ensureStatsBackfill(): void {
-    if (this.getMeta("stats_import_v3_complete") === "1") return;
-    if (!this.tableExists("vocab_stats") || !this.tableExists("vocab_entries")) {
-      this.setMeta("stats_import_v3_complete", "1");
-      return;
-    }
-
-    const legacyEntries = this.db.prepare("SELECT id, japanese_text, english_text FROM vocab_entries").all() as Record<string, unknown>[];
-    const legacyStats = this.db.prepare("SELECT entry_id, test_count, error_count, last_tested FROM vocab_stats").all() as Record<string, unknown>[];
-    const statsByLegacyId = new Map<number, Record<string, unknown>>();
-    for (const row of legacyStats) statsByLegacyId.set(Number(row.entry_id), row);
-    this.ensureLegacyEntryMappings();
-    const existingMvpStats = new Map<number, Record<string, unknown>>();
-    for (const row of this.db.prepare("SELECT entry_id, test_count, error_count, last_tested FROM mvp_entry_stats").all() as Record<string, unknown>[]) {
-      existingMvpStats.set(Number(row.entry_id), row);
-    }
-    this.db.prepare("DELETE FROM mvp_entry_stats").run();
-    const mvpEntries = this.db.prepare("SELECT id, vocabulary, meaning FROM mvp_entries").all() as Record<string, unknown>[];
-    const insert = this.db.prepare("INSERT INTO mvp_entry_stats (entry_id, test_count, error_count, last_tested) VALUES (?, ?, ?, ?)");
-    for (const entry of mvpEntries) {
-      const mapping = this.db.prepare("SELECT legacy_entry_id FROM mvp_legacy_entry_map WHERE mvp_entry_id = ?").get(Number(entry.id)) as Record<string, unknown> | undefined;
-      const stats = mapping ? statsByLegacyId.get(Number(mapping.legacy_entry_id)) : undefined;
-      const preserved = existingMvpStats.get(Number(entry.id));
-      const source = stats ?? preserved;
-      if (!source) continue;
-      insert.run(Number(entry.id), Math.max(0, Number(source.test_count ?? 0)), Math.min(3, Math.max(0, Number(source.error_count ?? 0))), source.last_tested == null ? null : String(source.last_tested));
-    }
-    this.setMeta("stats_import_v3_complete", "1");
-  }
-
-  private ensureLegacyEntryMappings(): void {
-    if (!this.tableExists("vocab_entries")) return;
-    const legacyHasWorkbook = this.tableColumns("vocab_entries").has("workbook_id");
-    const legacy = this.db.prepare(`SELECT id, ${legacyHasWorkbook ? "workbook_id" : "NULL AS workbook_id"}, japanese_text, english_text FROM vocab_entries ORDER BY id ASC`).all() as Record<string, unknown>[];
-    const mvp = this.db.prepare("SELECT id, workbook_id, vocabulary, meaning FROM mvp_entries ORDER BY id ASC").all() as Record<string, unknown>[];
-    const mvpWorkbooks = this.db.prepare("SELECT id, name FROM mvp_workbooks").all() as Record<string, unknown>[];
-    const mvpByName = new Map(mvpWorkbooks.map((row) => [String(row.name).trim().toLocaleLowerCase(), Number(row.id)]));
-    const legacyWorkbookMap = new Map<number, number>();
-    if (this.tableExists("workbooks")) {
-      const legacyWorkbooks = this.db.prepare("SELECT id, name FROM workbooks").all() as Record<string, unknown>[];
-      for (const row of legacyWorkbooks) {
-        const mapped = mvpByName.get(String(row.name ?? "").trim().toLocaleLowerCase());
-        if (mapped !== undefined) legacyWorkbookMap.set(Number(row.id), mapped);
+  private syncTags(workbookId: number, tags: WorkbookConfigurationInput["posTags"]): void {
+    const retained = new Set(tags.flatMap((tag) => tag.id === undefined ? [] : [tag.id]));
+    const existing = this.db.prepare("SELECT id FROM pos_tags WHERE workbook_id = ?").all(workbookId) as Array<{ id: number }>;
+    for (const row of existing) if (!retained.has(Number(row.id))) this.db.prepare("DELETE FROM pos_tags WHERE workbook_id = ? AND id = ?").run(workbookId, row.id);
+    for (const tag of tags) {
+      if (tag.id === undefined) this.db.prepare("INSERT INTO pos_tags (workbook_id, name, is_predefined) VALUES (?, ?, ?)").run(workbookId, tag.name, tag.predefined ? 1 : 0);
+      else {
+        const result = this.db.prepare("UPDATE pos_tags SET name = ?, is_predefined = ? WHERE id = ? AND workbook_id = ?").run(tag.name, tag.predefined ? 1 : 0, tag.id, workbookId);
+        if (Number(result.changes) === 0) throw new ValidationError(`Part-of-speech tag ${tag.id} does not belong to this workbook.`);
       }
     }
-    const used = new Set<number>((this.db.prepare("SELECT legacy_entry_id FROM mvp_legacy_entry_map").all() as Record<string, unknown>[]).map((r) => Number(r.legacy_entry_id)));
-    const byKey = new Map<string, number[]>();
-    for (const row of legacy) {
-      const workbookId = row.workbook_id == null ? null : legacyWorkbookMap.get(Number(row.workbook_id)) ?? null;
-      const key = `${workbookId ?? "*"}\u0000${String(row.japanese_text ?? "").trim().toLocaleLowerCase()}\u0000${String(row.english_text ?? "").trim().toLocaleLowerCase()}`;
-      const list = byKey.get(key) ?? []; list.push(Number(row.id)); byKey.set(key, list);
-    }
-    const mappedMvp = new Set<number>((this.db.prepare("SELECT mvp_entry_id FROM mvp_legacy_entry_map").all() as Record<string, unknown>[]).map((r) => Number(r.mvp_entry_id)));
-    const insert = this.db.prepare("INSERT OR IGNORE INTO mvp_legacy_entry_map (legacy_entry_id, mvp_entry_id) VALUES (?, ?)");
-    for (const row of mvp) {
-      const mvpId = Number(row.id); if (mappedMvp.has(mvpId)) continue;
-      const workbookId = row.workbook_id == null ? null : Number(row.workbook_id);
-      const scopedKey = `${workbookId ?? "*"}\u0000${String(row.vocabulary ?? "").trim().toLocaleLowerCase()}\u0000${String(row.meaning ?? "").trim().toLocaleLowerCase()}`;
-      const fallbackKey = `*\u0000${String(row.vocabulary ?? "").trim().toLocaleLowerCase()}\u0000${String(row.meaning ?? "").trim().toLocaleLowerCase()}`;
-      const candidates = byKey.get(scopedKey) ?? byKey.get(fallbackKey) ?? [];
-      const legacyId = candidates.find((id) => !used.has(id));
-      if (legacyId === undefined) continue;
-      insert.run(legacyId, mvpId); used.add(legacyId); mappedMvp.add(mvpId);
-    }
   }
-
-  private hasAttribute(workbookId: number, key: string): boolean {
-    return Boolean(this.db.prepare("SELECT 1 FROM mvp_workbook_attributes WHERE workbook_id = ? AND attribute_key = ?").get(workbookId, key));
+  private normalizeEntryMeanings(workbook: WorkbookRow, input: string[]): string[] {
+    const values = workbook.meaningAttributes.map((_, index) => trimOptional(input[index]) ?? "");
+    values[0] = trimRequired(values[0] ?? "", workbook.meaningAttributes[0]?.label ?? "Meaning 1"); return values;
   }
-
-  private repairLegacyWorkbookSplit(): void {
-    if (this.getMeta("legacy_workbook_split_complete") === "1" || !this.tableExists("workbooks") || !this.tableExists("vocab_entries")) return;
-    const mvp = this.db.prepare("SELECT id FROM mvp_workbooks ORDER BY id ASC").all() as Record<string, unknown>[];
-    const legacy = this.db.prepare("SELECT id, name, target_language_code, target_label, meaning_label, created_at FROM workbooks ORDER BY id ASC").all() as Record<string, unknown>[];
-    if (mvp.length !== 1 || legacy.length < 2) {
-      this.setMeta("legacy_workbook_split_complete", "1");
-      return;
-    }
-    const firstId = Number(mvp[0].id);
-    const ids: number[] = [];
-    for (let index = 0; index < legacy.length; index += 1) {
-      const row = legacy[index];
-      const name = trimRequired(String(row.name ?? `Workbook ${index + 1}`), "Workbook name");
-      const vocabularyLabel = trimOptional(String(row.target_label ?? "")) ?? "Vocabulary";
-      const languageCode = trimOptional(String(row.target_language_code ?? ""))?.toUpperCase() ?? null;
-      const meaningLabel = trimOptional(String(row.meaning_label ?? "")) ?? "Meaning 1";
-      const id = index === 0 ? firstId : Number(this.db.prepare("INSERT INTO mvp_workbooks (name, vocabulary_label, vocabulary_language_code, created_at) VALUES (?, ?, ?, ?)").run(name, vocabularyLabel, languageCode, String(row.created_at ?? new Date().toISOString())).lastInsertRowid);
-      if (index === 0) this.db.prepare("UPDATE mvp_workbooks SET name = ?, vocabulary_label = ?, vocabulary_language_code = ?, created_at = ? WHERE id = ?").run(name, vocabularyLabel, languageCode, String(row.created_at ?? new Date().toISOString()), id);
-      this.db.prepare("DELETE FROM mvp_workbook_meaning_attributes WHERE workbook_id = ?").run(id);
-      this.db.prepare("INSERT INTO mvp_workbook_meaning_attributes (workbook_id, position, label, language_code) VALUES (?, 1, ?, NULL)").run(id, meaningLabel);
-      ids.push(id);
-    }
-    const entries = this.db.prepare("SELECT id, workbook_id FROM vocab_entries ORDER BY id ASC").all() as Record<string, unknown>[];
-    const mvpEntries = this.db.prepare("SELECT id FROM mvp_entries ORDER BY id ASC").all() as Record<string, unknown>[];
-    const update = this.db.prepare("UPDATE mvp_entries SET workbook_id = ? WHERE id = ?");
-    for (let index = 0; index < entries.length && index < mvpEntries.length; index += 1) {
-      const sourceIndex = legacy.findIndex((row) => Number(row.id) === Number(entries[index].workbook_id));
-      update.run(ids[sourceIndex >= 0 ? sourceIndex : 0], Number(mvpEntries[index].id));
-    }
-    this.setMeta("legacy_workbook_split_complete", "1");
+  private validateEntryAssociations(workbookId: number, attributes: Record<string, string>, tagIds: number[]): void {
+    const fields = new Set((this.db.prepare("SELECT field_key FROM workbook_fields WHERE workbook_id = ? AND role = 'optional'").all(workbookId) as Array<{ field_key: string }>).map((row) => String(row.field_key)));
+    for (const key of Object.keys(attributes)) if (!fields.has(key)) throw new ValidationError(`Attribute '${key}' does not belong to this workbook.`);
+    for (const tagId of new Set(tagIds)) if (!this.db.prepare("SELECT 1 FROM pos_tags WHERE id = ? AND workbook_id = ?").get(tagId, workbookId)) throw new ValidationError(`Part-of-speech tag ${tagId} does not belong to this workbook.`);
   }
-
-  private ensureDefaultWorkbookIfNeeded(name: string | null): number | null {
-    const existingWorkbookId = this.firstWorkbookId();
-    if (existingWorkbookId !== null) {
-      return existingWorkbookId;
-    }
-    if (name === null) {
-      return null;
-    }
-    const result = this.db.prepare("INSERT INTO mvp_workbooks (name) VALUES (?)").run(name);
-    return Number(result.lastInsertRowid);
+  private saveEntryValues(entryId: number, workbookId: number, meanings: string[], attributes: Record<string, string>): void {
+    const fields = this.db.prepare("SELECT id, field_key, role, position FROM workbook_fields WHERE workbook_id = ?").all(workbookId) as Record<string, unknown>[];
+    const insert = this.db.prepare("INSERT INTO entry_field_values (entry_id, field_id, workbook_id, value) VALUES (?, ?, ?, ?)");
+    for (const field of fields) insert.run(entryId, Number(field.id), workbookId, field.role === "meaning" ? meanings[Number(field.position) - 1] ?? "" : attributes[String(field.field_key)] ?? "");
   }
-
-  private ensureCurrentWorkbookSetting(): void {
-    const currentWorkbookId = this.getCurrentWorkbookId();
-    this.writeCurrentWorkbookId(currentWorkbookId);
+  private saveEntryTags(entryId: number, workbookId: number, tagIds: number[]): void {
+    this.db.prepare("DELETE FROM entry_pos_tags WHERE entry_id = ?").run(entryId);
+    const insert = this.db.prepare("INSERT INTO entry_pos_tags (entry_id, tag_id, workbook_id) VALUES (?, ?, ?)");
+    for (const tagId of new Set(tagIds)) insert.run(entryId, tagId, workbookId);
   }
-
-  private countWorkbooks(): number {
-    const row = this.db.prepare("SELECT COUNT(*) AS count FROM mvp_workbooks").get() as Record<string, unknown>;
-    return Number(row.count ?? 0);
-  }
-
-  private resolveWorkbookId(workbookId?: number): number | null {
-    if (workbookId !== undefined) {
-      return this.getWorkbook(workbookId) ? workbookId : null;
-    }
-    return this.getCurrentWorkbookId();
-  }
-
-  private firstWorkbookId(): number | null {
-    const row = this.db.prepare("SELECT id FROM mvp_workbooks ORDER BY id ASC LIMIT 1").get() as Record<string, unknown> | undefined;
-    return row ? Number(row.id) : null;
-  }
-
-  private readCurrentWorkbookId(): number | null {
-    const value = this.getMeta("current_workbook_id");
-    if (value === null || value.trim() === "") {
-      return null;
-    }
-    const parsed = Number(value);
-    return Number.isInteger(parsed) ? parsed : null;
-  }
-
-  private writeCurrentWorkbookId(workbookId: number | null): void {
-    this.setMeta("current_workbook_id", workbookId === null ? "" : String(workbookId));
-  }
-
-  private readLegacyCurrentWorkbookId(): number | null {
-    if (!this.tableExists("app_settings")) {
-      return null;
-    }
-    const row = this.db
-      .prepare(
-        `
-        SELECT value
-        FROM app_settings
-        WHERE key = 'current_workbook_id'
-        `,
-      )
-      .get() as Record<string, unknown> | undefined;
-    if (!row || row.value == null || String(row.value).trim() === "") {
-      return null;
-    }
-    const parsed = Number(row.value);
-    return Number.isInteger(parsed) ? parsed : null;
-  }
-
-  private getMeta(key: string): string | null {
-    const row = this.db.prepare("SELECT value FROM mvp_meta WHERE key = ?").get(key) as Record<string, unknown> | undefined;
-    return row ? String(row.value ?? "") : null;
-  }
-
-  private setMeta(key: string, value: string): void {
-    this.db
-      .prepare(
-        `
-        INSERT INTO mvp_meta (key, value)
-        VALUES (?, ?)
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value
-        `,
-      )
-      .run(key, value);
-  }
+  private ensurePosSupported(workbookId: number): void { if (!this.requireWorkbook(workbookId).posEnabled) throw new ValidationError("Part of speech is disabled for this workbook."); }
+  private requireWorkbook(workbookId: number): WorkbookRow { const workbook = this.getWorkbook(workbookId); if (!workbook) throw new Error(`Workbook with id ${workbookId} was not found.`); return workbook; }
+  private requireEntry(entryId: number): EntryRow { const entry = this.getEntry(entryId); if (!entry) throw new Error(`Entry with id ${entryId} was not found.`); return entry; }
+  private readCurrentWorkbookId(): number | null { const row = this.db.prepare("SELECT current_workbook_id FROM app_settings WHERE singleton_id = 1").get() as { current_workbook_id: number | null }; return row.current_workbook_id == null ? null : Number(row.current_workbook_id); }
+  private firstWorkbookId(): number | null { const row = this.db.prepare("SELECT id FROM workbooks ORDER BY id LIMIT 1").get() as { id: number } | undefined; return row ? Number(row.id) : null; }
 }

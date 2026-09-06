@@ -1,4 +1,4 @@
-import { CreateWorkbookInput, defaultDbPath, EntryRow, MeaningAttribute, MetadataAttribute, PosTag, WorkbookRow, VocabularyRepository } from "./db.js";
+import { CreateWorkbookInput, defaultDbPath, EntryRow, MeaningAttribute, MetadataAttribute, PosTag, WorkbookConfigurationInput, WorkbookRow, WorkbookUpdateImpact, VocabularyRepository } from "./db.js";
 
 export class VocabularyBackend {
   private readonly repository: VocabularyRepository;
@@ -45,6 +45,8 @@ export class VocabularyBackend {
   }
 
   createConfiguredWorkbook(input: CreateWorkbookInput): WorkbookRow { return this.repository.createConfiguredWorkbook(input); }
+  previewWorkbookUpdate(workbookId: number, input: WorkbookConfigurationInput): WorkbookUpdateImpact { return this.repository.previewWorkbookUpdate(workbookId, input); }
+  updateConfiguredWorkbook(workbookId: number, input: WorkbookConfigurationInput, confirmDataLoss = false): WorkbookRow { return this.repository.updateConfiguredWorkbook(workbookId, input, confirmDataLoss); }
 
   deleteWorkbook(workbookId: number): number | null {
     return this.repository.deleteWorkbook(workbookId);
@@ -89,6 +91,7 @@ export class VocabularyBackend {
   listMetadataAttributes(workbookId: number): MetadataAttribute[] { return this.repository.listMetadataAttributes(workbookId); }
   updateMetadataAttributes(workbookId: number, attributes: MetadataAttribute[]): WorkbookRow { return this.repository.updateMetadataAttributes(workbookId, attributes); }
   listPosTags(workbookId: number): PosTag[] { return this.repository.listPosTags(workbookId); }
+  listStoredPosTags(workbookId: number): PosTag[] { return this.repository.listStoredPosTags(workbookId); }
   addPosTag(workbookId: number, name: string): PosTag { return this.repository.addPosTag(workbookId, name); }
   renamePosTag(tagId: number, name: string): void { this.repository.renamePosTag(tagId, name); }
   deletePosTag(tagId: number): void { this.repository.deletePosTag(tagId); }
