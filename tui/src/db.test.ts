@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { convertHybridDatabase } from "./convert-db.js";
-import { LANGUAGE_PRESET_DEFINITIONS, VocabularyRepository, WorkbookDataLossError, WorkbookConfigurationInput } from "./db.js";
+import { LANGUAGE_PRESET_DEFINITIONS, ValidationError, VocabularyRepository, WorkbookDataLossError, WorkbookConfigurationInput } from "./db.js";
 import { assertDatabaseIntegrity, runSchemaMigrations } from "./schema.js";
 
 function temporaryDatabase(): { directory: string; path: string; cleanup: () => void } {
@@ -79,6 +79,89 @@ test("workbook updates require confirmation before deleting populated fields", (
     assert.equal(repository.getEntry(1)?.attributes.example_sentence_1, undefined);
     repository.close();
   } finally { temp.cleanup(); }
+});
+
+test("attribute updates preserve stable meaning identity and values when a middle meaning is removed", () => {
+  const temp = temporaryDatabase(); let repository: VocabularyRepository | undefined;
+  try {
+    repository = new VocabularyRepository(temp.path);
+    const input = basicWorkbook();
+    input.meaningAttributes = [
+      { position: 1, label: "English", languageCode: "EN" },
+      { position: 2, label: "Definition", languageCode: "EN" },
+      { position: 3, label: "Alias", languageCode: "EN" },
+    ];
+    const workbook = repository.createConfiguredWorkbook(input);
+    const entry = repository.addEntry(workbook.id, "cat", "cat", ["cat", "small feline", "kitty"]);
+    const before = repository.getWorkbook(workbook.id)!;
+    const alias = before.metadataAttributes.find((field) => field.role === "meaning" && field.label === "Alias")!;
+    const fields = before.metadataAttributes.filter((field) => field.key !== "vocab" && field.label !== "Definition");
+
+    assert.deepEqual(repository.previewWorkbookAttributesUpdate(workbook.id, { vocabularyLabel: before.vocabularyLabel, fields }).populatedFields.map((field) => field.label), ["Definition"]);
+    const updated = repository.updateWorkbookAttributes(workbook.id, { vocabularyLabel: before.vocabularyLabel, fields }, true);
+    const movedAlias = updated.metadataAttributes.find((field) => field.label === "Alias")!;
+    assert.equal(movedAlias.id, alias.id);
+    assert.equal(movedAlias.displayOrder, 2);
+    assert.deepEqual(repository.getEntry(entry.id)?.meanings, ["cat", "kitty"]);
+  } finally { repository?.close(); temp.cleanup(); }
+});
+
+test("new attributes receive blank values and Meaning 1 remains required and visible", () => {
+  const temp = temporaryDatabase(); let repository: VocabularyRepository | undefined;
+  try {
+    repository = new VocabularyRepository(temp.path);
+    const workbook = repository.createConfiguredWorkbook(basicWorkbook());
+    const entry = repository.addEntry(workbook.id, "cat", "cat");
+    const fields = workbook.metadataAttributes.filter((field) => field.key !== "vocab").map((field) => field.role === "meaning" ? { ...field, required: false, visible: false } : field);
+    fields.push({ key: "meaning_note", role: "meaning", label: "Meaning Note", languageCode: null, required: false, visible: false, displayOrder: 2 });
+    fields.push({ key: "source", role: "optional", label: "Source", languageCode: null, required: false, visible: true, displayOrder: 99 });
+
+    const updated = repository.updateWorkbookAttributes(workbook.id, { vocabularyLabel: "Term", fields });
+    assert.equal(updated.vocabularyLabel, "Term");
+    assert.equal(updated.meaningAttributes[0].position, 1);
+    const firstMeaning = updated.metadataAttributes.find((field) => field.role === "meaning" && field.displayOrder === 1)!;
+    assert.equal(firstMeaning.required, true);
+    assert.equal(firstMeaning.visible, true);
+    assert.deepEqual(repository.getEntry(entry.id)?.meanings, ["cat", ""]);
+    assert.equal(repository.getEntry(entry.id)?.attributes.source, "");
+  } finally { repository?.close(); temp.cleanup(); }
+});
+
+test("attribute drafts reject invalid identities, section changes, and duplicate labels", () => {
+  const temp = temporaryDatabase(); let repository: VocabularyRepository | undefined;
+  try {
+    repository = new VocabularyRepository(temp.path);
+    const workbook = repository.createConfiguredWorkbook(basicWorkbook());
+    const fields = workbook.metadataAttributes.filter((field) => field.key !== "vocab");
+    const meaning = fields.find((field) => field.role === "meaning")!;
+    const optional = fields.find((field) => field.role === "optional")!;
+    assert.throws(() => repository!.updateWorkbookAttributes(workbook.id, { vocabularyLabel: workbook.vocabularyLabel, fields: [{ ...meaning, role: "optional" }, ...fields.filter((field) => field !== meaning)] }), ValidationError);
+    assert.throws(() => repository!.updateWorkbookAttributes(workbook.id, { vocabularyLabel: workbook.vocabularyLabel, fields: fields.map((field) => field === optional ? { ...field, id: undefined } : field) }), /already belongs/i);
+    assert.throws(() => repository!.updateWorkbookAttributes(workbook.id, { vocabularyLabel: workbook.vocabularyLabel, fields: fields.map((field) => field === optional ? { ...field, label: fields.find((candidate) => candidate.role === "optional" && candidate !== optional)!.label } : field) }), /must be unique/i);
+
+    const changedType = { ...basicWorkbook(), vocabularyKind: "non_language" as const, vocabularyLanguageCode: null };
+    assert.throws(() => repository!.updateConfiguredWorkbook(workbook.id, changedType), /type cannot be changed/i);
+    assert.throws(() => repository!.updateConfiguredWorkbook(workbook.id, { ...basicWorkbook(), presetEnabled: false }), /preset selection cannot be changed/i);
+  } finally { repository?.close(); temp.cleanup(); }
+});
+
+test("only populated attribute removal requires destructive confirmation", () => {
+  const temp = temporaryDatabase(); let repository: VocabularyRepository | undefined;
+  try {
+    repository = new VocabularyRepository(temp.path);
+    const workbook = repository.createConfiguredWorkbook(basicWorkbook());
+    repository.addEntry(workbook.id, "cat", "cat", ["cat"], { kana: "", example_sentence_1: "A cat." });
+    const baseFields = workbook.metadataAttributes.filter((field) => field.key !== "vocab");
+    const withoutEmptyKana = baseFields.filter((field) => field.key !== "kana");
+    assert.deepEqual(repository.previewWorkbookAttributesUpdate(workbook.id, { vocabularyLabel: workbook.vocabularyLabel, fields: withoutEmptyKana }).populatedFields, []);
+    repository.updateWorkbookAttributes(workbook.id, { vocabularyLabel: workbook.vocabularyLabel, fields: withoutEmptyKana });
+
+    const refreshed = repository.getWorkbook(workbook.id)!;
+    const withoutExample = refreshed.metadataAttributes.filter((field) => field.key !== "vocab" && field.key !== "example_sentence_1");
+    const impact = repository.previewWorkbookAttributesUpdate(workbook.id, { vocabularyLabel: refreshed.vocabularyLabel, fields: withoutExample });
+    assert.deepEqual(impact.populatedFields.map((field) => [field.label, field.valueCount]), [["Example Sentence 1", 1]]);
+    assert.throws(() => repository!.updateWorkbookAttributes(workbook.id, { vocabularyLabel: refreshed.vocabularyLabel, fields: withoutExample }), WorkbookDataLossError);
+  } finally { repository?.close(); temp.cleanup(); }
 });
 
 test("never-tested entries rank before tested entries", () => {

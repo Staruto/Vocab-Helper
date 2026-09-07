@@ -1,4 +1,4 @@
-import { CreateWorkbookInput, defaultDbPath, EntryRow, MeaningAttribute, MetadataAttribute, PosTag, WorkbookConfigurationInput, WorkbookRow, WorkbookUpdateImpact, VocabularyRepository } from "./db.js";
+import { CreateWorkbookInput, defaultDbPath, EntryRow, MeaningAttribute, MetadataAttribute, PosTag, WorkbookAttributesDraft, WorkbookConfigurationInput, WorkbookRow, WorkbookUpdateImpact, VocabularyRepository } from "./db.js";
 
 export class VocabularyBackend {
   private readonly repository: VocabularyRepository;
@@ -89,7 +89,8 @@ export class VocabularyBackend {
   }
 
   listMetadataAttributes(workbookId: number): MetadataAttribute[] { return this.repository.listMetadataAttributes(workbookId); }
-  updateMetadataAttributes(workbookId: number, attributes: MetadataAttribute[]): WorkbookRow { return this.repository.updateMetadataAttributes(workbookId, attributes); }
+  previewWorkbookAttributesUpdate(workbookId: number, draft: WorkbookAttributesDraft): WorkbookUpdateImpact { return this.repository.previewWorkbookAttributesUpdate(workbookId, draft); }
+  updateWorkbookAttributes(workbookId: number, draft: WorkbookAttributesDraft, confirmDataLoss = false): WorkbookRow { return this.repository.updateWorkbookAttributes(workbookId, draft, confirmDataLoss); }
   listPosTags(workbookId: number): PosTag[] { return this.repository.listPosTags(workbookId); }
   listStoredPosTags(workbookId: number): PosTag[] { return this.repository.listStoredPosTags(workbookId); }
   addPosTag(workbookId: number, name: string): PosTag { return this.repository.addPosTag(workbookId, name); }
@@ -97,8 +98,6 @@ export class VocabularyBackend {
   deletePosTag(tagId: number): void { this.repository.deletePosTag(tagId); }
   setEntryPosTags(entryId: number, tagIds: number[]): void { this.repository.setEntryPosTags(entryId, tagIds); }
   setPosEnabled(workbookId: number, enabled: boolean): WorkbookRow { return this.repository.setPosEnabled(workbookId, enabled); }
-  setPresetEnabled(workbookId: number, enabled: boolean): WorkbookRow { return this.repository.setPresetEnabled(workbookId, enabled); }
-  applyLanguagePreset(workbookId: number): WorkbookRow { return this.repository.applyLanguagePreset(workbookId); }
 
   close(): void {
     this.repository.close();
