@@ -607,7 +607,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
           metadata: {}, metadataIndex: 0, selectedTagIds: [], posIndex: 0,
         });
         setBuffer("");
-        setStatusLines(buildStatusLines(`Enter ${workbook.meaningAttributes[0]?.label ?? "Meaning 1"}.`));
+        setStatusLines(buildStatusLines(`Enter ${workbook.meaningAttributes[0]?.label ?? "Primary Meaning"}.`));
         return;
       }
 
@@ -665,7 +665,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
           metadata: mode.metadata, metadataIndex: 0, selectedTagIds: mode.selectedTagIds, posIndex: 0,
         });
         setBuffer(mode.meanings[0] ?? "");
-        setStatusLines(buildStatusLines(`Update ${workbook.meaningAttributes[0]?.label ?? "Meaning 1"}.`));
+        setStatusLines(buildStatusLines(`Update ${workbook.meaningAttributes[0]?.label ?? "Primary Meaning"}.`));
         return;
       }
 
@@ -789,7 +789,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   const safePageIndex = clampPageIndex(pageIndex, entries.length);
   const pageText = `Page ${safePageIndex + 1}/${pageCount}`;
   const tableLines = useMemo(
-    () => buildTableLines(entries, safePageIndex, width, PAGE_SIZE, workbook.vocabularyLabel, workbook.meaningAttributes[0]?.label ?? "Meaning 1", workbook.metadataAttributes),
+    () => buildTableLines(entries, safePageIndex, width, PAGE_SIZE, workbook.vocabularyLabel, workbook.meaningAttributes[0]?.label ?? "Primary Meaning", workbook.metadataAttributes),
     [entries, safePageIndex, width, workbook.vocabularyLabel, workbook.meaningAttributes, workbook.metadataAttributes],
   );
   const promptLine = `> ${buffer}_`;
@@ -973,7 +973,7 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
   const [posEnabled, setPosEnabled] = useState(existingWorkbook?.posEnabled ?? true);
   const [tags, setTags] = useState<Array<{ id?: number; name: string; predefined: boolean }>>(() => existingWorkbook ? backend.listStoredPosTags(existingWorkbook.id) : []);
   const [meaningCount, setMeaningCount] = useState(existingWorkbook?.meaningAttributes.length ?? 1);
-  const [meanings, setMeanings] = useState<MeaningAttribute[]>(existingWorkbook?.meaningAttributes ?? [{ position: 1, label: "Meaning 1", languageCode: null }]);
+  const [meanings, setMeanings] = useState<MeaningAttribute[]>(existingWorkbook?.meaningAttributes ?? [{ position: 1, label: "Primary Meaning", languageCode: null }]);
   const [meaningIndex, setMeaningIndex] = useState(0);
   const [meaningPalette, setMeaningPalette] = useState<number | null>(null);
   const [attributes, setAttributes] = useState<MetadataAttribute[]>(() => existingWorkbook?.metadataAttributes.filter((item) => item.role === "optional") ?? []);
@@ -1163,7 +1163,7 @@ function WorkbookEditScreen({
   const [vocabularyLanguageCode, setVocabularyLanguageCode] = useState<string | null>(existingWorkbook?.vocabularyLanguageCode ?? null);
   const [meaningCount, setMeaningCount] = useState(existingWorkbook?.meaningAttributes.length ?? 1);
   const [meaningAttributes, setMeaningAttributes] = useState<MeaningAttribute[]>(existingWorkbook?.meaningAttributes ?? [
-    { position: 1, label: "Meaning 1", languageCode: null },
+    { position: 1, label: "Primary Meaning", languageCode: null },
   ]);
   const [meaningIndex, setMeaningIndex] = useState(0);
   const [buffer, setBuffer] = useState(existingWorkbook?.name ?? "");
@@ -1214,7 +1214,7 @@ function WorkbookEditScreen({
         });
         setMeaningAttributes(nextAttributes);
         setMeaningIndex(0);
-        setBuffer(nextAttributes[0]?.label ?? "Meaning 1");
+        setBuffer(nextAttributes[0]?.label ?? "Primary Meaning");
         setStage("meaning");
         setError("");
       }
@@ -1509,6 +1509,28 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
   function beginRename(): void {
     setEditAction("rename"); setBuffer(selected.section === "vocabulary" ? vocabularyLabel : selectedField?.label ?? ""); setMessage("Enter a new display name.");
   }
+  function promoteSelectedMeaning(): void {
+    if (selected.section !== "meaning" || !selectedField || meanings[0] === selectedField) return;
+    if (selectedField.id === undefined) { setMessage("Save this new meaning before making it the Primary Meaning."); return; }
+    try {
+      const impact = backend.getMeaningPromotionImpact(workbook.id, selectedField.id);
+      if (impact.emptyEntryCount > 0) {
+        const noun = impact.emptyEntryCount === 1 ? "entry is" : "entries are";
+        setMessage(`Cannot make ${selectedField.label} the Primary Meaning: ${impact.emptyEntryCount} ${noun} empty.`);
+        return;
+      }
+      setFields((current) => {
+        const promoted = current.find((field) => field.id === selectedField.id)!;
+        const reorderedMeanings = [
+          { ...promoted, required: true, visible: true },
+          ...current.filter((field) => field.role === "meaning" && field.id !== promoted.id).map((field) => ({ ...field, required: false })),
+        ];
+        return [...reorderedMeanings, ...current.filter((field) => field.role === "optional")];
+      });
+      setSelectedIndex(1);
+      setMessage(`${selectedField.label} will become the Primary Meaning when changes are saved.`);
+    } catch (caught) { setMessage(caught instanceof Error ? caught.message : "Could not check this meaning."); }
+  }
   function commitEdit(): void {
     const label = buffer.trim();
     if (!label) { setMessage("Attribute name is required."); return; }
@@ -1563,17 +1585,18 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
     if (key.escape) { if (dirty) { setExitChoice(0); setScreenMode("exit-confirm"); } else onCancel(); return; }
     if (key.upArrow) { setSelectedIndex((value) => value <= 0 ? selections.length - 1 : value - 1); setMessage(""); return; }
     if (key.downArrow) { setSelectedIndex((value) => (value + 1) % selections.length); setMessage(""); return; }
+    if (key.ctrl && input.toLowerCase() === "m") { promoteSelectedMeaning(); return; }
     if (key.ctrl && input.toLowerCase() === "a") { beginAdd(); return; }
     if (key.ctrl && input.toLowerCase() === "r") { beginRename(); return; }
     if (input === " ") {
-      if (selected.section === "vocabulary" || (selected.section === "meaning" && meanings[0] === selectedField)) { setMessage(selected.section === "vocabulary" ? "Vocabulary is always shown." : "Meaning 1 is required and always shown."); return; }
+      if (selected.section === "vocabulary" || (selected.section === "meaning" && meanings[0] === selectedField)) { setMessage(selected.section === "vocabulary" ? "Vocabulary is always shown." : "The Primary Meaning is required and always shown."); return; }
       if (selectedField) setFields((current) => current.map((field) => field === selectedField ? { ...field, visible: !field.visible } : field));
       return;
     }
     if (key.delete) {
       if (selected.section === "vocabulary") { setMessage("Vocabulary cannot be deleted."); return; }
       if (!selectedField) return;
-      if (selected.section === "meaning" && meanings[0] === selectedField) { setMessage("Meaning 1 cannot be deleted."); return; }
+      if (selected.section === "meaning" && meanings[0] === selectedField) { setMessage("The Primary Meaning cannot be deleted."); return; }
       setFields((current) => current.filter((field) => field !== selectedField)); setSelectedIndex((value) => Math.max(0, value - 1)); setMessage(`${selectedField.label} will be removed if changes are saved.`);
     }
   });
@@ -1586,12 +1609,12 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
     return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Confirm data removal", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Saving will permanently remove stored values from these fields:", width)}</Text><Text>{padLine("", width)}</Text>{destructiveFields.map((field) => <Text key={field.label} color="red">{padLine(`${field.label}: ${field.valueCount} populated value(s)`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color="cyan">{padLine(`Type yes: ${confirmBuffer}_`, width)}</Text><Text color="red">{padLine(message, width)}</Text><Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Enter confirm | Esc continue editing", width)}</Text></Box>;
   }
 
-  const meaningFooter = meanings[0] === selectedField ? "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Esc leave" : "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Space show/hide | Del remove | Esc leave";
+  const meaningFooter = meanings[0] === selectedField ? "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Esc leave" : `↑↓ navigate | Ctrl+A add | Ctrl+R rename${selectedField?.id === undefined ? "" : " | Ctrl+M make primary"} | Space show/hide | Del remove | Esc leave`;
   const footer = editAction !== "none" ? "Enter confirm | Esc cancel edit" : selected.section === "vocabulary" ? "↑↓ navigate | Ctrl+R rename | Esc leave" : selected.section === "meaning" ? meaningFooter : "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Space show/hide | Del remove | Esc leave";
-  const row = (field: MetadataAttribute, fieldIndex: number) => <Text key={field.id ?? field.key} color={selected.fieldIndex === fieldIndex ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{`${selected.fieldIndex === fieldIndex ? ">" : " "} ${field.label} [${field.visible ? "shown" : "hidden"}]${field.required ? " (required)" : ""}`}</Text>;
+  const row = (field: MetadataAttribute, fieldIndex: number) => <Text key={field.id ?? field.key} color={selected.fieldIndex === fieldIndex ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{`${selected.fieldIndex === fieldIndex ? ">" : " "} ${field.label} [${field.visible ? "shown" : "hidden"}]${meanings[0] === field ? " (primary, required)" : ""}`}</Text>;
   return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Attributes — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Configure field names and visibility. Changes are staged until you leave this page.", width)}</Text><Text color={message ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text>
     <Box flexDirection="column" borderStyle="single" borderColor={selected.section === "vocabulary" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}><Text bold color={selected.section === "vocabulary" ? SELECTED_TEXT_COLOR : undefined}>Vocabulary</Text><Text color={AUXILIARY_TEXT_COLOR}>The workbook type is fixed. Only this display name can be changed.</Text><Text color={selected.section === "vocabulary" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{`${selected.section === "vocabulary" ? ">" : " "} ${vocabularyLabel} [shown] (required)`}</Text></Box>
-    <Box flexDirection="column" borderStyle="single" borderColor={selected.section === "meaning" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}><Text bold color={selected.section === "meaning" ? SELECTED_TEXT_COLOR : undefined}>Meanings</Text><Text color={AUXILIARY_TEXT_COLOR}>Meaning 1 is required and always shown. Up to five meanings are supported.</Text>{fields.map((field, index) => field.role === "meaning" ? row(field, index) : null)}</Box>
+    <Box flexDirection="column" borderStyle="single" borderColor={selected.section === "meaning" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}><Text bold color={selected.section === "meaning" ? SELECTED_TEXT_COLOR : undefined}>Meanings</Text><Text color={AUXILIARY_TEXT_COLOR}>The Primary Meaning is required and always shown. Up to five meanings are supported.</Text>{fields.map((field, index) => field.role === "meaning" ? row(field, index) : null)}</Box>
     <Box flexDirection="column" borderStyle="single" borderColor={selected.section === "optional" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}><Text bold color={selected.section === "optional" ? SELECTED_TEXT_COLOR : undefined}>Optional Attributes</Text><Text color={AUXILIARY_TEXT_COLOR}>Supplemental fields can be freely added, renamed, hidden, shown, or removed.</Text>{optional.length ? fields.map((field, index) => field.role === "optional" ? row(field, index) : null) : <Text color={selected.section === "optional" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{`${selected.section === "optional" ? ">" : " "} No optional attributes`}</Text>}</Box>
     {editAction !== "none" ? <Text color="cyan">{padLine(`${editAction === "add" ? "New attribute" : "Display name"}: ${buffer}_`, width)}</Text> : null}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footer, width)}</Text></Box>;
 }
@@ -1722,7 +1745,7 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
   if (phase === "done") return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice — ${workbook.name}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="green">{padLine(`Final initial-round score: ${score}/${questions.length}`, width)}</Text><Text>{padLine("Press Enter to return.", width)}</Text></Box>;
   if (phase === "detail" && detailEntry) return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Entry #${detailEntry.id}`, width)}</Text><Text color="red">{padLine(`Incorrect — expected: ${detailEntry.vocabulary}`, width)}</Text><Text>{padLine("", width)}</Text>{buildExplicitEntryLines(workbook, detailEntry).map((line, i) => <Text key={`${i}-${line}`} color={AUXILIARY_TEXT_COLOR}>{padLine(line, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Enter advances. Esc cancels.", width)}</Text></Box>;
   const roundLabel = phase === "retry" ? `Retry round ${retryNumber} — Question ${index + 1}/${retryRound.length}` : `Question ${index + 1}/${questions.length}`;
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(roundLabel, width)}</Text><Text>{padLine("", width)}</Text><Text color="yellow">{padLine(`${workbook.meaningAttributes[0]?.label ?? "Meaning 1"}: ${current?.meaning ?? ""}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="cyan">{padLine(`Answer: ${answer}_`, width)}</Text><Text>{padLine("", width)}</Text><Text color="green">{padLine(feedback ?? "Enter submits. Esc cancels.", width)}</Text></Box>;
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(roundLabel, width)}</Text><Text>{padLine("", width)}</Text><Text color="yellow">{padLine(`${workbook.meaningAttributes[0]?.label ?? "Primary Meaning"}: ${current?.meaning ?? ""}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="cyan">{padLine(`Answer: ${answer}_`, width)}</Text><Text>{padLine("", width)}</Text><Text color="green">{padLine(feedback ?? "Enter submits. Esc cancels.", width)}</Text></Box>;
 }
 
 function PracticeEmptyScreen({ workbook, onCancel, onQuit }: { workbook: WorkbookRow; onCancel: () => void; onQuit: () => void }): JSX.Element {

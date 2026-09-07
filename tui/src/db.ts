@@ -19,6 +19,7 @@ export type WorkbookConfigurationInput = {
 };
 export type CreateWorkbookInput = WorkbookConfigurationInput;
 export type WorkbookUpdateImpact = { populatedFields: Array<{ key: string; label: string; valueCount: number }> };
+export type MeaningPromotionImpact = { emptyEntryCount: number };
 export type WorkbookAttributesDraft = { vocabularyLabel: string; fields: MetadataAttribute[] };
 export type WorkbookRow = {
   id: number; name: string; wordCount: number; createdAt: string;
@@ -122,7 +123,7 @@ export class VocabularyRepository {
     });
     return this.requireWorkbook(workbookId);
   }
-  createWorkbook(name: string, vocabularyLabel = "Vocabulary", vocabularyLanguageCode: string | null = null, meaningAttributes: MeaningAttribute[] = [{ position: 1, label: "Meaning 1", languageCode: null }], presetEnabled = vocabularyLanguageCode === "JP"): WorkbookRow {
+  createWorkbook(name: string, vocabularyLabel = "Vocabulary", vocabularyLanguageCode: string | null = null, meaningAttributes: MeaningAttribute[] = [{ position: 1, label: "Primary Meaning", languageCode: null }], presetEnabled = vocabularyLanguageCode === "JP"): WorkbookRow {
     const kind: VocabularyKind = vocabularyLanguageCode ? "preset_language" : "non_language";
     const preset = vocabularyLanguageCode ? LANGUAGE_PRESET_DEFINITIONS[vocabularyLanguageCode] : undefined;
     return this.createConfiguredWorkbook({
@@ -257,6 +258,14 @@ export class VocabularyRepository {
   deleteEntry(entryId: number): void { this.requireEntry(entryId); this.db.prepare("DELETE FROM entries WHERE id = ?").run(entryId); }
 
   listMetadataAttributes(workbookId: number): MetadataAttribute[] { return this.requireWorkbook(workbookId).metadataAttributes; }
+  getMeaningPromotionImpact(workbookId: number, fieldId: number): MeaningPromotionImpact {
+    const field = this.db.prepare("SELECT role FROM workbook_fields WHERE id = ? AND workbook_id = ?").get(fieldId, workbookId) as { role: string } | undefined;
+    if (!field || field.role !== "meaning") throw new ValidationError(`Meaning attribute ${fieldId} does not belong to this workbook.`);
+    const row = this.db.prepare(`SELECT COUNT(*) AS count FROM entries e
+      LEFT JOIN entry_field_values v ON v.entry_id = e.id AND v.field_id = ?
+      WHERE e.workbook_id = ? AND trim(COALESCE(v.value, '')) = ''`).get(fieldId, workbookId) as { count: number };
+    return { emptyEntryCount: Number(row.count) };
+  }
   previewWorkbookAttributesUpdate(workbookId: number, draft: WorkbookAttributesDraft): WorkbookUpdateImpact {
     this.requireWorkbook(workbookId);
     const normalized = this.normalizeAttributesDraft(workbookId, draft);
@@ -268,8 +277,9 @@ export class VocabularyRepository {
       .map((row) => ({ key: String(row.field_key), label: String(row.label), valueCount: Number(row.value_count) })) };
   }
   updateWorkbookAttributes(workbookId: number, draft: WorkbookAttributesDraft, confirmDataLoss = false): WorkbookRow {
-    const normalized = this.normalizeAttributesDraft(workbookId, draft);
     transaction(this.db, () => {
+      const normalized = this.normalizeAttributesDraft(workbookId, draft);
+      this.assertPrimaryMeaningComplete(workbookId, normalized);
       const impact = this.previewWorkbookAttributesUpdate(workbookId, normalized);
       if (impact.populatedFields.length > 0 && !confirmDataLoss) throw new WorkbookDataLossError(impact);
       const retainedIds = new Set(normalized.fields.flatMap((field) => field.id === undefined ? [] : [field.id]));
@@ -430,6 +440,17 @@ export class VocabularyRepository {
     });
     return { vocabularyLabel, fields: [...normalizeFields(meanings, "meaning"), ...normalizeFields(optional, "optional")] };
   }
+  private assertPrimaryMeaningComplete(workbookId: number, draft: WorkbookAttributesDraft): void {
+    const proposed = draft.fields.find((field) => field.role === "meaning");
+    const current = this.db.prepare("SELECT id FROM workbook_fields WHERE workbook_id = ? AND role = 'meaning' AND position = 1").get(workbookId) as { id: number } | undefined;
+    if (proposed?.id === current?.id) return;
+    if (proposed?.id === undefined) throw new ValidationError("Save a new meaning before making it the Primary Meaning.");
+    const emptyEntryCount = this.getMeaningPromotionImpact(workbookId, proposed.id).emptyEntryCount;
+    if (emptyEntryCount > 0) {
+      const noun = emptyEntryCount === 1 ? "entry is" : "entries are";
+      throw new ValidationError(`Cannot make ${proposed?.label ?? "this field"} the Primary Meaning: ${emptyEntryCount} ${noun} empty.`);
+    }
+  }
   private writeFields(workbookId: number, config: WorkbookConfigurationInput): void {
     const insert = this.db.prepare("INSERT INTO workbook_fields (workbook_id, field_key, role, position, label, language_code, is_required, is_visible, provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
     for (const field of config.meaningAttributes) insert.run(workbookId, field.key ?? `meaning_${field.position}`, "meaning", field.position, field.label, field.languageCode, field.position === 1 ? 1 : 0, field.position === 1 ? 1 : 0, "custom");
@@ -492,7 +513,7 @@ export class VocabularyRepository {
   }
   private normalizeEntryMeanings(workbook: WorkbookRow, input: string[]): string[] {
     const values = workbook.meaningAttributes.map((_, index) => trimOptional(input[index]) ?? "");
-    values[0] = trimRequired(values[0] ?? "", workbook.meaningAttributes[0]?.label ?? "Meaning 1"); return values;
+    values[0] = trimRequired(values[0] ?? "", workbook.meaningAttributes[0]?.label ?? "Primary Meaning"); return values;
   }
   private validateEntryAssociations(workbookId: number, attributes: Record<string, string>, tagIds: number[]): void {
     const fields = new Set((this.db.prepare("SELECT field_key FROM workbook_fields WHERE workbook_id = ? AND role = 'optional'").all(workbookId) as Array<{ field_key: string }>).map((row) => String(row.field_key)));

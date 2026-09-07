@@ -70,7 +70,7 @@ export function convertHybridDatabase(sourcePath: string, apply = false): Conver
         const created = String(workbook.created_at ?? new Date().toISOString());
         addWorkbook.run(id, String(workbook.name), kind, String(workbook.vocabulary_label ?? "Vocabulary"), kind === "preset_language" ? code : null, Number(workbook.preset_enabled) ? 1 : 0, kind === "non_language" ? 0 : Number(workbook.pos_enabled) ? 1 : 0, created, created);
         const workbookMeanings = definitions.filter((row) => Number(row.workbook_id) === id);
-        const meanings = workbookMeanings.length ? workbookMeanings : [{ position: 1, label: "Meaning 1", language_code: null }];
+        const meanings = workbookMeanings.length ? workbookMeanings : [{ position: 1, label: "Primary Meaning", language_code: null }];
         for (const definition of meanings) {
           const position = Number(definition.position); const result = addField.run(id, `meaning_${position}`, "meaning", position, String(definition.label), definition.language_code ?? null, position === 1 ? 1 : 0, position === 1 ? 1 : 0, "custom");
           fieldMap.set(`${id}:meaning_${position}`, Number(result.lastInsertRowid));

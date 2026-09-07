@@ -1,4 +1,4 @@
-import { CreateWorkbookInput, defaultDbPath, EntryRow, MeaningAttribute, MetadataAttribute, PosTag, WorkbookAttributesDraft, WorkbookConfigurationInput, WorkbookRow, WorkbookUpdateImpact, VocabularyRepository } from "./db.js";
+import { CreateWorkbookInput, defaultDbPath, EntryRow, MeaningAttribute, MeaningPromotionImpact, MetadataAttribute, PosTag, WorkbookAttributesDraft, WorkbookConfigurationInput, WorkbookRow, WorkbookUpdateImpact, VocabularyRepository } from "./db.js";
 
 export class VocabularyBackend {
   private readonly repository: VocabularyRepository;
@@ -38,7 +38,7 @@ export class VocabularyBackend {
     name: string,
     vocabularyLabel = "Vocabulary",
     vocabularyLanguageCode: string | null = null,
-    meaningAttributes: MeaningAttribute[] = [{ position: 1, label: "Meaning 1", languageCode: null }],
+    meaningAttributes: MeaningAttribute[] = [{ position: 1, label: "Primary Meaning", languageCode: null }],
     presetEnabled = vocabularyLanguageCode === "JP",
   ): WorkbookRow {
     return this.repository.createWorkbook(name, vocabularyLabel, vocabularyLanguageCode, meaningAttributes, presetEnabled);
@@ -89,6 +89,7 @@ export class VocabularyBackend {
   }
 
   listMetadataAttributes(workbookId: number): MetadataAttribute[] { return this.repository.listMetadataAttributes(workbookId); }
+  getMeaningPromotionImpact(workbookId: number, fieldId: number): MeaningPromotionImpact { return this.repository.getMeaningPromotionImpact(workbookId, fieldId); }
   previewWorkbookAttributesUpdate(workbookId: number, draft: WorkbookAttributesDraft): WorkbookUpdateImpact { return this.repository.previewWorkbookAttributesUpdate(workbookId, draft); }
   updateWorkbookAttributes(workbookId: number, draft: WorkbookAttributesDraft, confirmDataLoss = false): WorkbookRow { return this.repository.updateWorkbookAttributes(workbookId, draft, confirmDataLoss); }
   listPosTags(workbookId: number): PosTag[] { return this.repository.listPosTags(workbookId); }

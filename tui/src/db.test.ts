@@ -106,7 +106,7 @@ test("attribute updates preserve stable meaning identity and values when a middl
   } finally { repository?.close(); temp.cleanup(); }
 });
 
-test("new attributes receive blank values and Meaning 1 remains required and visible", () => {
+test("new attributes receive blank values and the primary meaning remains required and visible", () => {
   const temp = temporaryDatabase(); let repository: VocabularyRepository | undefined;
   try {
     repository = new VocabularyRepository(temp.path);
@@ -127,6 +127,77 @@ test("new attributes receive blank values and Meaning 1 remains required and vis
   } finally { repository?.close(); temp.cleanup(); }
 });
 
+test("a fully populated meaning can become primary without changing field identity or values", () => {
+  const temp = temporaryDatabase(); let repository: VocabularyRepository | undefined;
+  try {
+    repository = new VocabularyRepository(temp.path);
+    const input = basicWorkbook();
+    input.meaningAttributes = [
+      { position: 1, label: "English", languageCode: "EN" },
+      { position: 2, label: "Japanese", languageCode: "JP" },
+      { position: 3, label: "Chinese", languageCode: "ZH" },
+    ];
+    const workbook = repository.createConfiguredWorkbook(input);
+    const entry = repository.addEntry(workbook.id, "cat", "cat", ["cat", "猫", "猫"]);
+    const before = repository.getWorkbook(workbook.id)!;
+    const meaningFields = before.metadataAttributes.filter((field) => field.role === "meaning");
+    const japanese = meaningFields[1];
+    assert.deepEqual(repository.getMeaningPromotionImpact(workbook.id, japanese.id!).emptyEntryCount, 0);
+
+    const fields = [japanese, meaningFields[0], meaningFields[2], ...before.metadataAttributes.filter((field) => field.role === "optional")];
+    const updated = repository.updateWorkbookAttributes(workbook.id, { vocabularyLabel: before.vocabularyLabel, fields });
+    assert.deepEqual(updated.meaningAttributes.map((field) => [field.id, field.label]), [[japanese.id, "Japanese"], [meaningFields[0].id, "English"], [meaningFields[2].id, "Chinese"]]);
+    const updatedFields = updated.metadataAttributes.filter((field) => field.role === "meaning");
+    assert.equal(updatedFields[0].required, true);
+    assert.equal(updatedFields[0].visible, true);
+    assert.equal(updatedFields[1].required, false);
+    assert.equal(updatedFields[1].visible, true);
+    assert.deepEqual(repository.getEntry(entry.id)?.meanings, ["猫", "cat", "猫"]);
+    assert.equal(repository.getEntry(entry.id)?.meaning, "猫");
+  } finally { repository?.close(); temp.cleanup(); }
+});
+
+test("an incomplete meaning cannot become primary and the failed save is atomic", () => {
+  const temp = temporaryDatabase(); let repository: VocabularyRepository | undefined;
+  try {
+    repository = new VocabularyRepository(temp.path);
+    const input = basicWorkbook();
+    input.meaningAttributes = [
+      { position: 1, label: "English", languageCode: "EN" },
+      { position: 2, label: "Japanese", languageCode: "JP" },
+    ];
+    const workbook = repository.createConfiguredWorkbook(input);
+    repository.addEntry(workbook.id, "cat", "cat", ["cat", "猫"]);
+    repository.addEntry(workbook.id, "dog", "dog", ["dog", "  "]);
+    const before = repository.getWorkbook(workbook.id)!;
+    const meaningFields = before.metadataAttributes.filter((field) => field.role === "meaning");
+    assert.equal(repository.getMeaningPromotionImpact(workbook.id, meaningFields[1].id!).emptyEntryCount, 1);
+
+    const fields = [meaningFields[1], meaningFields[0], ...before.metadataAttributes.filter((field) => field.role === "optional")];
+    assert.throws(() => repository!.updateWorkbookAttributes(workbook.id, { vocabularyLabel: before.vocabularyLabel, fields }), /1 entry is empty/);
+    assert.deepEqual(repository.getWorkbook(workbook.id)?.meaningAttributes.map((field) => field.id), meaningFields.map((field) => field.id));
+    assert.deepEqual(repository.listEntries(workbook.id).map((entry) => entry.meanings), [["cat", "猫"], ["dog", ""]]);
+  } finally { repository?.close(); temp.cleanup(); }
+});
+
+test("empty workbooks allow primary promotion and enforce it for later entries", () => {
+  const temp = temporaryDatabase(); let repository: VocabularyRepository | undefined;
+  try {
+    repository = new VocabularyRepository(temp.path);
+    const input = basicWorkbook();
+    input.meaningAttributes = [
+      { position: 1, label: "English", languageCode: "EN" },
+      { position: 2, label: "Japanese", languageCode: "JP" },
+    ];
+    const workbook = repository.createConfiguredWorkbook(input);
+    const meaningFields = workbook.metadataAttributes.filter((field) => field.role === "meaning");
+    assert.equal(repository.getMeaningPromotionImpact(workbook.id, meaningFields[1].id!).emptyEntryCount, 0);
+    const fields = [meaningFields[1], meaningFields[0], ...workbook.metadataAttributes.filter((field) => field.role === "optional")];
+    repository.updateWorkbookAttributes(workbook.id, { vocabularyLabel: workbook.vocabularyLabel, fields });
+    assert.throws(() => repository!.addEntry(workbook.id, "cat", "", ["", "cat"]), /Japanese is required/);
+  } finally { repository?.close(); temp.cleanup(); }
+});
+
 test("attribute drafts reject invalid identities, section changes, and duplicate labels", () => {
   const temp = temporaryDatabase(); let repository: VocabularyRepository | undefined;
   try {
@@ -136,6 +207,8 @@ test("attribute drafts reject invalid identities, section changes, and duplicate
     const meaning = fields.find((field) => field.role === "meaning")!;
     const optional = fields.find((field) => field.role === "optional")!;
     assert.throws(() => repository!.updateWorkbookAttributes(workbook.id, { vocabularyLabel: workbook.vocabularyLabel, fields: [{ ...meaning, role: "optional" }, ...fields.filter((field) => field !== meaning)] }), ValidationError);
+    const newPrimary = { key: "meaning_new", role: "meaning" as const, label: "New Primary", languageCode: null, required: true, visible: true, displayOrder: 1 };
+    assert.throws(() => repository!.updateWorkbookAttributes(workbook.id, { vocabularyLabel: workbook.vocabularyLabel, fields: [newPrimary, ...fields] }), /save a new meaning/i);
     assert.throws(() => repository!.updateWorkbookAttributes(workbook.id, { vocabularyLabel: workbook.vocabularyLabel, fields: fields.map((field) => field === optional ? { ...field, id: undefined } : field) }), /already belongs/i);
     assert.throws(() => repository!.updateWorkbookAttributes(workbook.id, { vocabularyLabel: workbook.vocabularyLabel, fields: fields.map((field) => field === optional ? { ...field, label: fields.find((candidate) => candidate.role === "optional" && candidate !== optional)!.label } : field) }), /must be unique/i);
 
