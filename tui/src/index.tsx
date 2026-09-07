@@ -1585,7 +1585,7 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
     if (key.escape) { if (dirty) { setExitChoice(0); setScreenMode("exit-confirm"); } else onCancel(); return; }
     if (key.upArrow) { setSelectedIndex((value) => value <= 0 ? selections.length - 1 : value - 1); setMessage(""); return; }
     if (key.downArrow) { setSelectedIndex((value) => (value + 1) % selections.length); setMessage(""); return; }
-    if (key.ctrl && input.toLowerCase() === "m") { promoteSelectedMeaning(); return; }
+    if (key.ctrl && input.toLowerCase() === "p") { promoteSelectedMeaning(); return; }
     if (key.ctrl && input.toLowerCase() === "a") { beginAdd(); return; }
     if (key.ctrl && input.toLowerCase() === "r") { beginRename(); return; }
     if (input === " ") {
@@ -1609,7 +1609,7 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
     return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Confirm data removal", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Saving will permanently remove stored values from these fields:", width)}</Text><Text>{padLine("", width)}</Text>{destructiveFields.map((field) => <Text key={field.label} color="red">{padLine(`${field.label}: ${field.valueCount} populated value(s)`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color="cyan">{padLine(`Type yes: ${confirmBuffer}_`, width)}</Text><Text color="red">{padLine(message, width)}</Text><Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Enter confirm | Esc continue editing", width)}</Text></Box>;
   }
 
-  const meaningFooter = meanings[0] === selectedField ? "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Esc leave" : `↑↓ navigate | Ctrl+A add | Ctrl+R rename${selectedField?.id === undefined ? "" : " | Ctrl+M make primary"} | Space show/hide | Del remove | Esc leave`;
+  const meaningFooter = meanings[0] === selectedField ? "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Esc leave" : `↑↓ navigate | Ctrl+A add | Ctrl+R rename${selectedField?.id === undefined ? "" : " | Ctrl+P make primary"} | Space show/hide | Del remove | Esc leave`;
   const footer = editAction !== "none" ? "Enter confirm | Esc cancel edit" : selected.section === "vocabulary" ? "↑↓ navigate | Ctrl+R rename | Esc leave" : selected.section === "meaning" ? meaningFooter : "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Space show/hide | Del remove | Esc leave";
   const row = (field: MetadataAttribute, fieldIndex: number) => <Text key={field.id ?? field.key} color={selected.fieldIndex === fieldIndex ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{`${selected.fieldIndex === fieldIndex ? ">" : " "} ${field.label} [${field.visible ? "shown" : "hidden"}]${meanings[0] === field ? " (primary, required)" : ""}`}</Text>;
   return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Attributes — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Configure field names and visibility. Changes are staged until you leave this page.", width)}</Text><Text color={message ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text>
