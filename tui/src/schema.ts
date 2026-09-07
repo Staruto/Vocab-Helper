@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 export type SchemaMigration = {
   version: number;
@@ -115,6 +115,65 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
 
         INSERT INTO app_settings (singleton_id, current_workbook_id, tier_colors_enabled)
         VALUES (1, NULL, 1);
+      `);
+    },
+  },
+  {
+    version: 2,
+    apply(db) {
+      db.exec(`
+        CREATE TABLE tag_types (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          workbook_id INTEGER NOT NULL,
+          name TEXT NOT NULL COLLATE NOCASE CHECK (trim(name) <> ''),
+          position INTEGER NOT NULL CHECK (position >= 1),
+          UNIQUE (workbook_id, name),
+          UNIQUE (workbook_id, position),
+          UNIQUE (id, workbook_id),
+          FOREIGN KEY (workbook_id) REFERENCES workbooks(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE tags (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tag_type_id INTEGER NOT NULL,
+          workbook_id INTEGER NOT NULL,
+          name TEXT NOT NULL COLLATE NOCASE CHECK (trim(name) <> ''),
+          UNIQUE (tag_type_id, name),
+          UNIQUE (id, workbook_id),
+          FOREIGN KEY (tag_type_id, workbook_id) REFERENCES tag_types(id, workbook_id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE entry_tags (
+          entry_id INTEGER NOT NULL,
+          tag_id INTEGER NOT NULL,
+          workbook_id INTEGER NOT NULL,
+          PRIMARY KEY (entry_id, tag_id),
+          FOREIGN KEY (entry_id, workbook_id) REFERENCES entries(id, workbook_id) ON DELETE CASCADE,
+          FOREIGN KEY (tag_id, workbook_id) REFERENCES tags(id, workbook_id) ON DELETE CASCADE
+        );
+      `);
+
+      const workbooks = db.prepare(`SELECT w.id, w.pos_enabled,
+        EXISTS(SELECT 1 FROM pos_tags p WHERE p.workbook_id = w.id) AS has_tags
+        FROM workbooks w ORDER BY w.id`).all() as Array<{ id: number; pos_enabled: number; has_tags: number }>;
+      const addType = db.prepare("INSERT INTO tag_types (workbook_id, name, position) VALUES (?, 'Part of Speech', 1)");
+      const copyTags = db.prepare("INSERT INTO tags (id, tag_type_id, workbook_id, name) SELECT id, ?, workbook_id, name FROM pos_tags WHERE workbook_id = ? ORDER BY id");
+      for (const workbook of workbooks) {
+        if (!Number(workbook.pos_enabled) && !Number(workbook.has_tags)) continue;
+        const result = addType.run(Number(workbook.id));
+        copyTags.run(Number(result.lastInsertRowid), Number(workbook.id));
+      }
+      db.exec(`
+        INSERT INTO entry_tags (entry_id, tag_id, workbook_id)
+        SELECT entry_id, tag_id, workbook_id FROM entry_pos_tags;
+
+        DROP TABLE entry_pos_tags;
+        DROP TABLE pos_tags;
+        ALTER TABLE workbooks DROP COLUMN pos_enabled;
+
+        CREATE INDEX idx_tag_types_workbook_order ON tag_types(workbook_id, position);
+        CREATE INDEX idx_tags_type_name ON tags(tag_type_id, name);
+        CREATE INDEX idx_entry_tags_workbook ON entry_tags(workbook_id, entry_id);
       `);
     },
   },

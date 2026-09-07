@@ -5,35 +5,39 @@ import { runSchemaMigrations } from "./schema.js";
 export type VocabularyKind = "preset_language" | "other_language" | "non_language";
 export type MeaningAttribute = { id?: number; key?: string; position: number; label: string; languageCode: string | null };
 export type MetadataAttribute = { id?: number; key: string; role?: "vocabulary" | "meaning" | "optional"; label: string; languageCode: string | null; required: boolean; visible: boolean; displayOrder: number; provenance?: "preset" | "custom" };
-export type PosTag = { id: number; name: string; predefined: boolean };
+export type Tag = { id: number; tagTypeId: number; name: string };
+export type TagType = { id: number; workbookId: number; name: string; position: number; tags: Tag[] };
+export type TagDraft = { id?: number; name: string };
+export type TagTypeDraft = { id?: number; name: string; tags: TagDraft[] };
 export type WorkbookConfigurationInput = {
   name: string;
   vocabularyKind: VocabularyKind;
   vocabularyLabel: string;
   vocabularyLanguageCode: string | null;
   presetEnabled: boolean;
-  posEnabled: boolean;
   meaningAttributes: MeaningAttribute[];
   optionalAttributes: MetadataAttribute[];
-  posTags: Array<{ id?: number; name: string; predefined: boolean }>;
+  tagTypes: TagTypeDraft[];
 };
 export type CreateWorkbookInput = WorkbookConfigurationInput;
 export type WorkbookUpdateImpact = { populatedFields: Array<{ key: string; label: string; valueCount: number }> };
 export type MeaningPromotionImpact = { emptyEntryCount: number };
 export type WorkbookAttributesDraft = { vocabularyLabel: string; fields: MetadataAttribute[] };
+export type WorkbookTagsDraft = { types: TagTypeDraft[] };
+export type TagUpdateImpact = { removals: Array<{ typeName: string; tagName: string | null; tagCount: number; assignmentCount: number; entryCount: number }> };
 export type WorkbookRow = {
   id: number; name: string; wordCount: number; createdAt: string;
   vocabularyLabel: string; vocabularyLanguageCode: string | null;
-  presetEnabled: boolean; vocabularyKind: VocabularyKind; posEnabled: boolean;
+  presetEnabled: boolean; vocabularyKind: VocabularyKind;
   meaningAttributes: MeaningAttribute[]; metadataAttributes: MetadataAttribute[];
 };
 export type EntryRow = {
   id: number; workbookId: number; vocabulary: string; meaning: string; meanings: string[];
-  kanaText: string | null; attributes: Record<string, string>; posTags: PosTag[];
+  kanaText: string | null; attributes: Record<string, string>; tags: Tag[];
   createdAt: string; updatedAt: string; testCount: number; errorCount: number;
   tier: "gray" | "green" | "yellow" | "red"; lastTested: string | null; nextTestDeadline: string | null;
 };
-export type LanguagePresetDefinition = { optionalAttributes: Array<{ key: string; label: string; languageCode: string | null }>; posTags: string[] };
+export type LanguagePresetDefinition = { optionalAttributes: Array<{ key: string; label: string; languageCode: string | null }>; partOfSpeechTags: string[] };
 
 function exampleFields(languageCode: string): LanguagePresetDefinition["optionalAttributes"] {
   return [
@@ -45,22 +49,27 @@ function exampleFields(languageCode: string): LanguagePresetDefinition["optional
 export const LANGUAGE_PRESET_DEFINITIONS: Record<string, LanguagePresetDefinition> = {
   JP: {
     optionalAttributes: [{ key: "kana", label: "Kana", languageCode: "JP" }, ...exampleFields("JP")],
-    posTags: ["名詞", "固有名詞", "イ形容詞", "ナ形容詞", "動詞 (自動詞)", "動詞 (他動詞)", "副詞", "連体詞", "接続詞", "連語", "その他"],
+    partOfSpeechTags: ["名詞", "固有名詞", "イ形容詞", "ナ形容詞", "動詞 (自動詞)", "動詞 (他動詞)", "副詞", "連体詞", "接続詞", "連語", "その他"],
   },
-  EN: { optionalAttributes: exampleFields("EN"), posTags: ["n.", "v.", "adj.", "adv.", "pron.", "prep.", "conj.", "phrase."] },
+  EN: { optionalAttributes: exampleFields("EN"), partOfSpeechTags: ["n.", "v.", "adj.", "adv.", "pron.", "prep.", "conj.", "phrase."] },
   DE: {
     optionalAttributes: exampleFields("DE"),
-    posTags: ["m. noun - maskulines Substantiv", "f. noun - feminines Substantiv", "n. noun - neutrales Substantiv", "art. - Artikel", "adj. - Adjektiv", "pron. - Pronomen", "num. - Numerale", "adv. - Adverb", "prep. - Präposition", "conj. - Konjunktion", "interj. - Interjektion"],
+    partOfSpeechTags: ["m. noun - maskulines Substantiv", "f. noun - feminines Substantiv", "n. noun - neutrales Substantiv", "art. - Artikel", "adj. - Adjektiv", "pron. - Pronomen", "num. - Numerale", "adv. - Adverb", "prep. - Präposition", "conj. - Konjunktion", "interj. - Interjektion"],
   },
-  ZH: { optionalAttributes: exampleFields("ZH"), posTags: [] },
-  KO: { optionalAttributes: exampleFields("KO"), posTags: [] },
-  ES: { optionalAttributes: exampleFields("ES"), posTags: [] },
-  FR: { optionalAttributes: exampleFields("FR"), posTags: [] },
+  ZH: { optionalAttributes: exampleFields("ZH"), partOfSpeechTags: [] },
+  KO: { optionalAttributes: exampleFields("KO"), partOfSpeechTags: [] },
+  ES: { optionalAttributes: exampleFields("ES"), partOfSpeechTags: [] },
+  FR: { optionalAttributes: exampleFields("FR"), partOfSpeechTags: [] },
 };
 
 export class WorkbookDataLossError extends Error {
   constructor(readonly impact: WorkbookUpdateImpact) {
     super("This change removes populated workbook fields and requires confirmation.");
+  }
+}
+export class TagDataLossError extends Error {
+  constructor(readonly impact: TagUpdateImpact) {
+    super("This change removes assigned tags and requires confirmation.");
   }
 }
 export class ValidationError extends Error {}
@@ -112,12 +121,12 @@ export class VocabularyRepository {
     const now = new Date().toISOString();
     const workbookId = transaction(this.db, () => {
       const result = this.db.prepare(`INSERT INTO workbooks
-        (name, vocabulary_kind, vocabulary_label, vocabulary_language_code, preset_enabled, pos_enabled, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(config.name, config.vocabularyKind, config.vocabularyLabel, config.vocabularyLanguageCode, config.presetEnabled ? 1 : 0, config.posEnabled ? 1 : 0, now, now);
+        (name, vocabulary_kind, vocabulary_label, vocabulary_language_code, preset_enabled, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        .run(config.name, config.vocabularyKind, config.vocabularyLabel, config.vocabularyLanguageCode, config.presetEnabled ? 1 : 0, now, now);
       const id = Number(result.lastInsertRowid);
       this.writeFields(id, config);
-      this.writeInitialTags(id, config.posTags);
+      this.writeInitialTagTypes(id, config.tagTypes);
       this.db.prepare("UPDATE app_settings SET current_workbook_id = COALESCE(current_workbook_id, ?) WHERE singleton_id = 1").run(id);
       return id;
     });
@@ -128,9 +137,8 @@ export class VocabularyRepository {
     const preset = vocabularyLanguageCode ? LANGUAGE_PRESET_DEFINITIONS[vocabularyLanguageCode] : undefined;
     return this.createConfiguredWorkbook({
       name, vocabularyKind: kind, vocabularyLabel, vocabularyLanguageCode, meaningAttributes, presetEnabled,
-      posEnabled: kind !== "non_language",
       optionalAttributes: presetEnabled ? (preset?.optionalAttributes ?? []).map((field, index) => ({ ...field, required: false, visible: false, displayOrder: index + 1, provenance: "preset" })) : [],
-      posTags: (preset?.posTags ?? []).map((tagName) => ({ name: tagName, predefined: true })),
+      tagTypes: kind === "non_language" ? [] : [{ name: "Part of Speech", tags: (preset?.partOfSpeechTags ?? []).map((tagName) => ({ name: tagName })) }],
     });
   }
 
@@ -157,10 +165,9 @@ export class VocabularyRepository {
       const impact = this.previewWorkbookUpdate(workbookId, config);
       if (impact.populatedFields.length > 0 && !confirmDataLoss) throw new WorkbookDataLossError(impact);
       this.db.prepare(`UPDATE workbooks SET name = ?, vocabulary_kind = ?, vocabulary_label = ?, vocabulary_language_code = ?,
-        preset_enabled = ?, pos_enabled = ?, updated_at = ? WHERE id = ?`)
-        .run(config.name, config.vocabularyKind, config.vocabularyLabel, config.vocabularyLanguageCode, config.presetEnabled ? 1 : 0, config.posEnabled ? 1 : 0, new Date().toISOString(), workbookId);
+        preset_enabled = ?, updated_at = ? WHERE id = ?`)
+        .run(config.name, config.vocabularyKind, config.vocabularyLabel, config.vocabularyLanguageCode, config.presetEnabled ? 1 : 0, new Date().toISOString(), workbookId);
       this.syncFields(workbookId, config);
-      this.syncTags(workbookId, config.posTags);
     });
     return this.requireWorkbook(workbookId);
   }
@@ -168,9 +175,9 @@ export class VocabularyRepository {
     const current = this.requireWorkbook(workbookId);
     return this.updateConfiguredWorkbook(workbookId, {
       name, vocabularyLabel, vocabularyLanguageCode, meaningAttributes, presetEnabled,
-      vocabularyKind: vocabularyLanguageCode ? "preset_language" : current.vocabularyKind, posEnabled: current.posEnabled,
+      vocabularyKind: vocabularyLanguageCode ? "preset_language" : current.vocabularyKind,
       optionalAttributes: current.metadataAttributes.filter((field) => field.role === "optional"),
-      posTags: this.listStoredPosTags(workbookId),
+      tagTypes: this.listTagTypes(workbookId).map((type) => ({ id: type.id, name: type.name, tags: type.tags.map((tag) => ({ id: tag.id, name: tag.name })) })),
     });
   }
 
@@ -219,39 +226,41 @@ export class VocabularyRepository {
     const meanings = fields.filter((field) => field.role === "meaning").map((field) => String(field.value ?? ""));
     const attributes: Record<string, string> = {};
     for (const field of fields.filter((item) => item.role === "optional")) attributes[String(field.field_key)] = String(field.value ?? "");
-    const tags = this.db.prepare("SELECT t.id, t.name, t.is_predefined FROM entry_pos_tags et JOIN pos_tags t ON t.id = et.tag_id WHERE et.entry_id = ? ORDER BY t.name").all(entryId) as Record<string, unknown>[];
+    const tags = this.db.prepare(`SELECT t.id, t.tag_type_id, t.name FROM entry_tags et
+      JOIN tags t ON t.id = et.tag_id JOIN tag_types tt ON tt.id = t.tag_type_id
+      WHERE et.entry_id = ? ORDER BY tt.position, t.name`).all(entryId) as Record<string, unknown>[];
     const testCount = Number(row.test_count); const errorCount = Number(row.error_count);
     return {
       id: Number(row.id), workbookId, vocabulary: String(row.vocabulary), meaning: meanings[0] ?? "", meanings,
       kanaText: attributes.kana || null, attributes,
-      posTags: tags.map((tag) => ({ id: Number(tag.id), name: String(tag.name), predefined: Number(tag.is_predefined) === 1 })),
+      tags: tags.map((tag) => ({ id: Number(tag.id), tagTypeId: Number(tag.tag_type_id), name: String(tag.name) })),
       createdAt: String(row.created_at), updatedAt: String(row.updated_at), testCount, errorCount, tier: tierFor(testCount, errorCount),
       lastTested: row.last_tested == null ? null : String(row.last_tested), nextTestDeadline: row.next_test_deadline == null ? null : String(row.next_test_deadline),
     };
   }
 
-  addEntry(workbookId: number, vocabulary: string, meaning: string, meanings?: string[], attributes: Record<string, string> = {}, posTagIds: number[] = []): EntryRow {
+  addEntry(workbookId: number, vocabulary: string, meaning: string, meanings?: string[], attributes: Record<string, string> = {}, tagIds: number[] = []): EntryRow {
     const workbook = this.requireWorkbook(workbookId);
     const values = this.normalizeEntryMeanings(workbook, meanings?.length ? meanings : [meaning]);
-    this.validateEntryAssociations(workbookId, attributes, posTagIds);
+    this.validateEntryAssociations(workbookId, attributes, tagIds);
     const now = new Date().toISOString();
     const id = transaction(this.db, () => {
       const result = this.db.prepare("INSERT INTO entries (workbook_id, vocabulary, created_at, updated_at) VALUES (?, ?, ?, ?)").run(workbookId, trimRequired(vocabulary, "Vocabulary"), now, now);
       const entryId = Number(result.lastInsertRowid);
-      this.saveEntryValues(entryId, workbookId, values, attributes); this.saveEntryTags(entryId, workbookId, posTagIds);
+      this.saveEntryValues(entryId, workbookId, values, attributes); this.saveEntryTags(entryId, workbookId, tagIds);
       this.db.prepare("INSERT INTO entry_stats (entry_id) VALUES (?)").run(entryId);
       return entryId;
     });
     return this.getEntry(id)!;
   }
-  updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[], attributes: Record<string, string> = {}, posTagIds: number[] = []): EntryRow {
+  updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[], attributes: Record<string, string> = {}, tagIds: number[] = []): EntryRow {
     const existing = this.requireEntry(entryId); const workbook = this.requireWorkbook(existing.workbookId);
     const values = this.normalizeEntryMeanings(workbook, meanings?.length ? meanings : [meaning]);
-    this.validateEntryAssociations(existing.workbookId, attributes, posTagIds);
+    this.validateEntryAssociations(existing.workbookId, attributes, tagIds);
     transaction(this.db, () => {
       this.db.prepare("UPDATE entries SET vocabulary = ?, updated_at = ? WHERE id = ?").run(trimRequired(vocabulary, "Vocabulary"), new Date().toISOString(), entryId);
       this.db.prepare("DELETE FROM entry_field_values WHERE entry_id = ?").run(entryId);
-      this.saveEntryValues(entryId, existing.workbookId, values, attributes); this.saveEntryTags(entryId, existing.workbookId, posTagIds);
+      this.saveEntryValues(entryId, existing.workbookId, values, attributes); this.saveEntryTags(entryId, existing.workbookId, tagIds);
     });
     return this.getEntry(entryId)!;
   }
@@ -302,32 +311,81 @@ export class VocabularyRepository {
     return this.requireWorkbook(workbookId);
   }
 
-  listPosTags(workbookId: number): PosTag[] { return this.requireWorkbook(workbookId).posEnabled ? this.listStoredPosTags(workbookId) : []; }
-  listStoredPosTags(workbookId: number): PosTag[] {
+  listTagTypes(workbookId: number): TagType[] {
     this.requireWorkbook(workbookId);
-    const rows = this.db.prepare("SELECT id, name, is_predefined FROM pos_tags WHERE workbook_id = ? ORDER BY name").all(workbookId) as Record<string, unknown>[];
-    return rows.map((row) => ({ id: Number(row.id), name: String(row.name), predefined: Number(row.is_predefined) === 1 }));
+    const types = this.db.prepare("SELECT id, name, position FROM tag_types WHERE workbook_id = ? ORDER BY position").all(workbookId) as Record<string, unknown>[];
+    const tags = this.db.prepare("SELECT id, tag_type_id, name FROM tags WHERE workbook_id = ? ORDER BY name").all(workbookId) as Record<string, unknown>[];
+    return types.map((type) => ({
+      id: Number(type.id), workbookId, name: String(type.name), position: Number(type.position),
+      tags: tags.filter((tag) => Number(tag.tag_type_id) === Number(type.id)).map((tag) => ({ id: Number(tag.id), tagTypeId: Number(type.id), name: String(tag.name) })),
+    }));
   }
-  addPosTag(workbookId: number, name: string): PosTag {
-    this.ensurePosSupported(workbookId); const clean = trimRequired(name, "POS tag");
-    const result = this.db.prepare("INSERT INTO pos_tags (workbook_id, name, is_predefined) VALUES (?, ?, 0)").run(workbookId, clean);
-    return { id: Number(result.lastInsertRowid), name: clean, predefined: false };
+  previewWorkbookTagsUpdate(workbookId: number, draft: WorkbookTagsDraft): TagUpdateImpact {
+    const normalized = this.normalizeTagsDraft(workbookId, draft);
+    const retainedTypeIds = new Set(normalized.types.flatMap((type) => type.id === undefined ? [] : [type.id]));
+    const retainedTagIds = new Set(normalized.types.flatMap((type) => type.tags.flatMap((tag) => tag.id === undefined ? [] : [tag.id])));
+    const existingTypes = this.listTagTypes(workbookId);
+    const assignmentRows = this.db.prepare(`SELECT t.id, COUNT(et.entry_id) AS assignment_count, COUNT(DISTINCT et.entry_id) AS entry_count
+      FROM tags t LEFT JOIN entry_tags et ON et.tag_id = t.id WHERE t.workbook_id = ? GROUP BY t.id`).all(workbookId) as Array<{ id: number; assignment_count: number; entry_count: number }>;
+    const assignments = new Map(assignmentRows.map((row) => [Number(row.id), { assignmentCount: Number(row.assignment_count), entryCount: Number(row.entry_count) }]));
+    const removals: TagUpdateImpact["removals"] = [];
+    for (const type of existingTypes) {
+      if (!retainedTypeIds.has(type.id)) {
+        const assignmentCount = type.tags.reduce((sum, tag) => sum + (assignments.get(tag.id)?.assignmentCount ?? 0), 0);
+        const entryRow = this.db.prepare(`SELECT COUNT(DISTINCT et.entry_id) AS count FROM entry_tags et JOIN tags t ON t.id = et.tag_id
+          WHERE t.tag_type_id = ?`).get(type.id) as { count: number };
+        if (assignmentCount > 0) removals.push({ typeName: type.name, tagName: null, tagCount: type.tags.length, assignmentCount, entryCount: Number(entryRow.count) });
+        continue;
+      }
+      for (const tag of type.tags) {
+        if (retainedTagIds.has(tag.id)) continue;
+        const counts = assignments.get(tag.id) ?? { assignmentCount: 0, entryCount: 0 };
+        if (counts.assignmentCount > 0) removals.push({ typeName: type.name, tagName: tag.name, tagCount: 1, ...counts });
+      }
+    }
+    return { removals };
   }
-  renamePosTag(tagId: number, name: string): void {
-    const result = this.db.prepare("UPDATE pos_tags SET name = ? WHERE id = ?").run(trimRequired(name, "POS tag"), tagId);
-    if (Number(result.changes) === 0) throw new Error(`Part-of-speech tag ${tagId} was not found.`);
-  }
-  deletePosTag(tagId: number): void {
-    const result = this.db.prepare("DELETE FROM pos_tags WHERE id = ?").run(tagId);
-    if (Number(result.changes) === 0) throw new Error(`Part-of-speech tag ${tagId} was not found.`);
-  }
-  setEntryPosTags(entryId: number, tagIds: number[]): void {
-    const entry = this.requireEntry(entryId); this.validateEntryAssociations(entry.workbookId, {}, tagIds);
-    transaction(this.db, () => this.saveEntryTags(entryId, entry.workbookId, tagIds));
-  }
-  setPosEnabled(workbookId: number, enabled: boolean): WorkbookRow {
-    this.requireWorkbook(workbookId); this.db.prepare("UPDATE workbooks SET pos_enabled = ?, updated_at = ? WHERE id = ?").run(enabled ? 1 : 0, new Date().toISOString(), workbookId);
-    return this.requireWorkbook(workbookId);
+  updateWorkbookTags(workbookId: number, draft: WorkbookTagsDraft, confirmDataLoss = false): TagType[] {
+    transaction(this.db, () => {
+      const normalized = this.normalizeTagsDraft(workbookId, draft);
+      const impact = this.previewWorkbookTagsUpdate(workbookId, normalized);
+      if (impact.removals.length > 0 && !confirmDataLoss) throw new TagDataLossError(impact);
+      const retainedTypeIds = new Set(normalized.types.flatMap((type) => type.id === undefined ? [] : [type.id]));
+      const retainedTagIds = new Set(normalized.types.flatMap((type) => type.tags.flatMap((tag) => tag.id === undefined ? [] : [tag.id])));
+      for (const row of this.db.prepare("SELECT id FROM tag_types WHERE workbook_id = ?").all(workbookId) as Array<{ id: number }>) {
+        if (!retainedTypeIds.has(Number(row.id))) this.db.prepare("DELETE FROM tag_types WHERE id = ? AND workbook_id = ?").run(row.id, workbookId);
+      }
+      for (const row of this.db.prepare("SELECT id FROM tags WHERE workbook_id = ?").all(workbookId) as Array<{ id: number }>) {
+        if (!retainedTagIds.has(Number(row.id))) this.db.prepare("DELETE FROM tags WHERE id = ? AND workbook_id = ?").run(row.id, workbookId);
+      }
+      // Move retained names out of their UNIQUE namespaces so swaps remain atomic.
+      for (const typeId of retainedTypeIds) {
+        const result = this.db.prepare("UPDATE tag_types SET name = ? WHERE id = ? AND workbook_id = ?").run(`__vocabhelper_stage_${Date.now()}_${Math.random()}_${typeId}__`, typeId, workbookId);
+        if (Number(result.changes) !== 1) throw new ValidationError("A tag type changed while it was being saved.");
+      }
+      for (const tagId of retainedTagIds) {
+        const result = this.db.prepare("UPDATE tags SET name = ? WHERE id = ? AND workbook_id = ?").run(`__vocabhelper_stage_${Date.now()}_${Math.random()}_${tagId}__`, tagId, workbookId);
+        if (Number(result.changes) !== 1) throw new ValidationError("A tag changed while it was being saved.");
+      }
+      const offset = Number((this.db.prepare("SELECT COALESCE(MAX(position), 0) AS value FROM tag_types WHERE workbook_id = ?").get(workbookId) as { value: number }).value) + 100;
+      this.db.prepare("UPDATE tag_types SET position = position + ? WHERE workbook_id = ?").run(offset, workbookId);
+      for (const [index, type] of normalized.types.entries()) {
+        let typeId = type.id;
+        if (typeId === undefined) typeId = Number(this.db.prepare("INSERT INTO tag_types (workbook_id, name, position) VALUES (?, ?, ?)").run(workbookId, type.name, index + 1).lastInsertRowid);
+        else {
+          const result = this.db.prepare("UPDATE tag_types SET name = ?, position = ? WHERE id = ? AND workbook_id = ?").run(type.name, index + 1, typeId, workbookId);
+          if (Number(result.changes) !== 1) throw new ValidationError("A tag type changed while it was being saved.");
+        }
+        for (const tag of type.tags) {
+          if (tag.id === undefined) this.db.prepare("INSERT INTO tags (tag_type_id, workbook_id, name) VALUES (?, ?, ?)").run(typeId, workbookId, tag.name);
+          else {
+            const result = this.db.prepare("UPDATE tags SET name = ? WHERE id = ? AND tag_type_id = ? AND workbook_id = ?").run(tag.name, tag.id, typeId, workbookId);
+            if (Number(result.changes) !== 1) throw new ValidationError("A tag changed while it was being saved.");
+          }
+        }
+      }
+    });
+    return this.listTagTypes(workbookId);
   }
 
   getEntryStats(entryId: number) {
@@ -379,7 +437,7 @@ export class VocabularyRepository {
     ];
     return {
       id, name: String(row.name), wordCount: Number(row.word_count ?? 0), createdAt: String(row.created_at), vocabularyLabel, vocabularyLanguageCode,
-      presetEnabled: Number(row.preset_enabled) === 1, vocabularyKind: String(row.vocabulary_kind) as VocabularyKind, posEnabled: Number(row.pos_enabled) === 1,
+      presetEnabled: Number(row.preset_enabled) === 1, vocabularyKind: String(row.vocabulary_kind) as VocabularyKind,
       meaningAttributes: meanings, metadataAttributes: metadata,
     };
   }
@@ -395,12 +453,23 @@ export class VocabularyRepository {
       keys.add(key);
       return { ...field, key, label: trimRequired(field.label, "Attribute label"), languageCode: trimOptional(field.languageCode)?.toUpperCase() ?? null, required: false, displayOrder: index + 1, provenance: field.provenance ?? "custom" };
     });
-    const tagNames = new Set<string>();
-    const tags = input.posTags.map((tag) => ({ ...tag, name: trimRequired(tag.name, "POS tag") })).filter((tag) => { const key = tag.name.toLocaleLowerCase(); if (tagNames.has(key)) return false; tagNames.add(key); return true; });
+    const typeNames = new Set<string>();
+    const tagTypes = input.tagTypes.map((type) => {
+      const name = trimRequired(type.name, "Tag type name"); const typeKey = name.toLocaleLowerCase();
+      if (typeNames.has(typeKey)) throw new ValidationError("Tag type names must be unique.");
+      typeNames.add(typeKey);
+      const tagNames = new Set<string>();
+      const tags = type.tags.map((tag) => {
+        const tagName = trimRequired(tag.name, "Tag name"); const tagKey = tagName.toLocaleLowerCase();
+        if (tagNames.has(tagKey)) throw new ValidationError(`Tag names in ${name} must be unique.`);
+        tagNames.add(tagKey); return { ...tag, name: tagName };
+      });
+      return { ...type, name, tags };
+    });
     return {
       ...input, name: trimRequired(input.name, "Workbook name"), vocabularyLabel: trimRequired(input.vocabularyLabel, "Vocabulary label"), vocabularyLanguageCode: code,
-      presetEnabled: input.vocabularyKind === "preset_language" && input.presetEnabled, posEnabled: input.vocabularyKind === "non_language" ? false : input.posEnabled,
-      meaningAttributes: meanings, optionalAttributes: optional, posTags: tags,
+      presetEnabled: input.vocabularyKind === "preset_language" && input.presetEnabled,
+      meaningAttributes: meanings, optionalAttributes: optional, tagTypes,
     };
   }
   private normalizeMeaningAttributes(attributes: MeaningAttribute[]): MeaningAttribute[] {
@@ -451,6 +520,38 @@ export class VocabularyRepository {
       throw new ValidationError(`Cannot make ${proposed?.label ?? "this field"} the Primary Meaning: ${emptyEntryCount} ${noun} empty.`);
     }
   }
+  private normalizeTagsDraft(workbookId: number, draft: WorkbookTagsDraft): WorkbookTagsDraft {
+    this.requireWorkbook(workbookId);
+    const existingTypes = this.db.prepare("SELECT id FROM tag_types WHERE workbook_id = ?").all(workbookId) as Array<{ id: number }>;
+    const existingTypeIds = new Set(existingTypes.map((row) => Number(row.id)));
+    const existingTags = this.db.prepare("SELECT id, tag_type_id FROM tags WHERE workbook_id = ?").all(workbookId) as Array<{ id: number; tag_type_id: number }>;
+    const existingTagsById = new Map(existingTags.map((row) => [Number(row.id), Number(row.tag_type_id)]));
+    const usedTypeIds = new Set<number>(); const typeNames = new Set<string>(); const usedTagIds = new Set<number>();
+    const types = draft.types.map((type) => {
+      const name = trimRequired(type.name, "Tag type name"); const nameKey = name.toLocaleLowerCase();
+      if (typeNames.has(nameKey)) throw new ValidationError("Tag type names must be unique.");
+      typeNames.add(nameKey);
+      if (type.id !== undefined) {
+        if (!existingTypeIds.has(type.id)) throw new ValidationError(`Tag type '${name}' does not belong to this workbook.`);
+        if (usedTypeIds.has(type.id)) throw new ValidationError("Tag type IDs must be unique.");
+        usedTypeIds.add(type.id);
+      }
+      const tagNames = new Set<string>();
+      const tags = type.tags.map((tag) => {
+        const tagName = trimRequired(tag.name, "Tag name"); const tagKey = tagName.toLocaleLowerCase();
+        if (tagNames.has(tagKey)) throw new ValidationError(`Tag names in ${name} must be unique.`);
+        tagNames.add(tagKey);
+        if (tag.id !== undefined) {
+          if (type.id === undefined || existingTagsById.get(tag.id) !== type.id) throw new ValidationError(`Tag '${tagName}' does not belong to ${name}.`);
+          if (usedTagIds.has(tag.id)) throw new ValidationError("Tag IDs must be unique.");
+          usedTagIds.add(tag.id);
+        }
+        return { ...tag, name: tagName };
+      });
+      return { ...type, name, tags };
+    });
+    return { types };
+  }
   private writeFields(workbookId: number, config: WorkbookConfigurationInput): void {
     const insert = this.db.prepare("INSERT INTO workbook_fields (workbook_id, field_key, role, position, label, language_code, is_required, is_visible, provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
     for (const field of config.meaningAttributes) insert.run(workbookId, field.key ?? `meaning_${field.position}`, "meaning", field.position, field.label, field.languageCode, field.position === 1 ? 1 : 0, field.position === 1 ? 1 : 0, "custom");
@@ -495,20 +596,12 @@ export class VocabularyRepository {
     while (used.has(key)) key = `${base}_${++suffix}`;
     return key;
   }
-  private writeInitialTags(workbookId: number, tags: WorkbookConfigurationInput["posTags"]): void {
-    const insert = this.db.prepare("INSERT INTO pos_tags (workbook_id, name, is_predefined) VALUES (?, ?, ?)");
-    for (const tag of tags) insert.run(workbookId, tag.name, tag.predefined ? 1 : 0);
-  }
-  private syncTags(workbookId: number, tags: WorkbookConfigurationInput["posTags"]): void {
-    const retained = new Set(tags.flatMap((tag) => tag.id === undefined ? [] : [tag.id]));
-    const existing = this.db.prepare("SELECT id FROM pos_tags WHERE workbook_id = ?").all(workbookId) as Array<{ id: number }>;
-    for (const row of existing) if (!retained.has(Number(row.id))) this.db.prepare("DELETE FROM pos_tags WHERE workbook_id = ? AND id = ?").run(workbookId, row.id);
-    for (const tag of tags) {
-      if (tag.id === undefined) this.db.prepare("INSERT INTO pos_tags (workbook_id, name, is_predefined) VALUES (?, ?, ?)").run(workbookId, tag.name, tag.predefined ? 1 : 0);
-      else {
-        const result = this.db.prepare("UPDATE pos_tags SET name = ?, is_predefined = ? WHERE id = ? AND workbook_id = ?").run(tag.name, tag.predefined ? 1 : 0, tag.id, workbookId);
-        if (Number(result.changes) === 0) throw new ValidationError(`Part-of-speech tag ${tag.id} does not belong to this workbook.`);
-      }
+  private writeInitialTagTypes(workbookId: number, types: TagTypeDraft[]): void {
+    const addType = this.db.prepare("INSERT INTO tag_types (workbook_id, name, position) VALUES (?, ?, ?)");
+    const addTag = this.db.prepare("INSERT INTO tags (tag_type_id, workbook_id, name) VALUES (?, ?, ?)");
+    for (const [index, type] of types.entries()) {
+      const typeId = Number(addType.run(workbookId, type.name, index + 1).lastInsertRowid);
+      for (const tag of type.tags) addTag.run(typeId, workbookId, tag.name);
     }
   }
   private normalizeEntryMeanings(workbook: WorkbookRow, input: string[]): string[] {
@@ -518,7 +611,7 @@ export class VocabularyRepository {
   private validateEntryAssociations(workbookId: number, attributes: Record<string, string>, tagIds: number[]): void {
     const fields = new Set((this.db.prepare("SELECT field_key FROM workbook_fields WHERE workbook_id = ? AND role = 'optional'").all(workbookId) as Array<{ field_key: string }>).map((row) => String(row.field_key)));
     for (const key of Object.keys(attributes)) if (!fields.has(key)) throw new ValidationError(`Attribute '${key}' does not belong to this workbook.`);
-    for (const tagId of new Set(tagIds)) if (!this.db.prepare("SELECT 1 FROM pos_tags WHERE id = ? AND workbook_id = ?").get(tagId, workbookId)) throw new ValidationError(`Part-of-speech tag ${tagId} does not belong to this workbook.`);
+    for (const tagId of new Set(tagIds)) if (!this.db.prepare("SELECT 1 FROM tags WHERE id = ? AND workbook_id = ?").get(tagId, workbookId)) throw new ValidationError(`Tag ${tagId} does not belong to this workbook.`);
   }
   private saveEntryValues(entryId: number, workbookId: number, meanings: string[], attributes: Record<string, string>): void {
     const fields = this.db.prepare("SELECT id, field_key, role, position FROM workbook_fields WHERE workbook_id = ?").all(workbookId) as Record<string, unknown>[];
@@ -526,11 +619,10 @@ export class VocabularyRepository {
     for (const field of fields) insert.run(entryId, Number(field.id), workbookId, field.role === "meaning" ? meanings[Number(field.position) - 1] ?? "" : attributes[String(field.field_key)] ?? "");
   }
   private saveEntryTags(entryId: number, workbookId: number, tagIds: number[]): void {
-    this.db.prepare("DELETE FROM entry_pos_tags WHERE entry_id = ?").run(entryId);
-    const insert = this.db.prepare("INSERT INTO entry_pos_tags (entry_id, tag_id, workbook_id) VALUES (?, ?, ?)");
+    this.db.prepare("DELETE FROM entry_tags WHERE entry_id = ?").run(entryId);
+    const insert = this.db.prepare("INSERT INTO entry_tags (entry_id, tag_id, workbook_id) VALUES (?, ?, ?)");
     for (const tagId of new Set(tagIds)) insert.run(entryId, tagId, workbookId);
   }
-  private ensurePosSupported(workbookId: number): void { if (!this.requireWorkbook(workbookId).posEnabled) throw new ValidationError("Part of speech is disabled for this workbook."); }
   private requireWorkbook(workbookId: number): WorkbookRow { const workbook = this.getWorkbook(workbookId); if (!workbook) throw new Error(`Workbook with id ${workbookId} was not found.`); return workbook; }
   private requireEntry(entryId: number): EntryRow { const entry = this.getEntry(entryId); if (!entry) throw new Error(`Entry with id ${entryId} was not found.`); return entry; }
   private readCurrentWorkbookId(): number | null { const row = this.db.prepare("SELECT current_workbook_id FROM app_settings WHERE singleton_id = 1").get() as { current_workbook_id: number | null }; return row.current_workbook_id == null ? null : Number(row.current_workbook_id); }

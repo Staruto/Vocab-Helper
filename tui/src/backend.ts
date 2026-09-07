@@ -1,4 +1,4 @@
-import { CreateWorkbookInput, defaultDbPath, EntryRow, MeaningAttribute, MeaningPromotionImpact, MetadataAttribute, PosTag, WorkbookAttributesDraft, WorkbookConfigurationInput, WorkbookRow, WorkbookUpdateImpact, VocabularyRepository } from "./db.js";
+import { CreateWorkbookInput, defaultDbPath, EntryRow, MeaningAttribute, MeaningPromotionImpact, MetadataAttribute, TagType, TagUpdateImpact, WorkbookAttributesDraft, WorkbookConfigurationInput, WorkbookRow, WorkbookTagsDraft, WorkbookUpdateImpact, VocabularyRepository } from "./db.js";
 
 export class VocabularyBackend {
   private readonly repository: VocabularyRepository;
@@ -76,12 +76,12 @@ export class VocabularyBackend {
     return this.repository.getEntry(entryId);
   }
 
-  addEntry(workbookId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, posTagIds?: number[]): EntryRow {
-    return this.repository.addEntry(workbookId, vocabulary, meaning, meanings, attributes, posTagIds);
+  addEntry(workbookId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, tagIds?: number[]): EntryRow {
+    return this.repository.addEntry(workbookId, vocabulary, meaning, meanings, attributes, tagIds);
   }
 
-  updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, posTagIds?: number[]): EntryRow {
-    return this.repository.updateEntry(entryId, vocabulary, meaning, meanings, attributes, posTagIds);
+  updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, tagIds?: number[]): EntryRow {
+    return this.repository.updateEntry(entryId, vocabulary, meaning, meanings, attributes, tagIds);
   }
 
   deleteEntry(entryId: number): void {
@@ -92,13 +92,9 @@ export class VocabularyBackend {
   getMeaningPromotionImpact(workbookId: number, fieldId: number): MeaningPromotionImpact { return this.repository.getMeaningPromotionImpact(workbookId, fieldId); }
   previewWorkbookAttributesUpdate(workbookId: number, draft: WorkbookAttributesDraft): WorkbookUpdateImpact { return this.repository.previewWorkbookAttributesUpdate(workbookId, draft); }
   updateWorkbookAttributes(workbookId: number, draft: WorkbookAttributesDraft, confirmDataLoss = false): WorkbookRow { return this.repository.updateWorkbookAttributes(workbookId, draft, confirmDataLoss); }
-  listPosTags(workbookId: number): PosTag[] { return this.repository.listPosTags(workbookId); }
-  listStoredPosTags(workbookId: number): PosTag[] { return this.repository.listStoredPosTags(workbookId); }
-  addPosTag(workbookId: number, name: string): PosTag { return this.repository.addPosTag(workbookId, name); }
-  renamePosTag(tagId: number, name: string): void { this.repository.renamePosTag(tagId, name); }
-  deletePosTag(tagId: number): void { this.repository.deletePosTag(tagId); }
-  setEntryPosTags(entryId: number, tagIds: number[]): void { this.repository.setEntryPosTags(entryId, tagIds); }
-  setPosEnabled(workbookId: number, enabled: boolean): WorkbookRow { return this.repository.setPosEnabled(workbookId, enabled); }
+  listTagTypes(workbookId: number): TagType[] { return this.repository.listTagTypes(workbookId); }
+  previewWorkbookTagsUpdate(workbookId: number, draft: WorkbookTagsDraft): TagUpdateImpact { return this.repository.previewWorkbookTagsUpdate(workbookId, draft); }
+  updateWorkbookTags(workbookId: number, draft: WorkbookTagsDraft, confirmDataLoss = false): TagType[] { return this.repository.updateWorkbookTags(workbookId, draft, confirmDataLoss); }
 
   close(): void {
     this.repository.close();

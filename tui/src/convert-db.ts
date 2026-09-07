@@ -62,13 +62,13 @@ export function convertHybridDatabase(sourcePath: string, apply = false): Conver
 
     targetDb.exec("BEGIN IMMEDIATE");
     try {
-      const addWorkbook = targetDb.prepare("INSERT INTO workbooks (id,name,vocabulary_kind,vocabulary_label,vocabulary_language_code,preset_enabled,pos_enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)");
+      const addWorkbook = targetDb.prepare("INSERT INTO workbooks (id,name,vocabulary_kind,vocabulary_label,vocabulary_language_code,preset_enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)");
       const addField = targetDb.prepare("INSERT INTO workbook_fields (workbook_id,field_key,role,position,label,language_code,is_required,is_visible,provenance) VALUES (?,?,?,?,?,?,?,?,?)");
       for (const workbook of workbooks) {
         const id = Number(workbook.id); const code = workbook.vocabulary_language_code == null ? null : String(workbook.vocabulary_language_code);
         const kind = ["preset_language", "other_language", "non_language"].includes(String(workbook.vocabulary_kind)) ? String(workbook.vocabulary_kind) : code ? "preset_language" : "non_language";
         const created = String(workbook.created_at ?? new Date().toISOString());
-        addWorkbook.run(id, String(workbook.name), kind, String(workbook.vocabulary_label ?? "Vocabulary"), kind === "preset_language" ? code : null, Number(workbook.preset_enabled) ? 1 : 0, kind === "non_language" ? 0 : Number(workbook.pos_enabled) ? 1 : 0, created, created);
+        addWorkbook.run(id, String(workbook.name), kind, String(workbook.vocabulary_label ?? "Vocabulary"), kind === "preset_language" ? code : null, Number(workbook.preset_enabled) ? 1 : 0, created, created);
         const workbookMeanings = definitions.filter((row) => Number(row.workbook_id) === id);
         const meanings = workbookMeanings.length ? workbookMeanings : [{ position: 1, label: "Primary Meaning", language_code: null }];
         for (const definition of meanings) {
@@ -111,10 +111,17 @@ export function convertHybridDatabase(sourcePath: string, apply = false): Conver
         addStat.run(id, Math.max(0, Number(stat?.test_count ?? 0)), Math.min(3, Math.max(0, Number(stat?.error_count ?? 0))), stat?.last_tested ?? null, stat?.next_test_deadline ?? null);
       }
 
-      const addTag = targetDb.prepare("INSERT INTO pos_tags (id,workbook_id,name,is_predefined) VALUES (?,?,?,?)");
-      for (const tag of sourceTags) addTag.run(Number(tag.id), Number(tag.workbook_id), String(tag.name), Number(tag.is_predefined) ? 1 : 0);
+      const addTagType = targetDb.prepare("INSERT INTO tag_types (workbook_id,name,position) VALUES (?,'Part of Speech',1)");
+      const addTag = targetDb.prepare("INSERT INTO tags (id,tag_type_id,workbook_id,name) VALUES (?,?,?,?)");
+      for (const workbook of workbooks) {
+        const workbookId = Number(workbook.id);
+        const workbookTags = sourceTags.filter((tag) => Number(tag.workbook_id) === workbookId);
+        if (!Number(workbook.pos_enabled) && workbookTags.length === 0) continue;
+        const tagTypeId = Number(addTagType.run(workbookId).lastInsertRowid);
+        for (const tag of workbookTags) addTag.run(Number(tag.id), tagTypeId, workbookId, String(tag.name));
+      }
       const validAssignments = sourceAssignments.filter((row) => Number(row.entry_workbook_id) === Number(row.tag_workbook_id) && entryById.has(Number(row.entry_id)));
-      const addAssignment = targetDb.prepare("INSERT INTO entry_pos_tags (entry_id,tag_id,workbook_id) VALUES (?,?,?)");
+      const addAssignment = targetDb.prepare("INSERT INTO entry_tags (entry_id,tag_id,workbook_id) VALUES (?,?,?)");
       for (const assignment of validAssignments) addAssignment.run(Number(assignment.entry_id), Number(assignment.tag_id), Number(assignment.entry_workbook_id));
       const settings = tableExists(sourceDb, "mvp_meta") ? new Map(rows(sourceDb, "SELECT key,value FROM mvp_meta").map((row) => [String(row.key), String(row.value)])) : new Map<string, string>();
       const currentId = Number(settings.get("current_workbook_id"));
@@ -126,9 +133,9 @@ export function convertHybridDatabase(sourcePath: string, apply = false): Conver
       const counts = {
         workbooks: scalar(targetDb, "SELECT COUNT(*) FROM workbooks"), entries: scalar(targetDb, "SELECT COUNT(*) FROM entries"),
         fields: scalar(targetDb, "SELECT COUNT(*) FROM workbook_fields"), values: scalar(targetDb, "SELECT COUNT(*) FROM entry_field_values"),
-        posTags: scalar(targetDb, "SELECT COUNT(*) FROM pos_tags"), posAssignments: scalar(targetDb, "SELECT COUNT(*) FROM entry_pos_tags"), stats: scalar(targetDb, "SELECT COUNT(*) FROM entry_stats"),
+        tags: scalar(targetDb, "SELECT COUNT(*) FROM tags"), tagAssignments: scalar(targetDb, "SELECT COUNT(*) FROM entry_tags"), stats: scalar(targetDb, "SELECT COUNT(*) FROM entry_stats"),
       };
-      if (counts.workbooks !== workbooks.length || counts.entries !== sourceEntries.length || counts.posTags !== sourceTags.length || counts.stats !== sourceEntries.length) throw new Error("Converted row counts do not match the MVP source.");
+      if (counts.workbooks !== workbooks.length || counts.entries !== sourceEntries.length || counts.tags !== sourceTags.length || counts.stats !== sourceEntries.length) throw new Error("Converted row counts do not match the MVP source.");
       const targetValues = rows(targetDb, "SELECT v.entry_id,f.field_key,v.value FROM entry_field_values v JOIN workbook_fields f ON f.id=v.field_id ORDER BY v.entry_id,f.field_key").map((row) => [Number(row.entry_id), String(row.field_key), String(row.value)]).sort();
       const checksums = { valuesExpected: checksum([...expectedValues].sort()), valuesActual: checksum(targetValues), entries: checksum(rows(targetDb, "SELECT id,workbook_id,vocabulary,created_at,updated_at FROM entries ORDER BY id")), stats: checksum(rows(targetDb, "SELECT * FROM entry_stats ORDER BY entry_id")) };
       if (checksums.valuesExpected !== checksums.valuesActual) throw new Error("Converted field-value checksum does not match the source projection.");

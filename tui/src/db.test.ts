@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { convertHybridDatabase } from "./convert-db.js";
-import { LANGUAGE_PRESET_DEFINITIONS, ValidationError, VocabularyRepository, WorkbookDataLossError, WorkbookConfigurationInput } from "./db.js";
-import { assertDatabaseIntegrity, runSchemaMigrations } from "./schema.js";
+import { LANGUAGE_PRESET_DEFINITIONS, TagDataLossError, ValidationError, VocabularyRepository, WorkbookDataLossError, WorkbookConfigurationInput } from "./db.js";
+import { assertDatabaseIntegrity, runSchemaMigrations, SCHEMA_MIGRATIONS } from "./schema.js";
 
 function temporaryDatabase(): { directory: string; path: string; cleanup: () => void } {
   const directory = mkdtempSync(join(tmpdir(), "vocabhelper-"));
@@ -16,19 +16,20 @@ function temporaryDatabase(): { directory: string; path: string; cleanup: () => 
 function basicWorkbook(name = "Test"): WorkbookConfigurationInput {
   return {
     name, vocabularyKind: "preset_language", vocabularyLabel: "Japanese", vocabularyLanguageCode: "JP",
-    presetEnabled: true, posEnabled: true,
+    presetEnabled: true,
     meaningAttributes: [{ position: 1, label: "English", languageCode: "EN" }],
     optionalAttributes: LANGUAGE_PRESET_DEFINITIONS.JP.optionalAttributes.map((field, index) => ({ ...field, required: false, visible: false, displayOrder: index + 1, provenance: "preset" })),
-    posTags: [{ name: "名詞", predefined: true }],
+    tagTypes: [{ name: "Part of Speech", tags: [{ name: "名詞" }] }],
   };
 }
 
-test("fresh databases use the v1 schema and migrations are idempotent", () => {
+test("fresh databases use the v2 schema and migrations are idempotent", () => {
   const temp = temporaryDatabase();
   try {
     const repository = new VocabularyRepository(temp.path); repository.close();
     const db = new DatabaseSync(temp.path);
-    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get() as { count: number }).count, 1);
+    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get() as { count: number }).count, 2);
+    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name IN ('pos_tags','entry_pos_tags')").get() as { count: number }).count, 0);
     assert.equal((db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name LIKE 'mvp_%'").get() as { count: number }).count, 0);
     assertDatabaseIntegrity(db); db.close();
     const reopened = new VocabularyRepository(temp.path); reopened.close();
@@ -39,9 +40,9 @@ test("a failed migration rolls back its schema and ledger row", () => {
   const temp = temporaryDatabase();
   try {
     const db = new DatabaseSync(temp.path); runSchemaMigrations(db);
-    assert.throws(() => runSchemaMigrations(db, [{ version: 2, apply(inner) { inner.exec("CREATE TABLE rollback_probe (id INTEGER); INSERT INTO missing_table VALUES (1)"); } }]), /migration 2 failed/i);
+    assert.throws(() => runSchemaMigrations(db, [{ version: 3, apply(inner) { inner.exec("CREATE TABLE rollback_probe (id INTEGER); INSERT INTO missing_table VALUES (1)"); } }]), /migration 3 failed/i);
     assert.equal((db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE name='rollback_probe'").get() as { count: number }).count, 0);
-    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version=2").get() as { count: number }).count, 0);
+    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version=3").get() as { count: number }).count, 0);
     db.close();
   } finally { temp.cleanup(); }
 });
@@ -52,7 +53,7 @@ test("entry stats, priority, ownership, and cascades are enforced", () => {
     const repository = new VocabularyRepository(temp.path);
     const first = repository.createConfiguredWorkbook(basicWorkbook("First"));
     const second = repository.createConfiguredWorkbook(basicWorkbook("Second"));
-    const firstTag = repository.listPosTags(first.id)[0]; const secondTag = repository.listPosTags(second.id)[0];
+    const firstTag = repository.listTagTypes(first.id)[0].tags[0]; const secondTag = repository.listTagTypes(second.id)[0].tags[0];
     assert.throws(() => repository.addEntry(first.id, "猫", "cat", ["cat"], {}, [secondTag.id]), /does not belong/);
     const entry = repository.addEntry(first.id, "猫", "cat", ["cat"], { kana: "ねこ" }, [firstTag.id]);
     assert.equal(entry.tier, "gray"); assert.equal(entry.testCount, 0); assert.equal(entry.errorCount, 0);
@@ -248,6 +249,76 @@ test("never-tested entries rank before tested entries", () => {
   } finally { temp.cleanup(); }
 });
 
+test("v1 POS data migrates to generic tag types without losing disabled data", () => {
+  const temp = temporaryDatabase();
+  let db: DatabaseSync | undefined;
+  try {
+    db = new DatabaseSync(temp.path);
+    runSchemaMigrations(db, [SCHEMA_MIGRATIONS[0]]);
+    const addWorkbook = db.prepare(`INSERT INTO workbooks
+      (id,name,vocabulary_kind,vocabulary_label,vocabulary_language_code,preset_enabled,pos_enabled,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?)`);
+    addWorkbook.run(1, "Disabled", "preset_language", "Japanese", "JP", 1, 0, "2026-01-01", "2026-01-01");
+    addWorkbook.run(2, "Empty enabled", "other_language", "Vocabulary", null, 0, 1, "2026-01-01", "2026-01-01");
+    db.prepare("INSERT INTO workbook_fields (workbook_id,field_key,role,position,label,is_required,is_visible,provenance) VALUES (1,'meaning_1','meaning',1,'English',1,1,'custom')").run();
+    db.prepare("INSERT INTO entries (id,workbook_id,vocabulary,created_at,updated_at) VALUES (11,1,'猫','2026-01-01','2026-01-01')").run();
+    db.prepare("INSERT INTO entry_field_values (entry_id,field_id,workbook_id,value) SELECT 11,id,1,'cat' FROM workbook_fields WHERE workbook_id=1").run();
+    db.prepare("INSERT INTO entry_stats (entry_id) VALUES (11)").run();
+    db.prepare("INSERT INTO pos_tags (id,workbook_id,name,is_predefined) VALUES (91,1,'名詞',1)").run();
+    db.prepare("INSERT INTO entry_pos_tags (entry_id,tag_id,workbook_id) VALUES (11,91,1)").run();
+    runSchemaMigrations(db);
+    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM tag_types").get() as { count: number }).count, 2);
+    assert.deepEqual((db.prepare("SELECT id,name FROM tags").all() as Array<{ id: number; name: string }>).map((row) => [row.id, row.name]), [[91, "名詞"]]);
+    assert.deepEqual((db.prepare("SELECT entry_id,tag_id FROM entry_tags").all() as Array<{ entry_id: number; tag_id: number }>).map((row) => [row.entry_id, row.tag_id]), [[11, 91]]);
+    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('workbooks') WHERE name='pos_enabled'").get() as { count: number }).count, 0);
+    assertDatabaseIntegrity(db);
+  } finally { db?.close(); temp.cleanup(); }
+});
+
+test("generic tag updates preserve identities, support multiple assignments, and protect assigned data", () => {
+  const temp = temporaryDatabase(); let repository: VocabularyRepository | undefined;
+  try {
+    repository = new VocabularyRepository(temp.path);
+    const workbook = repository.createConfiguredWorkbook(basicWorkbook());
+    let types = repository.updateWorkbookTags(workbook.id, { types: [
+      { id: repository.listTagTypes(workbook.id)[0].id, name: "Part of Speech", tags: [{ name: "noun" }, { name: "verb" }, { name: "unused" }] },
+      { name: "Topic", tags: [{ name: "Travel" }, { name: "noun" }] },
+    ] });
+    const pos = types[0]; const noun = pos.tags.find((tag) => tag.name === "noun")!; const verb = pos.tags.find((tag) => tag.name === "verb")!;
+    const travel = types[1].tags.find((tag) => tag.name === "Travel")!;
+    const entry = repository.addEntry(workbook.id, "run", "move quickly", ["move quickly"], {}, [noun.id, verb.id, travel.id]);
+    assert.deepEqual(entry.tags.map((tag) => tag.name).sort(), ["Travel", "noun", "verb"]);
+    assert.throws(() => repository!.updateWorkbookTags(workbook.id, { types: types.map((type) => type.id === pos.id ? { ...type, tags: [...type.tags, { name: "noun" }] } : type) }), /must be unique/);
+    types = repository.updateWorkbookTags(workbook.id, { types: types.map((type) => type.id === pos.id ? { ...type, tags: type.tags.map((tag) => ({ ...tag, name: tag.name === "noun" ? "verb" : tag.name === "verb" ? "noun" : tag.name })) } : type) });
+    assert.equal(types[0].tags.find((tag) => tag.id === noun.id)?.name, "verb");
+    const withoutUnused = { types: types.map((type) => ({ ...type, tags: type.tags.filter((tag) => tag.name !== "unused") })) };
+    repository.updateWorkbookTags(workbook.id, withoutUnused);
+    types = repository.listTagTypes(workbook.id);
+    const withoutAssigned = { types: types.map((type) => ({ ...type, tags: type.tags.filter((tag) => tag.id !== noun.id) })) };
+    assert.throws(() => repository!.updateWorkbookTags(workbook.id, withoutAssigned), TagDataLossError);
+    repository.updateWorkbookTags(workbook.id, withoutAssigned, true);
+    assert.equal(repository.getEntry(entry.id)?.tags.some((tag) => tag.id === noun.id), false);
+    types = repository.listTagTypes(workbook.id);
+    const withoutTopic = { types: types.filter((type) => type.name !== "Topic") };
+    assert.throws(() => repository!.updateWorkbookTags(workbook.id, withoutTopic), TagDataLossError);
+    repository.updateWorkbookTags(workbook.id, withoutTopic, true);
+    assert.equal(repository.listTagTypes(workbook.id).some((type) => type.name === "Topic"), false);
+    assert.equal(repository.getEntry(entry.id)?.tags.some((tag) => tag.id === travel.id), false);
+  } finally { repository?.close(); temp.cleanup(); }
+});
+
+test("tag drafts reject cross-workbook IDs and moving a tag between types", () => {
+  const temp = temporaryDatabase(); let repository: VocabularyRepository | undefined;
+  try {
+    repository = new VocabularyRepository(temp.path);
+    const first = repository.createConfiguredWorkbook(basicWorkbook("First"));
+    const second = repository.createConfiguredWorkbook(basicWorkbook("Second"));
+    const firstType = repository.listTagTypes(first.id)[0]; const secondType = repository.listTagTypes(second.id)[0];
+    assert.throws(() => repository!.updateWorkbookTags(first.id, { types: [{ id: secondType.id, name: secondType.name, tags: [] }] }), /does not belong/);
+    assert.throws(() => repository!.updateWorkbookTags(first.id, { types: [{ id: firstType.id, name: firstType.name, tags: [] }, { name: "Other", tags: [{ id: firstType.tags[0].id, name: firstType.tags[0].name }] }] }), /does not belong/);
+  } finally { repository?.close(); temp.cleanup(); }
+});
+
 test("the converter preserves MVP data and upgrades default Japanese example labels", () => {
   const temp = temporaryDatabase();
   try {
@@ -275,7 +346,7 @@ test("the converter preserves MVP data and upgrades default Japanese example lab
     const converted = new VocabularyRepository(temp.path); const workbook = converted.getWorkbook(7)!; const entry = converted.getEntry(42)!;
     assert.equal(workbook.meaningAttributes[0].label, "English");
     assert.ok(workbook.metadataAttributes.some((field) => field.key === "example_sentence_1" && field.label === "Example Sentence 1"));
-    assert.equal(entry.attributes.example_sentence_1, "A cat."); assert.equal(entry.attributes.kana, "ねこ"); assert.equal(entry.testCount, 5); assert.equal(entry.posTags[0].id, 9);
+    assert.equal(entry.attributes.example_sentence_1, "A cat."); assert.equal(entry.attributes.kana, "ねこ"); assert.equal(entry.testCount, 5); assert.equal(entry.tags[0].id, 9);
     converted.close();
   } finally { temp.cleanup(); }
 });

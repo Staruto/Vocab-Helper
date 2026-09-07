@@ -50,7 +50,7 @@ Then apply it:
 npm run db:convert:apply
 ```
 
-The converter builds and validates a clean database before changing the source. It renames the original to a dated `vocab.db.backup-before-v1-*` file and writes a JSON validation report beside the backup. Active TypeScript/MVP vocabulary, fields, statistics, and POS data are preserved; obsolete legacy-only tags and tables are not copied.
+The converter builds and validates a clean database before changing the source. It renames the original to a dated `vocab.db.backup-before-v1-*` file and writes a JSON validation report beside the backup. Active TypeScript/MVP vocabulary, fields, statistics, and Part of Speech assignments are preserved. POS data is upgraded to the generic tag-type model; obsolete legacy-only tables are not copied.
 
 ## Legacy Code
 
