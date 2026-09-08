@@ -1012,7 +1012,7 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
   const presetDefinition = selectedType.code ? LANGUAGE_PRESET_DEFINITIONS[selectedType.code] : undefined;
   const presetOptionalAttributes = (presetDefinition?.optionalAttributes ?? []).map((item) => ({ ...item, required: false, visible: false, displayOrder: 0 }));
   const presetKeys = new Set(presetEnabled && selectedType.kind === "preset_language" ? presetOptionalAttributes.map((item) => item.key) : []);
-  useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => stdout.off("resize", f); }, [stdout]);
+  useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => { stdout.off("resize", f); }; }, [stdout]);
 
   function go(next: CreateStage): void { setHistory((items) => [...items, stage]); setStage(next); setError(""); setSelected(0); setEditAction("none"); setEditBuffer(""); }
   function back(): void { const previous = history.at(-1); if (!previous) return; setHistory((items) => items.slice(0, -1)); setStage(previous); setError(""); setEditAction("none"); }
@@ -1455,14 +1455,14 @@ function WorkbookDeleteConfirmScreen({
 function SettingsHomeScreen({ workbook, onAttributes, onTags, onAppearance, onCancel, onQuit }: { workbook: WorkbookRow; onAttributes: () => void; onTags: () => void; onAppearance: () => void; onCancel: () => void; onQuit: () => void }): JSX.Element {
   const { stdout } = useStdout(); const [width, setWidth] = useState(() => stdout?.columns ?? 80); const [selected, setSelected] = useState(0);
   const sections = ["Attributes", "Tags", "Appearance"];
-  useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => stdout.off("resize", f); }, [stdout]);
+  useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => { stdout.off("resize", f); }; }, [stdout]);
   useInput((input, key) => { if (key.ctrl && input === "c") onQuit(); else if (key.escape) onCancel(); else if (key.upArrow) setSelected((v) => v <= 0 ? sections.length - 1 : v - 1); else if (key.downArrow) setSelected((v) => (v + 1) % sections.length); else if (key.return) [onAttributes, onTags, onAppearance][selected](); });
   return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Settings — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Choose a settings section.", width)}</Text><Text>{padLine("", width)}</Text>{sections.map((section, index) => <Text key={section} color={index === selected ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${index === selected ? ">" : " "} ${section}`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Up/Down select | Enter open | Esc back", width)}</Text></Box>;
 }
 
 function AppearanceSettingsScreen({ onCancel, onQuit }: { onCancel: () => void; onQuit: () => void }): JSX.Element {
   const { stdout } = useStdout(); const [width, setWidth] = useState(() => stdout?.columns ?? 80); const [enabled, setEnabled] = useState(() => backend.getTierColorsEnabled());
-  useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => stdout.off("resize", f); }, [stdout]);
+  useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => { stdout.off("resize", f); }; }, [stdout]);
   useInput((input, key) => { if (key.ctrl && input === "c") onQuit(); else if (key.escape) onCancel(); else if (input === " ") { const next = !enabled; backend.setTierColorsEnabled(next); setEnabled(next); } });
   return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Appearance", width)}</Text><Text>{padLine("", width)}</Text><Text color={enabled ? "green" : AUXILIARY_TEXT_COLOR}>{padLine(`[${enabled ? "x" : " "}] Tier colors`, width)}</Text><Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Space toggles | Esc back", width)}</Text></Box>;
 }
@@ -1501,7 +1501,7 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
   const originalSignature = useMemo(() => attributeDraftSignature(workbook.vocabularyLabel, initialFields), [workbook.vocabularyLabel, initialFields]);
   const dirty = attributeDraftSignature(vocabularyLabel, fields) !== originalSignature;
 
-  useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => stdout.off("resize", f); }, [stdout]);
+  useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => { stdout.off("resize", f); }; }, [stdout]);
   useEffect(() => { if (selectedIndex !== safeSelectedIndex) setSelectedIndex(safeSelectedIndex); }, [selectedIndex, safeSelectedIndex]);
 
   function nextKey(section: "meaning" | "optional", label: string): string {
@@ -1662,7 +1662,7 @@ function TagSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook: W
   const selectedType = selected.kind === "add-type" ? undefined : types[selected.typeIndex];
   const selectedTag = selected.kind === "tag" ? selectedType?.tags[selected.tagIndex] : undefined;
   const dirty = tagDraftSignature(types) !== tagDraftSignature(initialTypes);
-  useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => stdout.off("resize", f); }, [stdout]);
+  useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => { stdout.off("resize", f); }; }, [stdout]);
   useEffect(() => { if (selectedIndex !== safeSelectedIndex) setSelectedIndex(safeSelectedIndex); }, [selectedIndex, safeSelectedIndex]);
 
   function begin(next: typeof action): void {
@@ -1749,7 +1749,7 @@ function TagSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook: W
 function EntryViewScreen({ workbook, entry, onCancel, onQuit }: { workbook: WorkbookRow; entry: EntryRow; onCancel: () => void; onQuit: () => void }): JSX.Element {
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
-  useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => stdout.off("resize", f); }, [stdout]);
+  useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => { stdout.off("resize", f); }; }, [stdout]);
   useInput((_input, key) => { if (key.ctrl && _input === "c") onQuit(); else if (key.escape) onCancel(); });
   const lines = [
     ...buildExplicitEntryLines(workbook, entry),
@@ -1800,7 +1800,7 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
   const tagTypes = useMemo(() => backend.listTagTypes(workbook.id), [workbook.id]);
   const current = phase === "initial" ? questions[index] : phase === "retry" ? retryRound[index] : null;
   const visibleTagGroups = current ? visibleAssignedTagGroups(current, tagTypes) : [];
-  useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => stdout.off("resize", f); }, [stdout]);
+  useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => { stdout.off("resize", f); }; }, [stdout]);
 
   function advanceAfterAnswer(sourcePhase: "initial" | "retry" = phase as "initial" | "retry", queuedRetry = nextRetryRound): void {
     if (sourcePhase === "initial") {

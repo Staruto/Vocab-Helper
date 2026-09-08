@@ -1,1 +1,0 @@
-"""Vocabulary helper package."""

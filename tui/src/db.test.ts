@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { convertHybridDatabase } from "./convert-db.js";
-import { LANGUAGE_PRESET_DEFINITIONS, TagDataLossError, ValidationError, VocabularyRepository, WorkbookDataLossError, WorkbookConfigurationInput } from "./db.js";
-import { assertDatabaseIntegrity, runSchemaMigrations, SCHEMA_MIGRATIONS } from "./schema.js";
+import { fileURLToPath } from "node:url";
+import { defaultDbPath, LANGUAGE_PRESET_DEFINITIONS, TagDataLossError, ValidationError, VocabularyRepository, WorkbookDataLossError, WorkbookConfigurationInput } from "./db.js";
+import { assertDatabaseIntegrity, CURRENT_SCHEMA_VERSION, runSchemaMigrations, SCHEMA_MIGRATIONS } from "./schema.js";
 
 function temporaryDatabase(): { directory: string; path: string; cleanup: () => void } {
   const directory = mkdtempSync(join(tmpdir(), "vocabhelper-"));
@@ -28,12 +28,66 @@ test("fresh databases use the v3 schema and migrations are idempotent", () => {
   try {
     const repository = new VocabularyRepository(temp.path); repository.close();
     const db = new DatabaseSync(temp.path);
-    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get() as { count: number }).count, 3);
+    assert.equal(SCHEMA_MIGRATIONS.at(-1)?.version, CURRENT_SCHEMA_VERSION);
+    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get() as { count: number }).count, CURRENT_SCHEMA_VERSION);
     assert.equal((db.prepare("SELECT dflt_value FROM pragma_table_info('tag_types') WHERE name='is_visible'").get() as { dflt_value: string }).dflt_value, "0");
     assert.equal((db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name IN ('pos_tags','entry_pos_tags')").get() as { count: number }).count, 0);
     assert.equal((db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name LIKE 'mvp_%'").get() as { count: number }).count, 0);
     assertDatabaseIntegrity(db); db.close();
     const reopened = new VocabularyRepository(temp.path); reopened.close();
+  } finally { temp.cleanup(); }
+});
+
+test("the default database path is stable and the environment override wins", () => {
+  const temp = temporaryDatabase();
+  const originalCwd = process.cwd();
+  const originalOverride = process.env.VOCAB_HELPER_DB_PATH;
+  try {
+    delete process.env.VOCAB_HELPER_DB_PATH;
+    process.chdir(temp.directory);
+    assert.equal(defaultDbPath(), resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "vocab.db"));
+    process.env.VOCAB_HELPER_DB_PATH = temp.path;
+    assert.equal(defaultDbPath(), temp.path);
+  } finally {
+    process.chdir(originalCwd);
+    if (originalOverride === undefined) delete process.env.VOCAB_HELPER_DB_PATH;
+    else process.env.VOCAB_HELPER_DB_PATH = originalOverride;
+    temp.cleanup();
+  }
+});
+
+test("legacy databases are rejected without modification and release their file handle", () => {
+  const temp = temporaryDatabase();
+  const movedPath = join(temp.directory, "legacy.db");
+  try {
+    const db = new DatabaseSync(temp.path);
+    db.exec("CREATE TABLE mvp_workbooks (id INTEGER PRIMARY KEY)");
+    db.close();
+
+    assert.throws(() => new VocabularyRepository(temp.path), /unsupported legacy VocabHelper schema/i);
+    renameSync(temp.path, movedPath);
+
+    const unchanged = new DatabaseSync(movedPath, { readOnly: true });
+    assert.equal((unchanged.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='mvp_workbooks'").get() as { count: number }).count, 1);
+    assert.equal((unchanged.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name IN ('schema_migrations','workbooks')").get() as { count: number }).count, 0);
+    unchanged.close();
+  } finally { temp.cleanup(); }
+});
+
+test("databases from newer application versions are rejected without migration", () => {
+  const temp = temporaryDatabase();
+  try {
+    const repository = new VocabularyRepository(temp.path);
+    repository.close();
+    const db = new DatabaseSync(temp.path);
+    const futureVersion = CURRENT_SCHEMA_VERSION + 1;
+    db.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(futureVersion, new Date().toISOString());
+    db.close();
+
+    assert.throws(() => new VocabularyRepository(temp.path), new RegExp(`newer schema version ${futureVersion}`, "i"));
+    const unchanged = new DatabaseSync(temp.path, { readOnly: true });
+    assert.equal((unchanged.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number }).version, futureVersion);
+    unchanged.close();
   } finally { temp.cleanup(); }
 });
 
@@ -318,39 +372,7 @@ test("tag drafts reject cross-workbook IDs and moving a tag between types", () =
     const first = repository.createConfiguredWorkbook(basicWorkbook("First"));
     const second = repository.createConfiguredWorkbook(basicWorkbook("Second"));
     const firstType = repository.listTagTypes(first.id)[0]; const secondType = repository.listTagTypes(second.id)[0];
-    assert.throws(() => repository!.updateWorkbookTags(first.id, { types: [{ id: secondType.id, name: secondType.name, tags: [] }] }), /does not belong/);
-    assert.throws(() => repository!.updateWorkbookTags(first.id, { types: [{ id: firstType.id, name: firstType.name, tags: [] }, { name: "Other", tags: [{ id: firstType.tags[0].id, name: firstType.tags[0].name }] }] }), /does not belong/);
+    assert.throws(() => repository!.updateWorkbookTags(first.id, { types: [{ id: secondType.id, name: secondType.name, visible: secondType.visible, tags: [] }] }), /does not belong/);
+    assert.throws(() => repository!.updateWorkbookTags(first.id, { types: [{ id: firstType.id, name: firstType.name, visible: firstType.visible, tags: [] }, { name: "Other", visible: false, tags: [{ id: firstType.tags[0].id, name: firstType.tags[0].name }] }] }), /does not belong/);
   } finally { repository?.close(); temp.cleanup(); }
-});
-
-test("the converter preserves MVP data and upgrades default Japanese example labels", () => {
-  const temp = temporaryDatabase();
-  try {
-    const db = new DatabaseSync(temp.path);
-    db.exec(`
-      CREATE TABLE mvp_workbooks(id INTEGER PRIMARY KEY,name TEXT,created_at TEXT,vocabulary_label TEXT,vocabulary_language_code TEXT,preset_enabled INTEGER,vocabulary_kind TEXT,pos_enabled INTEGER);
-      CREATE TABLE mvp_workbook_meaning_attributes(workbook_id INTEGER,position INTEGER,label TEXT,language_code TEXT);
-      CREATE TABLE mvp_workbook_attributes(workbook_id INTEGER,attribute_key TEXT,label TEXT,language_code TEXT,is_required INTEGER,is_visible INTEGER,display_order INTEGER);
-      CREATE TABLE mvp_entries(id INTEGER PRIMARY KEY,vocabulary TEXT,meaning TEXT,kana_text TEXT,created_at TEXT,updated_at TEXT,workbook_id INTEGER);
-      CREATE TABLE mvp_entry_meanings(entry_id INTEGER,position INTEGER,value TEXT);
-      CREATE TABLE mvp_entry_attributes(entry_id INTEGER,attribute_key TEXT,value TEXT);
-      CREATE TABLE mvp_pos_tags(id INTEGER PRIMARY KEY,workbook_id INTEGER,name TEXT,is_predefined INTEGER);
-      CREATE TABLE mvp_entry_pos_tags(entry_id INTEGER,tag_id INTEGER);
-      CREATE TABLE mvp_entry_stats(entry_id INTEGER,test_count INTEGER,error_count INTEGER,last_tested TEXT,next_test_deadline TEXT);
-      CREATE TABLE mvp_meta(key TEXT,value TEXT);
-      INSERT INTO mvp_workbooks VALUES(7,'Japanese','2026-01-01','Japanese','JP',1,'preset_language',1);
-      INSERT INTO mvp_workbook_meaning_attributes VALUES(7,1,'English','EN');
-      INSERT INTO mvp_workbook_attributes VALUES(7,'vocab','Japanese','JP',1,1,0),(7,'meaning_1','Wrong metadata label','EN',1,1,1),(7,'kana','Kana','JP',0,0,2),(7,'example_1','Example 1','JP',0,0,3);
-      INSERT INTO mvp_entries VALUES(42,'猫','cat','ねこ','2026-01-01','2026-01-02',7);
-      INSERT INTO mvp_entry_meanings VALUES(42,1,'cat'); INSERT INTO mvp_entry_attributes VALUES(42,'example_1','A cat.');
-      INSERT INTO mvp_pos_tags VALUES(9,7,'名詞',1); INSERT INTO mvp_entry_pos_tags VALUES(42,9);
-      INSERT INTO mvp_entry_stats VALUES(42,5,2,'2026-01-03','2026-01-07'); INSERT INTO mvp_meta VALUES('current_workbook_id','7');
-    `); db.close();
-    const report = convertHybridDatabase(temp.path, true); assert.equal(report.integrity, "ok"); assert.ok(report.backup && existsSync(report.backup));
-    const converted = new VocabularyRepository(temp.path); const workbook = converted.getWorkbook(7)!; const entry = converted.getEntry(42)!;
-    assert.equal(workbook.meaningAttributes[0].label, "English");
-    assert.ok(workbook.metadataAttributes.some((field) => field.key === "example_sentence_1" && field.label === "Example Sentence 1"));
-    assert.equal(entry.attributes.example_sentence_1, "A cat."); assert.equal(entry.attributes.kana, "ねこ"); assert.equal(entry.testCount, 5); assert.equal(entry.tags[0].id, 9);
-    converted.close();
-  } finally { temp.cleanup(); }
 });

@@ -1,19 +1,19 @@
 # VocabHelper 3.1.0
 
-TypeScript TUI MVP for vocabulary memorization.
+A modern TypeScript TUI for vocabulary memorization.
 
-## MVP
+## Features
 
-- One flat vocabulary list
-- List, add, edit, delete
+- Multiple configurable workbooks
+- List, add, view, edit, and delete vocabulary entries
+- Custom meaning and optional fields
 - Workbook tag types with optional list and practice badges
-- SQLite-backed
-- Uses a normalized, TypeScript-owned SQLite database
-- No Python runtime required for the TUI
+- Prioritized practice with learning statistics
+- Normalized SQLite storage
 
 ## Requirements
 
-- Node 23+
+- Node 24 LTS or newer
 - npm
 
 ## Run
@@ -36,24 +36,6 @@ npm run start
 - Default database path: repo-root `vocab.db`
 - Override with `VOCAB_HELPER_DB_PATH`
 - Numeric IDs are stable and are intentionally not recycled after deletion. Gaps are normal.
-
-### Convert a pre-0.1 database
-
-The application does not modify a legacy or hybrid database during startup. From `tui/`, validate a conversion first:
-
-```powershell
-npm run db:convert
-```
-
-Then apply it:
-
-```powershell
-npm run db:convert:apply
-```
-
-The converter builds and validates a clean database before changing the source. It renames the original to a dated `vocab.db.backup-before-v1-*` file and writes a JSON validation report beside the backup. Active TypeScript/MVP vocabulary, fields, statistics, and Part of Speech assignments are preserved. POS data is upgraded to the generic tag-type model; obsolete legacy-only tables are not copied.
-
-## Legacy Code
-
-The Python CLI and GUI code remains in the repository as reference source. It is not part of the supported 3.x runtime or release artifact; the supported experience is the TypeScript TUI under `tui/`.
+- Normalized databases created by VocabHelper 3.0.0 or newer are upgraded automatically.
+- Legacy Python and hybrid database formats are no longer supported.
 

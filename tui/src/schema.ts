@@ -11,7 +11,7 @@ function tableExists(db: DatabaseSync, name: string): boolean {
   return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
 }
 
-export function isHybridOrLegacyDatabase(db: DatabaseSync): boolean {
+export function hasUnsupportedLegacySchema(db: DatabaseSync): boolean {
   return tableExists(db, "mvp_workbooks") || tableExists(db, "vocab_entries");
 }
 
@@ -190,13 +190,22 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
 
 export function runSchemaMigrations(db: DatabaseSync, migrations: SchemaMigration[] = SCHEMA_MIGRATIONS): void {
   db.exec("PRAGMA foreign_keys = ON");
-  if (isHybridOrLegacyDatabase(db)) {
-    throw new Error("This database uses the legacy/hybrid schema. Run 'npm run db:convert:apply' before starting VocabHelper.");
+  if (hasUnsupportedLegacySchema(db)) {
+    throw new Error("This database uses an unsupported legacy VocabHelper schema. This release requires a normalized 3.x database.");
   }
 
-  db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)");
-  const applied = new Set((db.prepare("SELECT version FROM schema_migrations").all() as Array<{ version: number }>).map((row) => Number(row.version)));
   const ordered = [...migrations].sort((a, b) => a.version - b.version);
+  const supportedVersion = ordered.at(-1)?.version ?? 0;
+  if (tableExists(db, "schema_migrations")) {
+    const newestApplied = Number((db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number | null }).version ?? 0);
+    if (newestApplied > supportedVersion) {
+      throw new Error(`This database uses newer schema version ${newestApplied}; this VocabHelper build supports up to version ${supportedVersion}.`);
+    }
+  } else {
+    db.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)");
+  }
+
+  const applied = new Set((db.prepare("SELECT version FROM schema_migrations").all() as Array<{ version: number }>).map((row) => Number(row.version)));
   for (const migration of ordered) {
     if (applied.has(migration.version)) continue;
     db.exec("BEGIN IMMEDIATE");

@@ -1,4 +1,5 @@
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { runSchemaMigrations } from "./schema.js";
 
@@ -74,8 +75,10 @@ export class TagDataLossError extends Error {
 }
 export class ValidationError extends Error {}
 
+const MODULE_DIRECTORY = dirname(fileURLToPath(import.meta.url));
+
 export function defaultDbPath(): string {
-  return process.env.VOCAB_HELPER_DB_PATH?.trim() || resolve(process.cwd(), "..", "vocab.db");
+  return process.env.VOCAB_HELPER_DB_PATH?.trim() || resolve(MODULE_DIRECTORY, "..", "..", "vocab.db");
 }
 
 function trimRequired(value: string, label: string): string {
@@ -99,9 +102,15 @@ export class VocabularyRepository {
   private readonly db: DatabaseSync;
   private closed = false;
 
-  constructor(private readonly dbPath: string = defaultDbPath()) {
+  constructor(dbPath: string = defaultDbPath()) {
     this.db = new DatabaseSync(dbPath);
-    runSchemaMigrations(this.db);
+    try {
+      runSchemaMigrations(this.db);
+    } catch (error) {
+      this.db.close();
+      this.closed = true;
+      throw error;
+    }
   }
   close(): void { if (!this.closed) this.db.close(); this.closed = true; }
   initialize(): void { runSchemaMigrations(this.db); }
@@ -301,6 +310,7 @@ export class VocabularyRepository {
       for (const field of normalized.fields) {
         if (field.id !== undefined) update.run(field.displayOrder, field.label, field.languageCode, field.required ? 1 : 0, field.visible ? 1 : 0, field.id, workbookId);
         else {
+          if (field.role === undefined) throw new Error("Normalized workbook fields must have a role.");
           const result = insert.run(workbookId, field.key, field.role, field.displayOrder, field.label, field.languageCode, field.required ? 1 : 0, field.visible ? 1 : 0);
           const fieldId = Number(result.lastInsertRowid);
           this.db.prepare("INSERT INTO entry_field_values (entry_id,field_id,workbook_id,value) SELECT id,?,?,'' FROM entries WHERE workbook_id=?").run(fieldId, workbookId, workbookId);
