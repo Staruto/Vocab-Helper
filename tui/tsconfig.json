@@ -5,6 +5,7 @@
     "moduleResolution": "NodeNext",
     "jsx": "react-jsx",
     "lib": ["ES2022", "DOM"],
+    "types": ["node"],
     "rootDir": "src",
     "outDir": "dist",
     "strict": true,
