@@ -111,7 +111,7 @@ export function convertHybridDatabase(sourcePath: string, apply = false): Conver
         addStat.run(id, Math.max(0, Number(stat?.test_count ?? 0)), Math.min(3, Math.max(0, Number(stat?.error_count ?? 0))), stat?.last_tested ?? null, stat?.next_test_deadline ?? null);
       }
 
-      const addTagType = targetDb.prepare("INSERT INTO tag_types (workbook_id,name,position) VALUES (?,'Part of Speech',1)");
+      const addTagType = targetDb.prepare("INSERT INTO tag_types (workbook_id,name,position,is_visible) VALUES (?,'Part of Speech',1,0)");
       const addTag = targetDb.prepare("INSERT INTO tags (id,tag_type_id,workbook_id,name) VALUES (?,?,?,?)");
       for (const workbook of workbooks) {
         const workbookId = Number(workbook.id);

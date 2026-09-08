@@ -19,16 +19,17 @@ function basicWorkbook(name = "Test"): WorkbookConfigurationInput {
     presetEnabled: true,
     meaningAttributes: [{ position: 1, label: "English", languageCode: "EN" }],
     optionalAttributes: LANGUAGE_PRESET_DEFINITIONS.JP.optionalAttributes.map((field, index) => ({ ...field, required: false, visible: false, displayOrder: index + 1, provenance: "preset" })),
-    tagTypes: [{ name: "Part of Speech", tags: [{ name: "名詞" }] }],
+    tagTypes: [{ name: "Part of Speech", visible: false, tags: [{ name: "名詞" }] }],
   };
 }
 
-test("fresh databases use the v2 schema and migrations are idempotent", () => {
+test("fresh databases use the v3 schema and migrations are idempotent", () => {
   const temp = temporaryDatabase();
   try {
     const repository = new VocabularyRepository(temp.path); repository.close();
     const db = new DatabaseSync(temp.path);
-    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get() as { count: number }).count, 2);
+    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get() as { count: number }).count, 3);
+    assert.equal((db.prepare("SELECT dflt_value FROM pragma_table_info('tag_types') WHERE name='is_visible'").get() as { dflt_value: string }).dflt_value, "0");
     assert.equal((db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name IN ('pos_tags','entry_pos_tags')").get() as { count: number }).count, 0);
     assert.equal((db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name LIKE 'mvp_%'").get() as { count: number }).count, 0);
     assertDatabaseIntegrity(db); db.close();
@@ -40,9 +41,9 @@ test("a failed migration rolls back its schema and ledger row", () => {
   const temp = temporaryDatabase();
   try {
     const db = new DatabaseSync(temp.path); runSchemaMigrations(db);
-    assert.throws(() => runSchemaMigrations(db, [{ version: 3, apply(inner) { inner.exec("CREATE TABLE rollback_probe (id INTEGER); INSERT INTO missing_table VALUES (1)"); } }]), /migration 3 failed/i);
+    assert.throws(() => runSchemaMigrations(db, [{ version: 4, apply(inner) { inner.exec("CREATE TABLE rollback_probe (id INTEGER); INSERT INTO missing_table VALUES (1)"); } }]), /migration 4 failed/i);
     assert.equal((db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE name='rollback_probe'").get() as { count: number }).count, 0);
-    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version=3").get() as { count: number }).count, 0);
+    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version=4").get() as { count: number }).count, 0);
     db.close();
   } finally { temp.cleanup(); }
 });
@@ -268,6 +269,7 @@ test("v1 POS data migrates to generic tag types without losing disabled data", (
     db.prepare("INSERT INTO entry_pos_tags (entry_id,tag_id,workbook_id) VALUES (11,91,1)").run();
     runSchemaMigrations(db);
     assert.equal((db.prepare("SELECT COUNT(*) AS count FROM tag_types").get() as { count: number }).count, 2);
+    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM tag_types WHERE is_visible=0").get() as { count: number }).count, 2);
     assert.deepEqual((db.prepare("SELECT id,name FROM tags").all() as Array<{ id: number; name: string }>).map((row) => [row.id, row.name]), [[91, "名詞"]]);
     assert.deepEqual((db.prepare("SELECT entry_id,tag_id FROM entry_tags").all() as Array<{ entry_id: number; tag_id: number }>).map((row) => [row.entry_id, row.tag_id]), [[11, 91]]);
     assert.equal((db.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('workbooks') WHERE name='pos_enabled'").get() as { count: number }).count, 0);
@@ -281,16 +283,18 @@ test("generic tag updates preserve identities, support multiple assignments, and
     repository = new VocabularyRepository(temp.path);
     const workbook = repository.createConfiguredWorkbook(basicWorkbook());
     let types = repository.updateWorkbookTags(workbook.id, { types: [
-      { id: repository.listTagTypes(workbook.id)[0].id, name: "Part of Speech", tags: [{ name: "noun" }, { name: "verb" }, { name: "unused" }] },
-      { name: "Topic", tags: [{ name: "Travel" }, { name: "noun" }] },
+      { id: repository.listTagTypes(workbook.id)[0].id, name: "Part of Speech", visible: true, tags: [{ name: "noun" }, { name: "verb" }, { name: "unused" }] },
+      { name: "Topic", visible: false, tags: [{ name: "Travel" }, { name: "noun" }] },
     ] });
+    assert.deepEqual(types.map((type) => type.visible), [true, false]);
     const pos = types[0]; const noun = pos.tags.find((tag) => tag.name === "noun")!; const verb = pos.tags.find((tag) => tag.name === "verb")!;
     const travel = types[1].tags.find((tag) => tag.name === "Travel")!;
     const entry = repository.addEntry(workbook.id, "run", "move quickly", ["move quickly"], {}, [noun.id, verb.id, travel.id]);
     assert.deepEqual(entry.tags.map((tag) => tag.name).sort(), ["Travel", "noun", "verb"]);
     assert.throws(() => repository!.updateWorkbookTags(workbook.id, { types: types.map((type) => type.id === pos.id ? { ...type, tags: [...type.tags, { name: "noun" }] } : type) }), /must be unique/);
-    types = repository.updateWorkbookTags(workbook.id, { types: types.map((type) => type.id === pos.id ? { ...type, tags: type.tags.map((tag) => ({ ...tag, name: tag.name === "noun" ? "verb" : tag.name === "verb" ? "noun" : tag.name })) } : type) });
+    types = repository.updateWorkbookTags(workbook.id, { types: types.map((type) => type.id === pos.id ? { ...type, visible: false, tags: type.tags.map((tag) => ({ ...tag, name: tag.name === "noun" ? "verb" : tag.name === "verb" ? "noun" : tag.name })) } : type) });
     assert.equal(types[0].tags.find((tag) => tag.id === noun.id)?.name, "verb");
+    assert.equal(types[0].visible, false);
     const withoutUnused = { types: types.map((type) => ({ ...type, tags: type.tags.filter((tag) => tag.name !== "unused") })) };
     repository.updateWorkbookTags(workbook.id, withoutUnused);
     types = repository.listTagTypes(workbook.id);

@@ -6,9 +6,9 @@ export type VocabularyKind = "preset_language" | "other_language" | "non_languag
 export type MeaningAttribute = { id?: number; key?: string; position: number; label: string; languageCode: string | null };
 export type MetadataAttribute = { id?: number; key: string; role?: "vocabulary" | "meaning" | "optional"; label: string; languageCode: string | null; required: boolean; visible: boolean; displayOrder: number; provenance?: "preset" | "custom" };
 export type Tag = { id: number; tagTypeId: number; name: string };
-export type TagType = { id: number; workbookId: number; name: string; position: number; tags: Tag[] };
+export type TagType = { id: number; workbookId: number; name: string; position: number; visible: boolean; tags: Tag[] };
 export type TagDraft = { id?: number; name: string };
-export type TagTypeDraft = { id?: number; name: string; tags: TagDraft[] };
+export type TagTypeDraft = { id?: number; name: string; visible: boolean; tags: TagDraft[] };
 export type WorkbookConfigurationInput = {
   name: string;
   vocabularyKind: VocabularyKind;
@@ -138,7 +138,7 @@ export class VocabularyRepository {
     return this.createConfiguredWorkbook({
       name, vocabularyKind: kind, vocabularyLabel, vocabularyLanguageCode, meaningAttributes, presetEnabled,
       optionalAttributes: presetEnabled ? (preset?.optionalAttributes ?? []).map((field, index) => ({ ...field, required: false, visible: false, displayOrder: index + 1, provenance: "preset" })) : [],
-      tagTypes: kind === "non_language" ? [] : [{ name: "Part of Speech", tags: (preset?.partOfSpeechTags ?? []).map((tagName) => ({ name: tagName })) }],
+      tagTypes: kind === "non_language" ? [] : [{ name: "Part of Speech", visible: false, tags: (preset?.partOfSpeechTags ?? []).map((tagName) => ({ name: tagName })) }],
     });
   }
 
@@ -177,7 +177,7 @@ export class VocabularyRepository {
       name, vocabularyLabel, vocabularyLanguageCode, meaningAttributes, presetEnabled,
       vocabularyKind: vocabularyLanguageCode ? "preset_language" : current.vocabularyKind,
       optionalAttributes: current.metadataAttributes.filter((field) => field.role === "optional"),
-      tagTypes: this.listTagTypes(workbookId).map((type) => ({ id: type.id, name: type.name, tags: type.tags.map((tag) => ({ id: tag.id, name: tag.name })) })),
+      tagTypes: this.listTagTypes(workbookId).map((type) => ({ id: type.id, name: type.name, visible: type.visible, tags: type.tags.map((tag) => ({ id: tag.id, name: tag.name })) })),
     });
   }
 
@@ -313,10 +313,10 @@ export class VocabularyRepository {
 
   listTagTypes(workbookId: number): TagType[] {
     this.requireWorkbook(workbookId);
-    const types = this.db.prepare("SELECT id, name, position FROM tag_types WHERE workbook_id = ? ORDER BY position").all(workbookId) as Record<string, unknown>[];
+    const types = this.db.prepare("SELECT id, name, position, is_visible FROM tag_types WHERE workbook_id = ? ORDER BY position").all(workbookId) as Record<string, unknown>[];
     const tags = this.db.prepare("SELECT id, tag_type_id, name FROM tags WHERE workbook_id = ? ORDER BY name").all(workbookId) as Record<string, unknown>[];
     return types.map((type) => ({
-      id: Number(type.id), workbookId, name: String(type.name), position: Number(type.position),
+      id: Number(type.id), workbookId, name: String(type.name), position: Number(type.position), visible: Number(type.is_visible) === 1,
       tags: tags.filter((tag) => Number(tag.tag_type_id) === Number(type.id)).map((tag) => ({ id: Number(tag.id), tagTypeId: Number(type.id), name: String(tag.name) })),
     }));
   }
@@ -371,9 +371,9 @@ export class VocabularyRepository {
       this.db.prepare("UPDATE tag_types SET position = position + ? WHERE workbook_id = ?").run(offset, workbookId);
       for (const [index, type] of normalized.types.entries()) {
         let typeId = type.id;
-        if (typeId === undefined) typeId = Number(this.db.prepare("INSERT INTO tag_types (workbook_id, name, position) VALUES (?, ?, ?)").run(workbookId, type.name, index + 1).lastInsertRowid);
+        if (typeId === undefined) typeId = Number(this.db.prepare("INSERT INTO tag_types (workbook_id, name, position, is_visible) VALUES (?, ?, ?, ?)").run(workbookId, type.name, index + 1, type.visible ? 1 : 0).lastInsertRowid);
         else {
-          const result = this.db.prepare("UPDATE tag_types SET name = ?, position = ? WHERE id = ? AND workbook_id = ?").run(type.name, index + 1, typeId, workbookId);
+          const result = this.db.prepare("UPDATE tag_types SET name = ?, position = ?, is_visible = ? WHERE id = ? AND workbook_id = ?").run(type.name, index + 1, type.visible ? 1 : 0, typeId, workbookId);
           if (Number(result.changes) !== 1) throw new ValidationError("A tag type changed while it was being saved.");
         }
         for (const tag of type.tags) {
@@ -464,7 +464,7 @@ export class VocabularyRepository {
         if (tagNames.has(tagKey)) throw new ValidationError(`Tag names in ${name} must be unique.`);
         tagNames.add(tagKey); return { ...tag, name: tagName };
       });
-      return { ...type, name, tags };
+      return { ...type, name, visible: Boolean(type.visible), tags };
     });
     return {
       ...input, name: trimRequired(input.name, "Workbook name"), vocabularyLabel: trimRequired(input.vocabularyLabel, "Vocabulary label"), vocabularyLanguageCode: code,
@@ -597,10 +597,10 @@ export class VocabularyRepository {
     return key;
   }
   private writeInitialTagTypes(workbookId: number, types: TagTypeDraft[]): void {
-    const addType = this.db.prepare("INSERT INTO tag_types (workbook_id, name, position) VALUES (?, ?, ?)");
+    const addType = this.db.prepare("INSERT INTO tag_types (workbook_id, name, position, is_visible) VALUES (?, ?, ?, ?)");
     const addTag = this.db.prepare("INSERT INTO tags (tag_type_id, workbook_id, name) VALUES (?, ?, ?)");
     for (const [index, type] of types.entries()) {
-      const typeId = Number(addType.run(workbookId, type.name, index + 1).lastInsertRowid);
+      const typeId = Number(addType.run(workbookId, type.name, index + 1, type.visible ? 1 : 0).lastInsertRowid);
       for (const tag of type.tags) addTag.run(typeId, workbookId, tag.name);
     }
   }

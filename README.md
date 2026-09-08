@@ -1,4 +1,4 @@
-# VocabHelper 3.0.0
+# VocabHelper 3.1.0
 
 TypeScript TUI MVP for vocabulary memorization.
 
@@ -6,6 +6,7 @@ TypeScript TUI MVP for vocabulary memorization.
 
 - One flat vocabulary list
 - List, add, edit, delete
+- Workbook tag types with optional list and practice badges
 - SQLite-backed
 - Uses a normalized, TypeScript-owned SQLite database
 - No Python runtime required for the TUI
@@ -54,5 +55,5 @@ The converter builds and validates a clean database before changing the source. 
 
 ## Legacy Code
 
-The Python CLI and GUI code remains in the repository as reference source. It is not part of the supported 3.0 runtime or release artifact; the supported experience is the TypeScript TUI under `tui/`.
+The Python CLI and GUI code remains in the repository as reference source. It is not part of the supported 3.x runtime or release artifact; the supported experience is the TypeScript TUI under `tui/`.
 

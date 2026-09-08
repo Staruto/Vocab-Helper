@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 export type SchemaMigration = {
   version: number;
@@ -174,6 +174,15 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
         CREATE INDEX idx_tag_types_workbook_order ON tag_types(workbook_id, position);
         CREATE INDEX idx_tags_type_name ON tags(tag_type_id, name);
         CREATE INDEX idx_entry_tags_workbook ON entry_tags(workbook_id, entry_id);
+      `);
+    },
+  },
+  {
+    version: 3,
+    apply(db) {
+      db.exec(`
+        ALTER TABLE tag_types
+        ADD COLUMN is_visible INTEGER NOT NULL DEFAULT 0 CHECK (is_visible IN (0, 1));
       `);
     },
   },

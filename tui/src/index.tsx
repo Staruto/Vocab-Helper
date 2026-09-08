@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, render, useApp, useInput, useStdout } from "ink";
 import { CreateWorkbookInput, EntryRow, LANGUAGE_PRESET_DEFINITIONS, MeaningAttribute, MetadataAttribute, TagDataLossError, TagType, TagTypeDraft, VocabularyKind, WorkbookAttributesDraft, WorkbookConfigurationInput, WorkbookDataLossError, WorkbookRow, WorkbookTagsDraft } from "./db.js";
 import { VocabularyBackend } from "./backend.js";
+import { fitTagBadges, visibleAssignedTagGroups } from "./tag-display.js";
 
 type UiMode =
   | { kind: "command" }
@@ -43,11 +44,12 @@ type ParameterizedCommand = "edit" | "delete";
 type LanguagePreset = { code: string; label: string };
 
 const PAGE_SIZE = 20;
-const TITLE = "VocabHelper 3.0.0";
+const TITLE = "VocabHelper 3.1.0";
 const FOOTER_HINT = "Navigate pages with <- -> | Esc returns to menu";
 const AUXILIARY_TEXT_COLOR = "#979797";
 const GRAY_TIER_COLOR = "#777777";
 const SELECTED_TEXT_COLOR = "#cea8ff";
+const TAG_BADGE_COLOR = "#5fd7d7";
 const COMMAND_SUGGESTION_ROWS = 6;
 const LANGUAGE_PRESETS: LanguagePreset[] = [
   { code: "JP", label: "Japanese" },
@@ -231,7 +233,9 @@ function buildFooterLine(width: number, pageText: string, hintText: string): str
   return `${left}${" ".repeat(width - leftWidth - rightWidth)}${right}`;
 }
 
-function buildTableLines(entries: EntryRow[], pageIndex: number, width: number, availableRows: number, vocabularyLabel: string, meaningLabel: string, attributes?: MetadataAttribute[]): string[] {
+type VocabularyTableLayout = { border: string; header: string; columns: Array<{ key: string; label: string }>; widths: number[]; entries: EntryRow[] };
+
+function buildTableLayout(entries: EntryRow[], pageIndex: number, width: number, availableRows: number, vocabularyLabel: string, meaningLabel: string, attributes?: MetadataAttribute[]): VocabularyTableLayout {
   const totalWidth = Math.max(width, 40);
   const innerWidth = Math.max(20, totalWidth - 2);
   const columns = (attributes?.filter((a) => a.visible) ?? [
@@ -240,20 +244,28 @@ function buildTableLines(entries: EntryRow[], pageIndex: number, width: number, 
   const columnWidth = Math.max(12, Math.floor((innerWidth - columns.length + 1) / columns.length));
   const widths = columns.map((_c, i) => i === columns.length - 1 ? innerWidth - (columnWidth + 1) * (columns.length - 1) : columnWidth);
   const border = `+${widths.map((w) => "-".repeat(w)).join("+")}+`;
-  const valueFor = (entry: EntryRow, key: string): string => {
-    if (key === "vocab") return buildEntryLabel(entry);
-    if (key.startsWith("meaning_")) return entry.meanings[Number(key.slice("meaning_".length)) - 1] ?? "";
-    return entry.attributes[key] ?? "";
-  };
   const visibleRows = Math.max(1, Math.min(PAGE_SIZE, availableRows));
   const pageEntries = entries.slice(pageIndex * PAGE_SIZE, pageIndex * PAGE_SIZE + visibleRows);
   const header = `|${columns.map((c, i) => padLine(c.label, widths[i])).join("|")}|`;
+  return { border, header, columns, widths, entries: pageEntries };
+}
 
-  const rows = pageEntries.map((entry) => {
-    return `|${columns.map((c, i) => padLine(valueFor(entry, c.key), widths[i])).join("|")}|`;
-  });
+function tableValueFor(entry: EntryRow, key: string): string {
+  if (key === "vocab") return buildEntryLabel(entry);
+  if (key.startsWith("meaning_")) return entry.meanings[Number(key.slice("meaning_".length)) - 1] ?? "";
+  return entry.attributes[key] ?? "";
+}
 
-  return [border, header, border, ...rows, border];
+function VocabularyTableCell({ entry, width, tagTypes }: { entry: EntryRow; width: number; tagTypes: TagType[] }): JSX.Element {
+  const tagNames = visibleAssignedTagGroups(entry, tagTypes).flatMap((group) => group.tagNames);
+  const minimumVocabularyWidth = Math.min(width, 8);
+  const badges = fitTagBadges(tagNames, Math.max(0, width - minimumVocabularyWidth - 1), displayWidth);
+  if (badges.length === 0) return <>{padLine(buildEntryLabel(entry), width)}</>;
+  const badgeWidth = badges.reduce((total, badge) => total + displayWidth(badge), 0) + badges.length - 1;
+  const vocabularyWidth = Math.max(1, width - badgeWidth - 1);
+  const vocabulary = truncate(buildEntryLabel(entry), vocabularyWidth);
+  const gap = Math.max(1, width - displayWidth(vocabulary) - badgeWidth);
+  return <><Text>{vocabulary}{" ".repeat(gap)}</Text>{badges.map((badge, index) => <React.Fragment key={`${index}-${badge}`}>{index > 0 ? " " : ""}<Text color={TAG_BADGE_COLOR}>{badge}</Text></React.Fragment>)}</>;
 }
 
 function buildHelpText(): string {
@@ -788,8 +800,8 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   const pageCount = getPageCount(entries.length);
   const safePageIndex = clampPageIndex(pageIndex, entries.length);
   const pageText = `Page ${safePageIndex + 1}/${pageCount}`;
-  const tableLines = useMemo(
-    () => buildTableLines(entries, safePageIndex, width, PAGE_SIZE, workbook.vocabularyLabel, workbook.meaningAttributes[0]?.label ?? "Primary Meaning", workbook.metadataAttributes),
+  const tableLayout = useMemo(
+    () => buildTableLayout(entries, safePageIndex, width, PAGE_SIZE, workbook.vocabularyLabel, workbook.meaningAttributes[0]?.label ?? "Primary Meaning", workbook.metadataAttributes),
     [entries, safePageIndex, width, workbook.vocabularyLabel, workbook.meaningAttributes, workbook.metadataAttributes],
   );
   const promptLine = `> ${buffer}_`;
@@ -800,9 +812,15 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       <Text color="cyan" bold>
         {centerLine(screenTitle, width)}
       </Text>
-      {tableLines.map((line, index) => (
-        <Text key={`${index}-${line}`} color={tierColorsEnabled && index >= 3 && index < 3 + entries.slice(safePageIndex * PAGE_SIZE, safePageIndex * PAGE_SIZE + PAGE_SIZE).length ? tierColor(entries[safePageIndex * PAGE_SIZE + index - 3].tier) : undefined}>{line}</Text>
+      <Text>{tableLayout.border}</Text>
+      <Text>{tableLayout.header}</Text>
+      <Text>{tableLayout.border}</Text>
+      {tableLayout.entries.map((entry) => (
+        <Text key={entry.id} color={tierColorsEnabled ? tierColor(entry.tier) : undefined}>
+          |{tableLayout.columns.map((column, index) => <React.Fragment key={column.key}>{column.key === "vocab" ? <VocabularyTableCell entry={entry} width={tableLayout.widths[index]} tagTypes={tagTypes} /> : padLine(tableValueFor(entry, column.key), tableLayout.widths[index])}|</React.Fragment>)}
+        </Text>
       ))}
+      <Text>{tableLayout.border}</Text>
       <Text>{padLine("", width)}</Text>
       <Text>{padLine("", width)}</Text>
       <Text color={AUXILIARY_TEXT_COLOR}>{padLine(buildFooterLine(width, pageText, FOOTER_HINT), width)}</Text>
@@ -1018,7 +1036,7 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
   function configuration(): WorkbookConfigurationInput {
     return { name: name.trim(), vocabularyKind: selectedType.kind, vocabularyLabel: vocabularyLabel.trim(), vocabularyLanguageCode: selectedType.code,
       presetEnabled: selectedType.kind === "preset_language" && presetEnabled, meaningAttributes: meanings.slice(0, meaningCount),
-      optionalAttributes: attributes, tagTypes: existingWorkbook ? existingTagTypes : addPosType ? [{ name: "Part of Speech", tags }] : [] };
+      optionalAttributes: attributes, tagTypes: existingWorkbook ? existingTagTypes : addPosType ? [{ name: "Part of Speech", visible: false, tags }] : [] };
   }
   function submit(config: WorkbookConfigurationInput, confirmed: boolean): void {
     try { onSave(config, confirmed); }
@@ -1622,13 +1640,13 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
 type TagSelection = { kind: "type"; typeIndex: number } | { kind: "tag"; typeIndex: number; tagIndex: number } | { kind: "add-type" };
 
 function tagDraftSignature(types: TagTypeDraft[]): string {
-  return JSON.stringify(types.map((type) => ({ id: type.id, name: type.name, tags: type.tags.map((tag) => ({ id: tag.id, name: tag.name })) })));
+  return JSON.stringify(types.map((type) => ({ id: type.id, name: type.name, visible: type.visible, tags: type.tags.map((tag) => ({ id: tag.id, name: tag.name })) })));
 }
 
 function TagSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook: WorkbookRow; onSave: (draft: WorkbookTagsDraft, confirmDataLoss: boolean) => void; onCancel: () => void; onQuit: () => void }): JSX.Element {
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
-  const initialTypes = useMemo<TagTypeDraft[]>(() => backend.listTagTypes(workbook.id).map((type) => ({ id: type.id, name: type.name, tags: type.tags.map((tag) => ({ id: tag.id, name: tag.name })) })), [workbook.id]);
+  const initialTypes = useMemo<TagTypeDraft[]>(() => backend.listTagTypes(workbook.id).map((type) => ({ id: type.id, name: type.name, visible: type.visible, tags: type.tags.map((tag) => ({ id: tag.id, name: tag.name })) })), [workbook.id]);
   const [types, setTypes] = useState<TagTypeDraft[]>(initialTypes);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [action, setAction] = useState<"none" | "add-type" | "add-tag" | "rename-type" | "rename-tag">("none");
@@ -1655,7 +1673,7 @@ function TagSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook: W
     if (!name) { setMessage(action.includes("type") ? "Tag type name is required." : "Tag name is required."); return; }
     if (action === "add-type") {
       if (types.some((type) => type.name.toLocaleLowerCase() === name.toLocaleLowerCase())) { setMessage("Tag type names must be unique."); return; }
-      setTypes((current) => [...current, { name, tags: [] }]);
+      setTypes((current) => [...current, { name, visible: false, tags: [] }]);
     } else if (action === "add-tag" && selectedType) {
       if (selectedType.tags.some((tag) => tag.name.toLocaleLowerCase() === name.toLocaleLowerCase())) { setMessage(`Tag names in ${selectedType.name} must be unique.`); return; }
       setTypes((current) => current.map((type) => type === selectedType ? { ...type, tags: [...type.tags, { name }] } : type));
@@ -1700,6 +1718,11 @@ function TagSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook: W
     if (key.upArrow) { setSelectedIndex((value) => value <= 0 ? selections.length - 1 : value - 1); setMessage(""); return; }
     if (key.downArrow) { setSelectedIndex((value) => (value + 1) % selections.length); setMessage(""); return; }
     if (key.return && selected.kind === "add-type") { begin("add-type"); return; }
+    if (input === " " && selected.kind === "type" && selectedType) {
+      setTypes((current) => current.map((type) => type === selectedType ? { ...type, visible: !type.visible } : type));
+      setMessage(`${selectedType.name} will be ${selectedType.visible ? "hidden" : "shown"} when changes are saved.`);
+      return;
+    }
     if (key.ctrl && input.toLowerCase() === "a" && selectedType) { begin("add-tag"); return; }
     if (key.ctrl && input.toLowerCase() === "r") { if (selected.kind === "type") begin("rename-type"); else if (selected.kind === "tag") begin("rename-tag"); return; }
     if (key.delete && selectedType) {
@@ -1716,9 +1739,9 @@ function TagSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook: W
   if (screenMode === "destructive-confirm") {
     return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Confirm tag data removal", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Saving will permanently remove these entry assignments:", width)}</Text><Text>{padLine("", width)}</Text>{removals.map((item, index) => <Text key={`${item.typeName}-${item.tagName}-${index}`} color="red">{padLine(`${item.typeName}${item.tagName ? ` / ${item.tagName}` : ""}: ${item.assignmentCount} assignment(s) across ${item.entryCount} entry/entries`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color="cyan">{padLine(`Type yes: ${confirmBuffer}_`, width)}</Text><Text color="red">{padLine(message, width)}</Text><Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Enter confirm | Esc continue editing", width)}</Text></Box>;
   }
-  const footer = action !== "none" ? "Enter confirm | Esc cancel edit" : selected.kind === "add-type" ? "↑↓ navigate | Enter add tag type | Esc leave" : `↑↓ navigate | Ctrl+A add tag | Ctrl+R rename | Del remove | Esc leave`;
+  const footer = action !== "none" ? "Enter confirm | Esc cancel edit" : selected.kind === "add-type" ? "↑↓ navigate | Enter add tag type | Esc leave" : selected.kind === "type" ? "↑↓ navigate | Space show/hide | Ctrl+A add tag | Ctrl+R rename | Del remove | Esc leave" : "↑↓ navigate | Ctrl+A add tag | Ctrl+R rename | Del remove | Esc leave";
   return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Tags — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Organize tags into types. Changes are staged until you leave this page.", width)}</Text><Text color={message ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text>
-    {types.map((type, typeIndex) => { const active = selected.kind !== "add-type" && selected.typeIndex === typeIndex; const titleActive = selected.kind === "type" && active; return <Box key={type.id ?? `new-${typeIndex}`} flexDirection="column" borderStyle="single" borderColor={active ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}><Text bold color={titleActive ? SELECTED_TEXT_COLOR : undefined}>{`${titleActive ? "> " : ""}${type.name}`}</Text>{type.tags.length ? type.tags.map((tag, tagIndex) => { const tagActive = selected.kind === "tag" && selected.typeIndex === typeIndex && selected.tagIndex === tagIndex; return <Text key={tag.id ?? `new-${tagIndex}`} color={tagActive ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{`${tagActive ? ">" : " "} ${tag.name}`}</Text>; }) : <Text color={AUXILIARY_TEXT_COLOR}>No tags</Text>}</Box>; })}
+    {types.map((type, typeIndex) => { const active = selected.kind !== "add-type" && selected.typeIndex === typeIndex; const titleActive = selected.kind === "type" && active; return <Box key={type.id ?? `new-${typeIndex}`} flexDirection="column" borderStyle="single" borderColor={active ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}><Text bold color={titleActive ? SELECTED_TEXT_COLOR : undefined}>{`${titleActive ? "> " : ""}${type.name} [${type.visible ? "shown" : "hidden"}]`}</Text>{type.tags.length ? type.tags.map((tag, tagIndex) => { const tagActive = selected.kind === "tag" && selected.typeIndex === typeIndex && selected.tagIndex === tagIndex; return <Text key={tag.id ?? `new-${tagIndex}`} color={tagActive ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{`${tagActive ? ">" : " "} ${tag.name}`}</Text>; }) : <Text color={AUXILIARY_TEXT_COLOR}>No tags</Text>}</Box>; })}
     <Box flexDirection="column" borderStyle="classic" borderColor={selected.kind === "add-type" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}><Text color={selected.kind === "add-type" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{`${selected.kind === "add-type" ? "> " : ""} + Add tag type`}</Text></Box>
     {action !== "none" ? <Text color="cyan">{padLine(`${action.includes("type") ? "Tag type" : "Tag"} name: ${buffer}_`, width)}</Text> : null}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footer, width)}</Text></Box>;
 }
@@ -1753,6 +1776,13 @@ function buildExplicitEntryLines(workbook: WorkbookRow, entry: EntryRow): string
   ];
 }
 
+function PracticeTagLine({ typeName, tagNames, width }: { typeName: string; tagNames: string[]; width: number }): JSX.Element | null {
+  const label = truncate(`${typeName}:`, Math.max(1, Math.floor(width * 0.4)));
+  const badges = fitTagBadges(tagNames, Math.max(0, width - displayWidth(label) - 1), displayWidth);
+  if (badges.length === 0) return null;
+  return <Text><Text color={AUXILIARY_TEXT_COLOR}>{label} </Text>{badges.map((badge, index) => <React.Fragment key={`${index}-${badge}`}>{index > 0 ? " " : ""}<Text color={TAG_BADGE_COLOR}>{badge}</Text></React.Fragment>)}</Text>;
+}
+
 function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workbook: WorkbookRow; count: number; onCancel: () => void; onQuit: () => void; onDone: (score: number, total: number) => void }): JSX.Element {
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
@@ -1767,7 +1797,9 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
   const [answer, setAnswer] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
   const [score, setScore] = useState(0);
+  const tagTypes = useMemo(() => backend.listTagTypes(workbook.id), [workbook.id]);
   const current = phase === "initial" ? questions[index] : phase === "retry" ? retryRound[index] : null;
+  const visibleTagGroups = current ? visibleAssignedTagGroups(current, tagTypes) : [];
   useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => stdout.off("resize", f); }, [stdout]);
 
   function advanceAfterAnswer(sourcePhase: "initial" | "retry" = phase as "initial" | "retry", queuedRetry = nextRetryRound): void {
@@ -1828,7 +1860,7 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
   if (phase === "done") return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice — ${workbook.name}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="green">{padLine(`Final initial-round score: ${score}/${questions.length}`, width)}</Text><Text>{padLine("Press Enter to return.", width)}</Text></Box>;
   if (phase === "detail" && detailEntry) return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Entry #${detailEntry.id}`, width)}</Text><Text color="red">{padLine(`Incorrect — expected: ${detailEntry.vocabulary}`, width)}</Text><Text>{padLine("", width)}</Text>{buildExplicitEntryLines(workbook, detailEntry).map((line, i) => <Text key={`${i}-${line}`} color={AUXILIARY_TEXT_COLOR}>{padLine(line, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Enter advances. Esc cancels.", width)}</Text></Box>;
   const roundLabel = phase === "retry" ? `Retry round ${retryNumber} — Question ${index + 1}/${retryRound.length}` : `Question ${index + 1}/${questions.length}`;
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(roundLabel, width)}</Text><Text>{padLine("", width)}</Text><Text color="yellow">{padLine(`${workbook.meaningAttributes[0]?.label ?? "Primary Meaning"}: ${current?.meaning ?? ""}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="cyan">{padLine(`Answer: ${answer}_`, width)}</Text><Text>{padLine("", width)}</Text><Text color="green">{padLine(feedback ?? "Enter submits. Esc cancels.", width)}</Text></Box>;
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(roundLabel, width)}</Text><Text>{padLine("", width)}</Text><Text color="yellow">{padLine(`${workbook.meaningAttributes[0]?.label ?? "Primary Meaning"}: ${current?.meaning ?? ""}`, width)}</Text>{visibleTagGroups.map((group) => <PracticeTagLine key={group.typeId} typeName={group.typeName} tagNames={group.tagNames} width={width} />)}<Text>{padLine("", width)}</Text><Text color="cyan">{padLine(`Answer: ${answer}_`, width)}</Text><Text>{padLine("", width)}</Text><Text color="green">{padLine(feedback ?? "Enter submits. Esc cancels.", width)}</Text></Box>;
 }
 
 function PracticeEmptyScreen({ workbook, onCancel, onQuit }: { workbook: WorkbookRow; onCancel: () => void; onQuit: () => void }): JSX.Element {
