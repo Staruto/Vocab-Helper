@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 export type SchemaMigration = {
   version: number;
@@ -183,6 +183,15 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       db.exec(`
         ALTER TABLE tag_types
         ADD COLUMN is_visible INTEGER NOT NULL DEFAULT 0 CHECK (is_visible IN (0, 1));
+      `);
+    },
+  },
+  {
+    version: 4,
+    apply(db) {
+      db.exec(`
+        ALTER TABLE workbooks
+        ADD COLUMN import_file_path TEXT NULL;
       `);
     },
   },

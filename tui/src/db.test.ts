@@ -23,7 +23,7 @@ function basicWorkbook(name = "Test"): WorkbookConfigurationInput {
   };
 }
 
-test("fresh databases use the v3 schema and migrations are idempotent", () => {
+test("fresh databases use the current schema and migrations are idempotent", () => {
   const temp = temporaryDatabase();
   try {
     const repository = new VocabularyRepository(temp.path); repository.close();
@@ -32,6 +32,7 @@ test("fresh databases use the v3 schema and migrations are idempotent", () => {
     assert.equal((db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get() as { count: number }).count, CURRENT_SCHEMA_VERSION);
     assert.equal((db.prepare("SELECT dflt_value FROM pragma_table_info('tag_types') WHERE name='is_visible'").get() as { dflt_value: string }).dflt_value, "0");
     assert.equal((db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name IN ('pos_tags','entry_pos_tags')").get() as { count: number }).count, 0);
+    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('workbooks') WHERE name='import_file_path'").get() as { count: number }).count, 1);
     assert.equal((db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name LIKE 'mvp_%'").get() as { count: number }).count, 0);
     assertDatabaseIntegrity(db); db.close();
     const reopened = new VocabularyRepository(temp.path); reopened.close();
@@ -95,9 +96,10 @@ test("a failed migration rolls back its schema and ledger row", () => {
   const temp = temporaryDatabase();
   try {
     const db = new DatabaseSync(temp.path); runSchemaMigrations(db);
-    assert.throws(() => runSchemaMigrations(db, [{ version: 4, apply(inner) { inner.exec("CREATE TABLE rollback_probe (id INTEGER); INSERT INTO missing_table VALUES (1)"); } }]), /migration 4 failed/i);
+    const failedVersion = CURRENT_SCHEMA_VERSION + 1;
+    assert.throws(() => runSchemaMigrations(db, [{ version: failedVersion, apply(inner) { inner.exec("CREATE TABLE rollback_probe (id INTEGER); INSERT INTO missing_table VALUES (1)"); } }]), new RegExp(`migration ${failedVersion} failed`, "i"));
     assert.equal((db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE name='rollback_probe'").get() as { count: number }).count, 0);
-    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version=4").get() as { count: number }).count, 0);
+    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version=?").get(failedVersion) as { count: number }).count, 0);
     db.close();
   } finally { temp.cleanup(); }
 });
@@ -119,6 +121,41 @@ test("entry stats, priority, ownership, and cascades are enforced", () => {
     assert.equal((db.prepare("SELECT COUNT(*) AS count FROM entry_stats").get() as { count: number }).count, 0);
     assert.equal((db.prepare("SELECT COUNT(*) AS count FROM entry_field_values").get() as { count: number }).count, 0);
     assertDatabaseIntegrity(db); db.close();
+  } finally { temp.cleanup(); }
+});
+
+test("v3 workbooks migrate to v4 with an empty import file path", () => {
+  const temp = temporaryDatabase();
+  try {
+    const db = new DatabaseSync(temp.path);
+    runSchemaMigrations(db, SCHEMA_MIGRATIONS.filter((migration) => migration.version <= 3));
+    db.prepare(`INSERT INTO workbooks
+      (name,vocabulary_kind,vocabulary_label,vocabulary_language_code,preset_enabled,created_at,updated_at)
+      VALUES ('Existing','preset_language','Japanese','JP',1,'2026-01-01','2026-01-01')`).run();
+    runSchemaMigrations(db);
+    assert.equal((db.prepare("SELECT import_file_path FROM workbooks WHERE name='Existing'").get() as { import_file_path: string | null }).import_file_path, null);
+    db.close();
+  } finally { temp.cleanup(); }
+});
+
+test("import file paths are persisted per workbook and can be cleared", () => {
+  const temp = temporaryDatabase();
+  try {
+    let repository = new VocabularyRepository(temp.path);
+    const first = repository.createConfiguredWorkbook(basicWorkbook("First"));
+    const second = repository.createConfiguredWorkbook(basicWorkbook("Second"));
+    assert.equal(first.importFilePath, null);
+    const savedPath = resolve("imports", "first.txt");
+    assert.equal(repository.setWorkbookImportFilePath(first.id, " imports\\first.txt ").importFilePath, savedPath);
+    assert.equal(repository.getWorkbook(second.id)?.importFilePath, null);
+    repository.close();
+    repository = new VocabularyRepository(temp.path);
+    assert.equal(repository.getWorkbook(first.id)?.importFilePath, savedPath);
+    assert.equal(repository.setWorkbookImportFilePath(first.id, "").importFilePath, null);
+    repository.close();
+    repository = new VocabularyRepository(temp.path);
+    assert.equal(repository.getWorkbook(first.id)?.importFilePath, null);
+    repository.close();
   } finally { temp.cleanup(); }
 });
 

@@ -32,6 +32,15 @@ export async function loadLabeledTextFile(inputPath: string): Promise<{ path: st
   return { path, text: text.replace(/^\uFEFF/, "") };
 }
 
+export function importFilePathsEqual(left: string, right: string | null): boolean {
+  if (!right) return false;
+  const resolvedLeft = resolve(left);
+  const resolvedRight = resolve(right);
+  return process.platform === "win32"
+    ? resolvedLeft.toLocaleLowerCase() === resolvedRight.toLocaleLowerCase()
+    : resolvedLeft === resolvedRight;
+}
+
 export function parseLabeledTextImport(text: string, workbook: WorkbookRow, tagTypes: TagType[], existingVocabulary: string[]): ImportPreview {
   const normalized = text.replace(/\r\n?/g, "\n").trim();
   const records = normalized ? normalized.split(/\n[ \t]*\n+/) : [];

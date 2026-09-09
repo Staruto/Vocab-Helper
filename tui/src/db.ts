@@ -30,6 +30,7 @@ export type WorkbookRow = {
   id: number; name: string; wordCount: number; createdAt: string;
   vocabularyLabel: string; vocabularyLanguageCode: string | null;
   presetEnabled: boolean; vocabularyKind: VocabularyKind;
+  importFilePath: string | null;
   meaningAttributes: MeaningAttribute[]; metadataAttributes: MetadataAttribute[];
 };
 export type EntryRow = {
@@ -225,6 +226,13 @@ export class VocabularyRepository {
   setTierColorsEnabled(enabled: boolean): boolean {
     this.db.prepare("UPDATE app_settings SET tier_colors_enabled = ? WHERE singleton_id = 1").run(enabled ? 1 : 0);
     return enabled;
+  }
+  setWorkbookImportFilePath(workbookId: number, path: string | null): WorkbookRow {
+    this.requireWorkbook(workbookId);
+    const trimmed = trimOptional(path);
+    const normalized = trimmed ? resolve(trimmed) : null;
+    this.db.prepare("UPDATE workbooks SET import_file_path = ?, updated_at = ? WHERE id = ?").run(normalized, new Date().toISOString(), workbookId);
+    return this.requireWorkbook(workbookId);
   }
 
   getEntry(entryId: number): EntryRow | null {
@@ -471,6 +479,7 @@ export class VocabularyRepository {
     return {
       id, name: String(row.name), wordCount: Number(row.word_count ?? 0), createdAt: String(row.created_at), vocabularyLabel, vocabularyLanguageCode,
       presetEnabled: Number(row.preset_enabled) === 1, vocabularyKind: String(row.vocabulary_kind) as VocabularyKind,
+      importFilePath: row.import_file_path == null ? null : String(row.import_file_path),
       meaningAttributes: meanings, metadataAttributes: metadata,
     };
   }

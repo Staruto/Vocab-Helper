@@ -3,7 +3,7 @@ import { Box, Text, render, useApp, useInput, useStdout } from "ink";
 import { CreateWorkbookInput, EntryRow, LANGUAGE_PRESET_DEFINITIONS, MeaningAttribute, MetadataAttribute, TagDataLossError, TagType, TagTypeDraft, VocabularyKind, WorkbookAttributesDraft, WorkbookConfigurationInput, WorkbookDataLossError, WorkbookRow, WorkbookTagsDraft } from "./db.js";
 import { VocabularyBackend } from "./backend.js";
 import { fitTagBadges, visibleAssignedTagGroups } from "./tag-display.js";
-import { buildImportPreviewLines, ImportPreview, loadLabeledTextFile, parseLabeledTextImport } from "./import.js";
+import { buildImportPreviewLines, importFilePathsEqual, ImportPreview, loadLabeledTextFile, parseLabeledTextImport } from "./import.js";
 
 type UiMode =
   | { kind: "command" }
@@ -11,8 +11,9 @@ type UiMode =
   | { kind: "add"; stage: "vocabulary" | "meaning" | "metadata" | "tags"; vocabulary: string; meanings: string[]; meaningIndex: number; metadata: Record<string, string>; metadataIndex: number; selectedTagIds: number[]; tagIndex: number }
   | { kind: "edit"; stage: "vocabulary" | "meaning" | "metadata" | "tags"; entryId: number; vocabulary: string; meanings: string[]; meaningIndex: number; metadata: Record<string, string>; metadataIndex: number; selectedTagIds: number[]; tagIndex: number }
   | { kind: "delete"; entryId: number; label: string }
-  | { kind: "importPath" }
-  | { kind: "importLoading"; path: string }
+  | { kind: "importPath"; alternate: boolean }
+  | { kind: "importLoading"; path: string; alternate: boolean }
+  | { kind: "importSaveDefault"; path: string; preview: ImportPreview; save: boolean }
   | { kind: "importPreview"; path: string; preview: ImportPreview; scrollOffset: number; error?: string };
 
 type AppScreen =
@@ -22,6 +23,7 @@ type AppScreen =
   | { kind: "delete-workbook"; workbook: WorkbookRow; confirm: string }
   | { kind: "settings"; workbook: WorkbookRow }
   | { kind: "settings-attributes"; workbook: WorkbookRow }
+  | { kind: "settings-import"; workbook: WorkbookRow }
   | { kind: "settings-appearance"; workbook: WorkbookRow }
   | { kind: "tags"; workbook: WorkbookRow; returnTo?: "vocab" | "settings" }
   | { kind: "view"; workbook: WorkbookRow; entry: EntryRow }
@@ -403,6 +405,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   const [suggestionIndex, setSuggestionIndex] = useState(0);
   const [statusLines, setStatusLines] = useState<string[]>(() => buildStatusLines("Ready."));
   const [tierColorsEnabled, setTierColorsEnabled] = useState(() => backend.getTierColorsEnabled());
+  const [savedImportFilePath, setSavedImportFilePath] = useState(workbook.importFilePath);
   const importRequest = useRef(0);
   const activeMetadata = workbook.metadataAttributes.filter((attribute) => attribute.role === "optional");
   const tagTypes = backend.listTagTypes(workbook.id);
@@ -465,31 +468,46 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   }
 
   function beginImport(): void {
-    setMode({ kind: "importPath" });
-    setBuffer("");
-    setStatusLines(buildStatusLines("Enter the path to a UTF-8 .txt import file."));
+    if (savedImportFilePath) {
+      void loadImportPreview(savedImportFilePath, false);
+    } else {
+      setMode({ kind: "importPath", alternate: true });
+      setBuffer("");
+      setStatusLines(buildStatusLines("Enter the path to a UTF-8 .txt import file."));
+    }
   }
 
-  async function loadImportPreview(inputPath: string): Promise<void> {
+  async function loadImportPreview(inputPath: string, alternate: boolean): Promise<void> {
     if (!inputPath.trim()) {
       setStatusLines(buildStatusLines("A file path is required."));
       return;
     }
     const request = ++importRequest.current;
-    setMode({ kind: "importLoading", path: inputPath.trim() });
+    setMode({ kind: "importLoading", path: inputPath.trim(), alternate });
     setStatusLines(buildStatusLines("Reading and validating import file..."));
     try {
       const source = await loadLabeledTextFile(inputPath);
       if (request !== importRequest.current) return;
       const preview = parseLabeledTextImport(source.text, workbook, tagTypes, entries.map((entry) => entry.vocabulary));
       setBuffer("");
-      setMode({ kind: "importPreview", path: source.path, preview, scrollOffset: 0 });
+      setMode(alternate && !importFilePathsEqual(source.path, savedImportFilePath)
+        ? { kind: "importSaveDefault", path: source.path, preview, save: false }
+        : { kind: "importPreview", path: source.path, preview, scrollOffset: 0 });
     } catch (error) {
       if (request !== importRequest.current) return;
-      setMode({ kind: "importPath" });
-      setBuffer(inputPath);
-      setStatusLines(buildStatusLines(error instanceof Error ? error.message : "Could not read the import file."));
+      setMode({ kind: "importPath", alternate: true });
+      setBuffer(alternate ? inputPath : "");
+      const reason = error instanceof Error ? error.message : "Could not read the import file.";
+      setStatusLines(buildStatusLines(`Could not load '${inputPath.trim()}': ${reason}`));
     }
+  }
+
+  function continueImportAfterSaveChoice(mode: Extract<UiMode, { kind: "importSaveDefault" }>): void {
+    if (mode.save) {
+      backend.setWorkbookImportFilePath(workbook.id, mode.path);
+      setSavedImportFilePath(mode.path);
+    }
+    setMode({ kind: "importPreview", path: mode.path, preview: mode.preview, scrollOffset: 0 });
   }
 
   function confirmImport(preview: ImportPreview): void {
@@ -660,7 +678,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     const text = value.trim();
 
     if (mode.kind === "importPath") {
-      void loadImportPreview(value);
+      void loadImportPreview(value, mode.alternate);
       return;
     }
     if (mode.kind === "importPreview") {
@@ -668,6 +686,10 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       return;
     }
     if (mode.kind === "importLoading") return;
+    if (mode.kind === "importSaveDefault") {
+      continueImportAfterSaveChoice(mode);
+      return;
+    }
 
     if (mode.kind === "add") {
       if (mode.stage === "vocabulary") {
@@ -814,6 +836,17 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       if (input === " ") { const id = selectableTags[mode.tagIndex].id; setMode({ ...mode, selectedTagIds: mode.selectedTagIds.includes(id) ? mode.selectedTagIds.filter((v) => v !== id) : [...mode.selectedTagIds, id] }); return; }
     }
 
+    if (mode.kind === "importSaveDefault") {
+      if (key.leftArrow || key.upArrow || key.rightArrow || key.downArrow) setMode({ ...mode, save: !mode.save });
+      else if (key.return) continueImportAfterSaveChoice(mode);
+      return;
+    }
+
+    if (mode.kind === "importPath" && key.ctrl && input === "u") {
+      setBuffer("");
+      return;
+    }
+
     if (mode.kind === "importPreview") {
       const previewLineCount = buildImportPreviewLines(mode.preview).length;
       const visibleRows = Math.max(3, rows - (mode.error ? 8 : 7));
@@ -821,6 +854,11 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       if (key.upArrow) setMode({ ...mode, scrollOffset: Math.max(0, mode.scrollOffset - 1) });
       else if (key.downArrow) setMode({ ...mode, scrollOffset: Math.min(maxOffset, mode.scrollOffset + 1) });
       else if (key.return) confirmImport(mode.preview);
+      else if (input.toLocaleLowerCase() === "d") {
+        setMode({ kind: "importPath", alternate: true });
+        setBuffer("");
+        setStatusLines(buildStatusLines("Enter a different UTF-8 .txt file path."));
+      }
       return;
     }
 
@@ -885,11 +923,26 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   const promptLine = `> ${buffer}_`;
   const screenTitle = `${TITLE} — ${workbook.name}`;
 
+  if (mode.kind === "importSaveDefault") {
+    return (
+      <Box flexDirection="column">
+        <Text color="cyan" bold>{centerLine(`Import — ${workbook.name}`, width)}</Text>
+        <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Source: ${truncate(mode.path, Math.max(1, width - 8))}`, width)}</Text>
+        <Text>{padLine("", width)}</Text>
+        <Text>{padLine("Save this file as the workbook default?", width)}</Text>
+        <Text color={!mode.save ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${!mode.save ? ">" : " "} Don't save`, width)}</Text>
+        <Text color={mode.save ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${mode.save ? ">" : " "} Save`, width)}</Text>
+        <Text>{padLine("", width)}</Text>
+        <Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Arrow keys select | Enter continues | Esc cancels", width)}</Text>
+      </Box>
+    );
+  }
+
   if (mode.kind === "importPreview") {
     const previewLines = buildImportPreviewLines(mode.preview);
     const visibleRows = Math.max(3, rows - (mode.error ? 8 : 7));
     const visibleLines = previewLines.slice(mode.scrollOffset, mode.scrollOffset + visibleRows);
-    const footer = mode.preview.entries.length > 0 ? "Enter imports | ↑↓ scroll | Esc cancels" : "Nothing to import | ↑↓ scroll | Esc returns";
+    const footer = mode.preview.entries.length > 0 ? "Enter imports | D different file | ↑↓ scroll | Esc cancels" : "D different file | ↑↓ scroll | Esc returns";
     return (
       <Box flexDirection="column">
         <Text color="cyan" bold>{centerLine(`Import — ${workbook.name}`, width)}</Text>
@@ -1548,12 +1601,56 @@ function WorkbookDeleteConfirmScreen({
   );
 }
 
-function SettingsHomeScreen({ workbook, onAttributes, onTags, onAppearance, onCancel, onQuit }: { workbook: WorkbookRow; onAttributes: () => void; onTags: () => void; onAppearance: () => void; onCancel: () => void; onQuit: () => void }): JSX.Element {
+function SettingsHomeScreen({ workbook, onAttributes, onTags, onImport, onAppearance, onCancel, onQuit }: { workbook: WorkbookRow; onAttributes: () => void; onTags: () => void; onImport: () => void; onAppearance: () => void; onCancel: () => void; onQuit: () => void }): JSX.Element {
   const { stdout } = useStdout(); const [width, setWidth] = useState(() => stdout?.columns ?? 80); const [selected, setSelected] = useState(0);
-  const sections = ["Attributes", "Tags", "Appearance"];
+  const sections = ["Attributes", "Tags", "Import", "Appearance"];
   useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => { stdout.off("resize", f); }; }, [stdout]);
-  useInput((input, key) => { if (key.ctrl && input === "c") onQuit(); else if (key.escape) onCancel(); else if (key.upArrow) setSelected((v) => v <= 0 ? sections.length - 1 : v - 1); else if (key.downArrow) setSelected((v) => (v + 1) % sections.length); else if (key.return) [onAttributes, onTags, onAppearance][selected](); });
+  useInput((input, key) => { if (key.ctrl && input === "c") onQuit(); else if (key.escape) onCancel(); else if (key.upArrow) setSelected((v) => v <= 0 ? sections.length - 1 : v - 1); else if (key.downArrow) setSelected((v) => (v + 1) % sections.length); else if (key.return) [onAttributes, onTags, onImport, onAppearance][selected](); });
   return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Settings — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Choose a settings section.", width)}</Text><Text>{padLine("", width)}</Text>{sections.map((section, index) => <Text key={section} color={index === selected ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${index === selected ? ">" : " "} ${section}`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Up/Down select | Enter open | Esc back", width)}</Text></Box>;
+}
+
+function ImportSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook: WorkbookRow; onSave: (workbook: WorkbookRow) => void; onCancel: () => void; onQuit: () => void }): JSX.Element {
+  const { stdout } = useStdout();
+  const [width, setWidth] = useState(() => stdout?.columns ?? 80);
+  const [buffer, setBuffer] = useState(workbook.importFilePath ?? "");
+  const [message, setMessage] = useState("Enter a UTF-8 .txt file path. Empty clears the default.");
+  const [hasError, setHasError] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const request = useRef(0);
+  useEffect(() => () => { request.current += 1; }, []);
+  useEffect(() => {
+    if (!stdout) return;
+    const resize = () => setWidth(stdout.columns ?? 80);
+    stdout.on("resize", resize);
+    return () => { stdout.off("resize", resize); };
+  }, [stdout]);
+  useInput((input, key) => {
+    if (key.ctrl && input === "c") { request.current += 1; onQuit(); return; }
+    if (key.escape) { request.current += 1; onCancel(); return; }
+    if (saving) return;
+    if (key.ctrl && input === "u") { setBuffer(""); setMessage(""); setHasError(false); return; }
+    if (key.backspace || key.delete) { setBuffer((current) => current.slice(0, -1)); setMessage(""); setHasError(false); return; }
+    if (key.return) {
+      const value = buffer.trim();
+      if (!value) { onSave(backend.setWorkbookImportFilePath(workbook.id, null)); return; }
+      const currentRequest = ++request.current;
+      setSaving(true);
+      setHasError(false);
+      setMessage("Validating import file...");
+      void loadLabeledTextFile(value).then((source) => {
+        if (currentRequest !== request.current) return;
+        onSave(backend.setWorkbookImportFilePath(workbook.id, source.path));
+      }).catch((error: unknown) => {
+        if (currentRequest !== request.current) return;
+        setSaving(false);
+        setHasError(true);
+        setMessage(error instanceof Error ? error.message : "Could not validate the import file.");
+      });
+      return;
+    }
+    if (!key.ctrl && !key.meta && input) { setBuffer((current) => current + input); setMessage(""); setHasError(false); }
+  });
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Import Settings — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Default import file", width)}</Text><Text>{padLine("", width)}</Text><Text color="cyan">{padLine(`> ${buffer}_`, width)}</Text><Text>{padLine("", width)}</Text><Text color={hasError ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Enter saves | Ctrl+U clears | Esc cancels", width)}</Text></Box>;
 }
 
 function AppearanceSettingsScreen({ onCancel, onQuit }: { onCancel: () => void; onQuit: () => void }): JSX.Element {
@@ -2061,8 +2158,9 @@ function App(): JSX.Element {
 
   if (screen.kind === "practice") return <PracticeScreen workbook={screen.workbook} count={screen.count} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} onDone={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} />;
 
-  if (screen.kind === "settings") return <SettingsHomeScreen workbook={screen.workbook} onAttributes={() => setScreen({ kind: "settings-attributes", workbook: refreshWorkbook(screen.workbook.id) })} onTags={() => setScreen({ kind: "tags", workbook: refreshWorkbook(screen.workbook.id), returnTo: "settings" })} onAppearance={() => setScreen({ kind: "settings-appearance", workbook: refreshWorkbook(screen.workbook.id) })} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
+  if (screen.kind === "settings") return <SettingsHomeScreen workbook={screen.workbook} onAttributes={() => setScreen({ kind: "settings-attributes", workbook: refreshWorkbook(screen.workbook.id) })} onTags={() => setScreen({ kind: "tags", workbook: refreshWorkbook(screen.workbook.id), returnTo: "settings" })} onImport={() => setScreen({ kind: "settings-import", workbook: refreshWorkbook(screen.workbook.id) })} onAppearance={() => setScreen({ kind: "settings-appearance", workbook: refreshWorkbook(screen.workbook.id) })} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
   if (screen.kind === "settings-attributes") return <MetadataSettingsScreen workbook={screen.workbook} onSave={(draft, confirmDataLoss) => { backend.updateWorkbookAttributes(screen.workbook.id, draft, confirmDataLoss); setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) }); }} onCancel={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
+  if (screen.kind === "settings-import") return <ImportSettingsScreen workbook={screen.workbook} onSave={(updated) => setScreen({ kind: "settings", workbook: updated })} onCancel={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
   if (screen.kind === "settings-appearance") return <AppearanceSettingsScreen onCancel={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
   if (screen.kind === "tags") return <TagSettingsScreen workbook={screen.workbook} onSave={(draft, confirmDataLoss) => { backend.updateWorkbookTags(screen.workbook.id, draft, confirmDataLoss); setScreen(screen.returnTo === "settings" ? { kind: "settings", workbook: refreshWorkbook(screen.workbook.id) } : { kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) }); }} onCancel={() => setScreen(screen.returnTo === "settings" ? { kind: "settings", workbook: refreshWorkbook(screen.workbook.id) } : { kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
   if (screen.kind === "view") return <EntryViewScreen workbook={screen.workbook} entry={backend.getEntry(screen.entry.id) ?? screen.entry} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;

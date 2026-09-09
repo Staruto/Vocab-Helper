@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { TagType, WorkbookRow } from "./db.js";
-import { buildImportPreviewLines, loadLabeledTextFile, parseLabeledTextImport } from "./import.js";
+import { buildImportPreviewLines, importFilePathsEqual, loadLabeledTextFile, parseLabeledTextImport } from "./import.js";
 
 const workbook: WorkbookRow = {
   id: 1, name: "Japanese", wordCount: 0, createdAt: "2026-01-01",
   vocabularyLabel: "Japanese", vocabularyLanguageCode: "JP", presetEnabled: true, vocabularyKind: "preset_language",
+  importFilePath: null,
   meaningAttributes: [
     { id: 1, key: "meaning_1", position: 1, label: "English", languageCode: "EN" },
     { id: 2, key: "meaning_2", position: 2, label: "Chinese", languageCode: "ZH" },
@@ -121,4 +122,10 @@ test("empty files produce an empty, non-importable preview", () => {
   const preview = parseLabeledTextImport(" \r\n\r\n ", workbook, tagTypes, []);
   assert.equal(preview.totalRecords, 0);
   assert.deepEqual(preview.entries, []);
+});
+
+test("import file path comparison resolves equivalent paths", () => {
+  assert.equal(importFilePathsEqual("words.txt", resolve("words.txt")), true);
+  assert.equal(importFilePathsEqual("words.txt", null), false);
+  if (process.platform === "win32") assert.equal(importFilePathsEqual("C:\\IMPORTS\\WORDS.TXT", "c:\\imports\\words.txt"), true);
 });
