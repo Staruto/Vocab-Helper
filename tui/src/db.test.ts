@@ -122,6 +122,33 @@ test("entry stats, priority, ownership, and cascades are enforced", () => {
   } finally { temp.cleanup(); }
 });
 
+test("bulk imports write complete entries atomically and reject duplicates", () => {
+  const temp = temporaryDatabase();
+  try {
+    const repository = new VocabularyRepository(temp.path);
+    const workbook = repository.createConfiguredWorkbook(basicWorkbook());
+    const noun = repository.listTagTypes(workbook.id)[0].tags[0];
+    assert.throws(() => repository.importEntries(workbook.id, [
+      { vocabulary: "猫", meanings: ["cat"], attributes: { kana: "ねこ" }, tagIds: [noun.id] },
+      { vocabulary: "犬", meanings: ["dog"], attributes: {}, tagIds: [999999] },
+    ]), /does not belong/);
+    assert.equal(repository.countEntries(workbook.id), 0);
+
+    const imported = repository.importEntries(workbook.id, [
+      { vocabulary: "猫", meanings: ["cat"], attributes: { kana: "ねこ" }, tagIds: [noun.id] },
+      { vocabulary: "犬", meanings: ["dog"], attributes: {}, tagIds: [] },
+    ]);
+    assert.equal(imported.length, 2);
+    assert.equal(imported[0].attributes.kana, "ねこ");
+    assert.deepEqual(imported[0].tags.map((tag) => tag.id), [noun.id]);
+    assert.throws(() => repository.importEntries(workbook.id, [
+      { vocabulary: "猫", meanings: ["feline"], attributes: {}, tagIds: [] },
+    ]), /already exists/);
+    assert.equal(repository.countEntries(workbook.id), 2);
+    repository.close();
+  } finally { temp.cleanup(); }
+});
+
 test("workbook updates require confirmation before deleting populated fields", () => {
   const temp = temporaryDatabase();
   try {

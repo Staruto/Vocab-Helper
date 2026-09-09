@@ -38,6 +38,7 @@ export type EntryRow = {
   createdAt: string; updatedAt: string; testCount: number; errorCount: number;
   tier: "gray" | "green" | "yellow" | "red"; lastTested: string | null; nextTestDeadline: string | null;
 };
+export type ImportEntryInput = { vocabulary: string; meanings: string[]; attributes: Record<string, string>; tagIds: number[] };
 export type LanguagePresetDefinition = { optionalAttributes: Array<{ key: string; label: string; languageCode: string | null }>; partOfSpeechTags: string[] };
 
 function exampleFields(languageCode: string): LanguagePresetDefinition["optionalAttributes"] {
@@ -261,6 +262,28 @@ export class VocabularyRepository {
       return entryId;
     });
     return this.getEntry(id)!;
+  }
+  importEntries(workbookId: number, entries: ImportEntryInput[]): EntryRow[] {
+    const workbook = this.requireWorkbook(workbookId);
+    const existingVocabulary = new Set((this.db.prepare("SELECT vocabulary FROM entries WHERE workbook_id = ?").all(workbookId) as Array<{ vocabulary: string }>).map((entry) => String(entry.vocabulary)));
+    const normalized = entries.map((entry) => {
+      const vocabulary = trimRequired(entry.vocabulary, "Vocabulary");
+      if (existingVocabulary.has(vocabulary)) throw new ValidationError(`Vocabulary '${vocabulary}' already exists in this workbook.`);
+      existingVocabulary.add(vocabulary);
+      const meanings = this.normalizeEntryMeanings(workbook, entry.meanings);
+      this.validateEntryAssociations(workbookId, entry.attributes, entry.tagIds);
+      return { ...entry, vocabulary, meanings };
+    });
+    const now = new Date().toISOString();
+    const ids = transaction(this.db, () => normalized.map((entry) => {
+      const result = this.db.prepare("INSERT INTO entries (workbook_id, vocabulary, created_at, updated_at) VALUES (?, ?, ?, ?)").run(workbookId, entry.vocabulary, now, now);
+      const entryId = Number(result.lastInsertRowid);
+      this.saveEntryValues(entryId, workbookId, entry.meanings, entry.attributes);
+      this.saveEntryTags(entryId, workbookId, entry.tagIds);
+      this.db.prepare("INSERT INTO entry_stats (entry_id) VALUES (?)").run(entryId);
+      return entryId;
+    }));
+    return ids.map((id) => this.getEntry(id)!);
   }
   updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[], attributes: Record<string, string> = {}, tagIds: number[] = []): EntryRow {
     const existing = this.requireEntry(entryId); const workbook = this.requireWorkbook(existing.workbookId);

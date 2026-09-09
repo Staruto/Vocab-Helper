@@ -1,15 +1,19 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, render, useApp, useInput, useStdout } from "ink";
 import { CreateWorkbookInput, EntryRow, LANGUAGE_PRESET_DEFINITIONS, MeaningAttribute, MetadataAttribute, TagDataLossError, TagType, TagTypeDraft, VocabularyKind, WorkbookAttributesDraft, WorkbookConfigurationInput, WorkbookDataLossError, WorkbookRow, WorkbookTagsDraft } from "./db.js";
 import { VocabularyBackend } from "./backend.js";
 import { fitTagBadges, visibleAssignedTagGroups } from "./tag-display.js";
+import { buildImportPreviewLines, ImportPreview, loadLabeledTextFile, parseLabeledTextImport } from "./import.js";
 
 type UiMode =
   | { kind: "command" }
   | { kind: "commandArg"; command: ParameterizedCommand }
   | { kind: "add"; stage: "vocabulary" | "meaning" | "metadata" | "tags"; vocabulary: string; meanings: string[]; meaningIndex: number; metadata: Record<string, string>; metadataIndex: number; selectedTagIds: number[]; tagIndex: number }
   | { kind: "edit"; stage: "vocabulary" | "meaning" | "metadata" | "tags"; entryId: number; vocabulary: string; meanings: string[]; meaningIndex: number; metadata: Record<string, string>; metadataIndex: number; selectedTagIds: number[]; tagIndex: number }
-  | { kind: "delete"; entryId: number; label: string };
+  | { kind: "delete"; entryId: number; label: string }
+  | { kind: "importPath" }
+  | { kind: "importLoading"; path: string }
+  | { kind: "importPreview"; path: string; preview: ImportPreview; scrollOffset: number; error?: string };
 
 type AppScreen =
   | { kind: "menu" }
@@ -71,6 +75,7 @@ const WORKBOOK_DELETE_HINT = "Type yes to confirm. Enter deletes. Esc cancels.";
 const COMMANDS: CommandSpec[] = [
   { name: "list", hint: "Refresh and show entries" },
   { name: "add", hint: "Add a new entry" },
+  { name: "import", hint: "Import entries from labeled text" },
   { name: "edit", hint: "Edit an entry by id" },
   { name: "delete", hint: "Delete an entry by id" },
   { name: "menu", hint: "Return to the workbook menu" },
@@ -398,6 +403,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   const [suggestionIndex, setSuggestionIndex] = useState(0);
   const [statusLines, setStatusLines] = useState<string[]>(() => buildStatusLines("Ready."));
   const [tierColorsEnabled, setTierColorsEnabled] = useState(() => backend.getTierColorsEnabled());
+  const importRequest = useRef(0);
   const activeMetadata = workbook.metadataAttributes.filter((attribute) => attribute.role === "optional");
   const tagTypes = backend.listTagTypes(workbook.id);
   const selectableTags = tagTypes.flatMap((type) => type.tags);
@@ -458,6 +464,49 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     setStatusLines(buildStatusLines(`Adding a new entry.\nEnter ${workbook.vocabularyLabel}.`));
   }
 
+  function beginImport(): void {
+    setMode({ kind: "importPath" });
+    setBuffer("");
+    setStatusLines(buildStatusLines("Enter the path to a UTF-8 .txt import file."));
+  }
+
+  async function loadImportPreview(inputPath: string): Promise<void> {
+    if (!inputPath.trim()) {
+      setStatusLines(buildStatusLines("A file path is required."));
+      return;
+    }
+    const request = ++importRequest.current;
+    setMode({ kind: "importLoading", path: inputPath.trim() });
+    setStatusLines(buildStatusLines("Reading and validating import file..."));
+    try {
+      const source = await loadLabeledTextFile(inputPath);
+      if (request !== importRequest.current) return;
+      const preview = parseLabeledTextImport(source.text, workbook, tagTypes, entries.map((entry) => entry.vocabulary));
+      setBuffer("");
+      setMode({ kind: "importPreview", path: source.path, preview, scrollOffset: 0 });
+    } catch (error) {
+      if (request !== importRequest.current) return;
+      setMode({ kind: "importPath" });
+      setBuffer(inputPath);
+      setStatusLines(buildStatusLines(error instanceof Error ? error.message : "Could not read the import file."));
+    }
+  }
+
+  function confirmImport(preview: ImportPreview): void {
+    if (preview.entries.length === 0) return;
+    try {
+      const imported = backend.importEntries(workbook.id, preview.entries.map(({ recordNumber: _recordNumber, ...entry }) => entry));
+      const ignoredFields = preview.diagnostics.filter((item) => item.kind === "ignored-field").length;
+      const ignoredTags = preview.diagnostics.filter((item) => item.kind === "ignored-tag").length;
+      setMode({ kind: "command" });
+      setBuffer("");
+      refreshEntries(`Imported ${imported.length}. Invalid ${preview.skippedInvalid}; duplicates ${preview.skippedDuplicates}; ignored fields ${ignoredFields}; ignored tags ${ignoredTags}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Import failed; no entries were written.";
+      setMode((current) => current.kind === "importPreview" ? { ...current, error: message } : current);
+    }
+  }
+
   function beginPendingCommand(command: ParameterizedCommand): void {
     setMode({ kind: "commandArg", command });
     setBuffer(`/${command} `);
@@ -500,6 +549,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   }
 
   function cancelActiveMode(message = "Cancelled."): void {
+    importRequest.current += 1;
     setMode({ kind: "command" });
     setBuffer("");
     setSuggestionIndex(0);
@@ -572,6 +622,12 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       return;
     }
 
+    if (lower === "import") {
+      if (args.length > 0) { setStatusLines(buildStatusLines("Usage: /import")); return; }
+      beginImport();
+      return;
+    }
+
     if (lower === "edit") {
       const entryId = Number(args[0]);
       if (!args[0] || Number.isNaN(entryId)) {
@@ -602,6 +658,16 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
 
   function submitForm(value: string): void {
     const text = value.trim();
+
+    if (mode.kind === "importPath") {
+      void loadImportPreview(value);
+      return;
+    }
+    if (mode.kind === "importPreview") {
+      confirmImport(mode.preview);
+      return;
+    }
+    if (mode.kind === "importLoading") return;
 
     if (mode.kind === "add") {
       if (mode.stage === "vocabulary") {
@@ -748,6 +814,18 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       if (input === " ") { const id = selectableTags[mode.tagIndex].id; setMode({ ...mode, selectedTagIds: mode.selectedTagIds.includes(id) ? mode.selectedTagIds.filter((v) => v !== id) : [...mode.selectedTagIds, id] }); return; }
     }
 
+    if (mode.kind === "importPreview") {
+      const previewLineCount = buildImportPreviewLines(mode.preview).length;
+      const visibleRows = Math.max(3, rows - (mode.error ? 8 : 7));
+      const maxOffset = Math.max(0, previewLineCount - visibleRows);
+      if (key.upArrow) setMode({ ...mode, scrollOffset: Math.max(0, mode.scrollOffset - 1) });
+      else if (key.downArrow) setMode({ ...mode, scrollOffset: Math.min(maxOffset, mode.scrollOffset + 1) });
+      else if (key.return) confirmImport(mode.preview);
+      return;
+    }
+
+    if (mode.kind === "importLoading") return;
+
     if (key.upArrow && commandPaletteActive) {
       setSuggestionIndex((current) => (current <= 0 ? commandSuggestions.length - 1 : current - 1));
       return;
@@ -806,6 +884,24 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   );
   const promptLine = `> ${buffer}_`;
   const screenTitle = `${TITLE} — ${workbook.name}`;
+
+  if (mode.kind === "importPreview") {
+    const previewLines = buildImportPreviewLines(mode.preview);
+    const visibleRows = Math.max(3, rows - (mode.error ? 8 : 7));
+    const visibleLines = previewLines.slice(mode.scrollOffset, mode.scrollOffset + visibleRows);
+    const footer = mode.preview.entries.length > 0 ? "Enter imports | ↑↓ scroll | Esc cancels" : "Nothing to import | ↑↓ scroll | Esc returns";
+    return (
+      <Box flexDirection="column">
+        <Text color="cyan" bold>{centerLine(`Import — ${workbook.name}`, width)}</Text>
+        <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Source: ${truncate(mode.path, Math.max(1, width - 8))}`, width)}</Text>
+        {mode.error ? <Text color="red">{padLine(mode.error, width)}</Text> : null}
+        <Text>{padLine("", width)}</Text>
+        {visibleLines.map((line, index) => <Text key={`${mode.scrollOffset + index}-${line}`} color={index < 2 && mode.scrollOffset === 0 ? "white" : AUXILIARY_TEXT_COLOR}>{padLine(line, width)}</Text>)}
+        <Text>{padLine("", width)}</Text>
+        <Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footer, width)}</Text>
+      </Box>
+    );
+  }
 
   return (
     <Box flexDirection="column">
