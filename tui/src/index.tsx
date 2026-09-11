@@ -3,7 +3,7 @@ import { Box, Text, render, useApp, useInput, useStdout } from "ink";
 import { CreateWorkbookInput, EntryRow, LANGUAGE_PRESET_DEFINITIONS, MeaningAttribute, MetadataAttribute, TagDataLossError, TagType, TagTypeDraft, VocabularyKind, WorkbookAttributesDraft, WorkbookConfigurationInput, WorkbookDataLossError, WorkbookRow, WorkbookTagsDraft } from "./db.js";
 import { VocabularyBackend } from "./backend.js";
 import { fitTagBadges, visibleAssignedTagGroups } from "./tag-display.js";
-import { adjacentEntryId, buildDetailSections, DetailField } from "./detail-display.js";
+import { adjacentEntryId, buildDetailSections, detailNavigationLabel, DetailField } from "./detail-display.js";
 import { buildImportPreviewLines, importFilePathsEqual, ImportPreview, loadLabeledTextFile, parseLabeledTextImport } from "./import.js";
 
 type UiMode =
@@ -1987,6 +1987,12 @@ function EntryViewScreen({ workbook, entryId, onNavigate, onCancel, onQuit }: { 
     }
   });
   if (!entry) return <Box flexDirection="column"><Text color="red">{padLine("This vocabulary is no longer available.", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Esc returns to the vocabulary list.", width)}</Text></Box>;
+  const currentIndex = entries.findIndex((item) => item.id === entry.id);
+  const previousEntry = currentIndex > 0 ? entries[currentIndex - 1] : null;
+  const nextEntry = currentIndex >= 0 && currentIndex + 1 < entries.length ? entries[currentIndex + 1] : null;
+  const navigationHalfWidth = Math.max(1, Math.floor(width / 2) - 2);
+  const previousLabel = previousEntry ? `← ${truncate(previousEntry.vocabulary, Math.max(1, navigationHalfWidth - 2))}` : detailNavigationLabel(null, "previous");
+  const nextLabel = nextEntry ? `${truncate(nextEntry.vocabulary, Math.max(1, navigationHalfWidth - 2))} →` : detailNavigationLabel(null, "next");
   const tagTypes = backend.listTagTypes(workbook.id);
   const sections = buildDetailSections(workbook, entry, tagTypes);
   const fields = [...sections.meanings, ...sections.attributes];
@@ -2012,7 +2018,11 @@ function EntryViewScreen({ workbook, entryId, onNavigate, onCancel, onQuit }: { 
     <Text>{padLine("", width)}</Text><Text color="cyan" bold>{padLine("Review", width)}</Text>{renderStatusFields}
     <Text>{padLine("", width)}</Text>
     {boundaryMessage ? <Text color={AUXILIARY_TEXT_COLOR}>{padLine(boundaryMessage, width)}</Text> : null}
-    <Text color={AUXILIARY_TEXT_COLOR}>{padLine("← previous | → next | Esc returns to the vocabulary list", width)}</Text>
+    <Text color={AUXILIARY_TEXT_COLOR}>{centerLine("Esc returns to the vocabulary list", width)}</Text>
+    <Box width={width} justifyContent="space-between">
+      <Text color={AUXILIARY_TEXT_COLOR}>{previousLabel}</Text>
+      <Text color={AUXILIARY_TEXT_COLOR}>{nextLabel}</Text>
+    </Box>
   </Box>;
 }
 

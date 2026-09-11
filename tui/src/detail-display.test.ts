@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { adjacentEntryId, buildDetailSections } from "./detail-display.js";
+import { adjacentEntryId, buildDetailSections, detailNavigationLabel } from "./detail-display.js";
 import { EntryRow, WorkbookRow } from "./db.js";
 
 const workbook = {
@@ -9,7 +9,11 @@ const workbook = {
   meaningAttributes: [{ key: "meaning_1", label: "Meaning", role: "meaning", position: 1, languageCode: null, required: true, visible: true }],
   metadataAttributes: [{ key: "note", label: "Note", role: "optional", position: 1, languageCode: null, required: false, visible: true }],
 } as unknown as WorkbookRow;
-const entry = { id: 2, workbookId: 1, meanings: ["to travel"], attributes: { note: "" }, tags: [{ id: 10, tagTypeId: 1, name: "verb" }] } as EntryRow;
+const entry = {
+  id: 2, workbookId: 1, vocabulary: "travel", meaning: "to travel", meanings: ["to travel"], kanaText: null,
+  attributes: { note: "" }, tags: [{ id: 10, tagTypeId: 1, name: "verb" }], createdAt: "2026-01-01", updatedAt: "2026-01-01",
+  testCount: 0, errorCount: 0, tier: "gray", lastTested: null, nextTestDeadline: null,
+} satisfies EntryRow;
 
 test("detail sections preserve fields, use an em dash for empty optionals, and filter tags by visibility", () => {
   const sections = buildDetailSections(workbook, entry, [
@@ -29,3 +33,9 @@ test("adjacent entry lookup follows list order and stops at boundaries", () => {
   assert.equal(adjacentEntryId(entries, 30, "next"), null);
 });
 
+test("detail navigation labels use neighboring vocabulary and arrows", () => {
+  assert.equal(detailNavigationLabel({ vocabulary: "learn" } as EntryRow, "previous"), "← learn");
+  assert.equal(detailNavigationLabel({ vocabulary: "review" } as EntryRow, "next"), "review →");
+  assert.equal(detailNavigationLabel(null, "previous"), "←");
+  assert.equal(detailNavigationLabel(null, "next"), "→");
+});

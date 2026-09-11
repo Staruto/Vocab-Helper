@@ -30,3 +30,7 @@ export function adjacentEntryId(entries: EntryRow[], currentId: number, directio
   return adjacent?.id ?? null;
 }
 
+export function detailNavigationLabel(entry: EntryRow | null, direction: "previous" | "next"): string {
+  if (!entry) return direction === "previous" ? "←" : "→";
+  return direction === "previous" ? `← ${entry.vocabulary}` : `${entry.vocabulary} →`;
+}
