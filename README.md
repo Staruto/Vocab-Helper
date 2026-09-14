@@ -1,4 +1,4 @@
-# VocabHelper 3.2.0
+# VocabHelper 3.3.0
 
 A modern TypeScript TUI for vocabulary memorization.
 
@@ -34,9 +34,9 @@ npm run start
 
 ## Import
 
-Run `/import` inside an open workbook. If that workbook has no default import file, enter the path to a UTF-8 `.txt` file. Review the preview and press Enter to import, `D` to choose a different file, or Esc to cancel.
+Run `/import` inside an open workbook. If that workbook has no default import file, enter the path to a UTF-8 `.txt` file. In the preview, use Up/Down to select the file path, status filters, or record list. Press Enter on the file path to load a different file, or press Enter on the filters or records to import all ready entries. Esc cancels.
 
-Set, replace, or clear the workbook's default file under `/setting` > `Import`. Saved paths are validated and stored as absolute paths. A valid default opens directly in the import preview; if it can no longer be loaded, the app reports the error and returns to path entry. When you choose a different file, the app asks whether to remember it for that workbook before opening its preview.
+Set, replace, or clear the workbook's default file under `/setting` > `Import`. Saved paths are validated and stored as absolute paths. A valid default opens directly in the import preview; if it can no longer be loaded, the app reports the error and returns to path entry. After importing from a different file, the app asks whether to remember it as the workbook default.
 
 Each line uses `Workbook label: value`, and blank lines separate entries. Labels match the workbook's displayed attribute and tag-type names exactly; their order does not matter. Multiple tags use commas. Unknown fields and tag values are reported and ignored, while records missing the vocabulary or primary meaning are skipped.
 

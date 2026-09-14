@@ -158,6 +158,23 @@ export function importPreviewRecords(preview: ImportPreview, filter: ImportPrevi
   return preview.records.filter((record) => record.status === status);
 }
 
+export function formatImportPreviewFilter(label: string, count: number, selected: boolean): string {
+  const text = `${label}: ${count}`;
+  return selected ? `[${text}]` : text;
+}
+
+export function paginateImportPreview(preview: ImportPreview, filter: ImportPreviewFilter, requestedPage: number, pageSize: number): { records: ImportPreviewRecord[]; pageIndex: number; pageCount: number } {
+  const filtered = importPreviewRecords(preview, filter);
+  const safePageSize = Math.max(1, pageSize);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / safePageSize));
+  const pageIndex = Math.max(0, Math.min(requestedPage, pageCount - 1));
+  return { records: filtered.slice(pageIndex * safePageSize, pageIndex * safePageSize + safePageSize), pageIndex, pageCount };
+}
+
+export function shouldPromptToSaveImportPath(importedPath: string, savedPath: string | null): boolean {
+  return !importFilePathsEqual(importedPath, savedPath);
+}
+
 export function formatImportPreviewRecord(record: ImportPreviewRecord): string {
   const marker = record.status === "ready" ? "+" : record.status === "invalid" ? "!" : "=";
   const suffix = [

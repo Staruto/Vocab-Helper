@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { TagType, WorkbookRow } from "./db.js";
-import { buildImportPreviewLines, importFilePathsEqual, loadLabeledTextFile, parseLabeledTextImport } from "./import.js";
+import { buildImportPreviewLines, formatImportPreviewFilter, importFilePathsEqual, loadLabeledTextFile, paginateImportPreview, parseLabeledTextImport, shouldPromptToSaveImportPath } from "./import.js";
 
 const workbook: WorkbookRow = {
   id: 1, name: "Japanese", wordCount: 0, createdAt: "2026-01-01",
@@ -83,6 +83,10 @@ Japanese: 魚`, workbook, tagTypes, ["猫"]);
   ]);
   assert.match(buildImportPreviewLines(preview).join("\n"), /\+1 ignored field, \+1 ignored tag/);
   assert.doesNotMatch(buildImportPreviewLines(preview).join("\n"), /Record 1:/);
+  assert.equal(formatImportPreviewFilter("Record", preview.totalRecords, true), "[Record: 5]");
+  assert.equal(formatImportPreviewFilter("Ready", preview.entries.length, false), "Ready: 1");
+  assert.deepEqual(paginateImportPreview(preview, "duplicates", 1, 1).records.map((record) => record.vocabulary), ["犬"]);
+  assert.equal(paginateImportPreview(preview, "ready", 99, 10).pageIndex, 0);
 });
 
 test("recognized labels are exact, unique, and unambiguous", () => {
@@ -128,5 +132,7 @@ test("empty files produce an empty, non-importable preview", () => {
 test("import file path comparison resolves equivalent paths", () => {
   assert.equal(importFilePathsEqual("words.txt", resolve("words.txt")), true);
   assert.equal(importFilePathsEqual("words.txt", null), false);
+  assert.equal(shouldPromptToSaveImportPath("words.txt", resolve("words.txt")), false);
+  assert.equal(shouldPromptToSaveImportPath("alternate.txt", resolve("words.txt")), true);
   if (process.platform === "win32") assert.equal(importFilePathsEqual("C:\\IMPORTS\\WORDS.TXT", "c:\\imports\\words.txt"), true);
 });

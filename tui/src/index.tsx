@@ -4,7 +4,7 @@ import { CreateWorkbookInput, EntryRow, LANGUAGE_PRESET_DEFINITIONS, MeaningAttr
 import { VocabularyBackend } from "./backend.js";
 import { fitTagBadges, visibleAssignedTagGroups } from "./tag-display.js";
 import { adjacentEntryId, buildDetailSections, detailNavigationLabel, DetailField } from "./detail-display.js";
-import { formatImportPreviewRecord, importFilePathsEqual, importPreviewRecords, ImportPreview, ImportPreviewFilter, loadLabeledTextFile, parseLabeledTextImport } from "./import.js";
+import { formatImportPreviewFilter, formatImportPreviewRecord, ImportPreview, ImportPreviewFilter, loadLabeledTextFile, paginateImportPreview, parseLabeledTextImport, shouldPromptToSaveImportPath } from "./import.js";
 import { CaretInputLine } from "./text-input.js";
 
 type UiMode =
@@ -15,8 +15,10 @@ type UiMode =
   | { kind: "delete"; entryId: number; label: string }
   | { kind: "importPath"; alternate: boolean }
   | { kind: "importLoading"; path: string; alternate: boolean }
-  | { kind: "importSaveDefault"; path: string; preview: ImportPreview; save: boolean }
-  | { kind: "importPreview"; path: string; preview: ImportPreview; scrollOffset: number; filter: ImportPreviewFilter; error?: string };
+  | { kind: "importSaveDefault"; path: string; save: boolean; resultMessage: string }
+  | { kind: "importPreview"; path: string; pathBuffer: string; preview: ImportPreview; pageIndex: number; filter: ImportPreviewFilter; focus: ImportPreviewFocus; loading?: boolean; error?: string };
+
+type ImportPreviewFocus = "path" | "filters" | "records";
 
 type AppScreen =
   | { kind: "menu" }
@@ -52,7 +54,7 @@ type ParameterizedCommand = "edit" | "delete";
 type LanguagePreset = { code: string; label: string };
 
 const PAGE_SIZE = 20;
-const TITLE = "VocabHelper 3.2.0";
+const TITLE = "VocabHelper 3.3.0";
 const FOOTER_HINT = "Navigate pages with <- -> | Esc returns to menu";
 const AUXILIARY_TEXT_COLOR = "#979797";
 const GRAY_TIER_COLOR = "#777777";
@@ -480,9 +482,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       if (request !== importRequest.current) return;
       const preview = parseLabeledTextImport(source.text, workbook, tagTypes, entries.map((entry) => entry.vocabulary));
       setBuffer("");
-      setMode(alternate && !importFilePathsEqual(source.path, savedImportFilePath)
-        ? { kind: "importSaveDefault", path: source.path, preview, save: false }
-        : { kind: "importPreview", path: source.path, preview, scrollOffset: 0, filter: "records" });
+      setMode({ kind: "importPreview", path: source.path, pathBuffer: source.path, preview, pageIndex: 0, filter: "records", focus: "filters" });
     } catch (error) {
       if (request !== importRequest.current) return;
       setMode({ kind: "importPath", alternate: true });
@@ -492,23 +492,51 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     }
   }
 
+  async function reloadImportPreview(mode: Extract<UiMode, { kind: "importPreview" }>): Promise<void> {
+    const inputPath = mode.pathBuffer.trim();
+    if (!inputPath) {
+      setMode({ ...mode, focus: "path", error: "A file path is required." });
+      return;
+    }
+    const request = ++importRequest.current;
+    setMode({ ...mode, loading: true, error: undefined });
+    try {
+      const source = await loadLabeledTextFile(inputPath);
+      if (request !== importRequest.current) return;
+      const preview = parseLabeledTextImport(source.text, workbook, tagTypes, entries.map((entry) => entry.vocabulary));
+      setMode({ kind: "importPreview", path: source.path, pathBuffer: source.path, preview, pageIndex: 0, filter: "records", focus: "filters" });
+    } catch (error) {
+      if (request !== importRequest.current) return;
+      const reason = error instanceof Error ? error.message : "Could not read the import file.";
+      setMode({ ...mode, loading: false, focus: "path", error: reason });
+    }
+  }
+
   function continueImportAfterSaveChoice(mode: Extract<UiMode, { kind: "importSaveDefault" }>): void {
     if (mode.save) {
       backend.setWorkbookImportFilePath(workbook.id, mode.path);
       setSavedImportFilePath(mode.path);
     }
-    setMode({ kind: "importPreview", path: mode.path, preview: mode.preview, scrollOffset: 0, filter: "records" });
+    setMode({ kind: "command" });
+    setBuffer("");
+    refreshEntries(mode.resultMessage);
   }
 
-  function confirmImport(preview: ImportPreview): void {
+  function confirmImport(mode: Extract<UiMode, { kind: "importPreview" }>): void {
+    const preview = mode.preview;
     if (preview.entries.length === 0) return;
     try {
       const imported = backend.importEntries(workbook.id, preview.entries.map(({ recordNumber: _recordNumber, ...entry }) => entry));
       const ignoredFields = preview.diagnostics.filter((item) => item.kind === "ignored-field").length;
       const ignoredTags = preview.diagnostics.filter((item) => item.kind === "ignored-tag").length;
-      setMode({ kind: "command" });
-      setBuffer("");
-      refreshEntries(`Imported ${imported.length}. Invalid ${preview.skippedInvalid}; duplicates ${preview.skippedDuplicates}; ignored fields ${ignoredFields}; ignored tags ${ignoredTags}.`);
+      const resultMessage = `Imported ${imported.length}. Invalid ${preview.skippedInvalid}; duplicates ${preview.skippedDuplicates}; ignored fields ${ignoredFields}; ignored tags ${ignoredTags}.`;
+      if (shouldPromptToSaveImportPath(mode.path, savedImportFilePath)) {
+        setMode({ kind: "importSaveDefault", path: mode.path, save: false, resultMessage });
+      } else {
+        setMode({ kind: "command" });
+        setBuffer("");
+        refreshEntries(resultMessage);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Import failed; no entries were written.";
       setMode((current) => current.kind === "importPreview" ? { ...current, error: message } : current);
@@ -672,7 +700,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       return;
     }
     if (mode.kind === "importPreview") {
-      confirmImport(mode.preview);
+      confirmImport(mode);
       return;
     }
     if (mode.kind === "importLoading") return;
@@ -812,7 +840,9 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     }
 
     if (key.escape) {
-      if (mode.kind !== "command") {
+      if (mode.kind === "importSaveDefault") {
+        continueImportAfterSaveChoice({ ...mode, save: false });
+      } else if (mode.kind !== "command") {
         cancelActiveMode("Cancelled.");
       } else {
         onBackToMenu();
@@ -838,21 +868,24 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     }
 
     if (mode.kind === "importPreview") {
-      const visibleRows = Math.max(3, rows - (mode.error ? 8 : 7));
-      const maxOffset = Math.max(0, importPreviewRecords(mode.preview, mode.filter).length - Math.max(1, visibleRows - 2));
-      if (key.leftArrow || key.rightArrow) {
+      const focuses: ImportPreviewFocus[] = ["path", "filters", "records"];
+      const pageSize = Math.max(1, rows - (mode.error ? 13 : 12));
+      const { pageIndex: safePreviewPage, pageCount } = paginateImportPreview(mode.preview, mode.filter, mode.pageIndex, pageSize);
+      if (key.upArrow || key.downArrow) {
+        const current = focuses.indexOf(mode.focus);
+        const next = key.upArrow ? Math.max(0, current - 1) : Math.min(focuses.length - 1, current + 1);
+        setMode({ ...mode, focus: focuses[next], pathBuffer: mode.focus === "path" ? mode.path : mode.pathBuffer, error: mode.focus === "path" ? undefined : mode.error });
+      } else if (mode.focus === "path") {
+        if (key.ctrl && input === "u") setMode({ ...mode, pathBuffer: "", error: undefined });
+        else if (key.return && !mode.loading) void reloadImportPreview(mode);
+      } else if (mode.focus === "filters" && (key.leftArrow || key.rightArrow)) {
         const filters: ImportPreviewFilter[] = ["records", "ready", "invalid", "duplicates"];
         const current = filters.indexOf(mode.filter);
         const next = key.leftArrow ? (current <= 0 ? filters.length - 1 : current - 1) : (current + 1) % filters.length;
-        setMode({ ...mode, filter: filters[next], scrollOffset: 0 });
-      } else if (key.upArrow) setMode({ ...mode, scrollOffset: Math.max(0, mode.scrollOffset - 1) });
-      else if (key.downArrow) setMode({ ...mode, scrollOffset: Math.min(maxOffset, mode.scrollOffset + 1) });
-      else if (key.return) confirmImport(mode.preview);
-      else if (input.toLocaleLowerCase() === "d") {
-        setMode({ kind: "importPath", alternate: true });
-        setBuffer("");
-        setStatusLines(buildStatusLines("Enter a different UTF-8 .txt file path."));
-      }
+        setMode({ ...mode, filter: filters[next], pageIndex: 0 });
+      } else if (mode.focus === "records" && key.leftArrow) setMode({ ...mode, pageIndex: Math.max(0, safePreviewPage - 1) });
+      else if (mode.focus === "records" && key.rightArrow) setMode({ ...mode, pageIndex: Math.min(pageCount - 1, safePreviewPage + 1) });
+      else if (key.return) confirmImport(mode);
       return;
     }
 
@@ -920,37 +953,48 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     return (
       <Box flexDirection="column">
         <Text color="cyan" bold>{centerLine(`Import — ${workbook.name}`, width)}</Text>
-        <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Source: ${truncate(mode.path, Math.max(1, width - 8))}`, width)}</Text>
+        <Text color="green">{padLine(mode.resultMessage, width)}</Text>
+        <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Imported from: ${truncate(mode.path, Math.max(1, width - 15))}`, width)}</Text>
         <Text>{padLine("", width)}</Text>
-        <Text>{padLine("Save this file as the workbook default?", width)}</Text>
+        <Text>{padLine("Save this file as the workbook default before returning?", width)}</Text>
         <Text color={!mode.save ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${!mode.save ? ">" : " "} Don't save`, width)}</Text>
         <Text color={mode.save ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${mode.save ? ">" : " "} Save`, width)}</Text>
         <Text>{padLine("", width)}</Text>
-        <Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Arrow keys select | Enter continues | Esc cancels", width)}</Text>
+        <Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Arrow keys select | Enter confirms | Esc doesn't save", width)}</Text>
       </Box>
     );
   }
 
   if (mode.kind === "importPreview") {
-    const visibleRows = Math.max(3, rows - (mode.error ? 8 : 7));
-    const filteredRecords = importPreviewRecords(mode.preview, mode.filter);
+    const visibleRows = Math.max(1, rows - (mode.error ? 13 : 12));
     const filters: Array<{ key: ImportPreviewFilter; label: string; count: number }> = [
-      { key: "records", label: "Records", count: mode.preview.totalRecords },
+      { key: "records", label: "Record", count: mode.preview.totalRecords },
       { key: "ready", label: "Ready", count: mode.preview.entries.length },
       { key: "invalid", label: "Invalid", count: mode.preview.skippedInvalid },
       { key: "duplicates", label: "Duplicates", count: mode.preview.skippedDuplicates },
     ];
     const statusColor = (status: "ready" | "invalid" | "duplicate") => status === "ready" ? "green" : status === "invalid" ? "red" : GRAY_TIER_COLOR;
-    const footer = mode.preview.entries.length > 0 ? "Enter imports | D different file | ↑↓ scroll | Esc cancels" : "D different file | ↑↓ scroll | Esc returns";
+    const { records: pageRecords, pageIndex: safePageIndex, pageCount } = paginateImportPreview(mode.preview, mode.filter, mode.pageIndex, visibleRows);
+    const footer = mode.focus === "path"
+      ? "Up/Down select | Enter loads file | Ctrl+U clears | Esc cancels"
+      : mode.focus === "filters"
+        ? `${mode.preview.entries.length > 0 ? "Enter imports | " : ""}Up/Down select | Left/Right filter | Esc cancels`
+        : `${mode.preview.entries.length > 0 ? "Enter imports | " : ""}Up/Down select | Left/Right page | Esc cancels`;
     return (
       <Box flexDirection="column">
         <Text color="cyan" bold>{centerLine(`Import — ${workbook.name}`, width)}</Text>
-        <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Source: ${truncate(mode.path, Math.max(1, width - 8))}`, width)}</Text>
+        <Box flexDirection="column" borderStyle="single" borderColor={mode.focus === "path" ? SELECTED_TEXT_COLOR : "black"} paddingX={1}>
+          <CaretInputLine value={mode.pathBuffer} onChange={(pathBuffer) => setMode({ ...mode, pathBuffer, error: undefined })} prefix={mode.loading ? "Loading: " : "File: "} width={Math.max(1, width - 4)} color={mode.focus === "path" ? "white" : AUXILIARY_TEXT_COLOR} focus={mode.focus === "path" && !mode.loading} inputKey={`import-preview-path-${mode.path}`} />
+        </Box>
         {mode.error ? <Text color="red">{padLine(mode.error, width)}</Text> : null}
         <Text>{padLine("", width)}</Text>
-        <Box flexDirection="row" gap={1}>{filters.map((item) => <Text key={item.key} color={item.key === mode.filter ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} bold={item.key === mode.filter}>{`${item.label}: ${item.count}`}</Text>)}</Box>
+        <Box flexDirection="row" gap={1}>{filters.map((item) => <Text key={item.key} color={item.key === mode.filter && mode.focus === "filters" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} bold={item.key === mode.filter}>{formatImportPreviewFilter(item.label, item.count, item.key === mode.filter)}</Text>)}</Box>
         <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Ignored fields: ${mode.preview.diagnostics.filter((item) => item.kind === "ignored-field").length} | Ignored tags: ${mode.preview.diagnostics.filter((item) => item.kind === "ignored-tag").length}`, width)}</Text>
-        {filteredRecords.length === 0 ? <Text color={AUXILIARY_TEXT_COLOR}>{padLine("No records in this category.", width)}</Text> : filteredRecords.slice(mode.scrollOffset, mode.scrollOffset + Math.max(1, visibleRows - 2)).map((record) => <Text key={record.recordNumber} color={statusColor(record.status)}>{padLine(formatImportPreviewRecord(record), width)}</Text>)}
+        <Box flexDirection="column" borderStyle="single" borderColor={mode.focus === "records" ? SELECTED_TEXT_COLOR : "black"} paddingX={1}>
+          {pageRecords.length === 0 ? <Text color={AUXILIARY_TEXT_COLOR}>{padLine("No records in this category.", Math.max(1, width - 4))}</Text> : pageRecords.map((record) => <Text key={record.recordNumber} color={statusColor(record.status)}>{padLine(formatImportPreviewRecord(record), Math.max(1, width - 4))}</Text>)}
+          {Array.from({ length: Math.max(0, visibleRows - Math.max(1, pageRecords.length)) }, (_, index) => <Text key={`blank-${index}`}>{padLine("", Math.max(1, width - 4))}</Text>)}
+          <Text color={mode.focus === "records" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{rightLine(`Page ${safePageIndex + 1}/${pageCount}`, Math.max(1, width - 4))}</Text>
+        </Box>
         <Text>{padLine("", width)}</Text>
         <Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footer, width)}</Text>
       </Box>
