@@ -97,7 +97,7 @@ type InputLineSegments = {
   padding: string;
 };
 
-export function buildInputSegments(prefix: string, value: string, cursorPosition: number, width: number, caretVisible: boolean): InputLineSegments {
+export function buildInputSegments(prefix: string, value: string, cursorPosition: number, width: number): InputLineSegments {
   if (width <= 0) return { prefix: "", before: "", cursorCell: "", after: "", padding: "" };
 
   const fittedPrefix = takePrefixToWidth(prefix, Math.max(0, width - 1));
@@ -129,14 +129,14 @@ export function buildInputSegments(prefix: string, value: string, cursorPosition
   return {
     prefix: fittedPrefix,
     before: before.join(""),
-    cursorCell: caretVisible ? `|${" ".repeat(cursorWidth - 1)}` : cursorGrapheme,
+    cursorCell: cursorGrapheme,
     after: after.join(""),
     padding: " ".repeat(Math.max(0, viewportWidth - used - cursorWidth)),
   };
 }
 
-export function buildInputLine(prefix: string, value: string, cursorPosition: number, width: number, caretVisible: boolean): string {
-  const segments = buildInputSegments(prefix, value, cursorPosition, width, caretVisible);
+export function buildInputLine(prefix: string, value: string, cursorPosition: number, width: number): string {
+  const segments = buildInputSegments(prefix, value, cursorPosition, width);
   return `${segments.prefix}${segments.before}${segments.cursorCell}${segments.after}${segments.padding}`;
 }
 
@@ -163,7 +163,6 @@ type CaretInputLineProps = {
 export function CaretInputLine({ value, onChange, prefix = "", width, color, focus = true, inputKey = "default" }: CaretInputLineProps): JSX.Element {
   const { internal_eventEmitter: inputEvents } = useStdin();
   const [cursor, setCursor] = useState(() => splitGraphemes(value).length);
-  const [caretVisible, setCaretVisible] = useState(focus);
   const lastEmittedValue = useRef(value);
   const valueRef = useRef(value);
   const cursorRef = useRef(cursor);
@@ -186,16 +185,6 @@ export function CaretInputLine({ value, onChange, prefix = "", width, color, foc
   }, [value]);
 
   useEffect(() => {
-    if (!focus) {
-      setCaretVisible(false);
-      return;
-    }
-    setCaretVisible(true);
-    const timer = setInterval(() => setCaretVisible((visible) => !visible), 500);
-    return () => clearInterval(timer);
-  }, [focus, cursor, value, inputKey]);
-
-  useEffect(() => {
     if (!focus) return;
     const handleInput = (data: Buffer | string): void => {
       const action = textActionFromRawInput(data);
@@ -213,6 +202,6 @@ export function CaretInputLine({ value, onChange, prefix = "", width, color, foc
     return () => { inputEvents.removeListener("input", handleInput); };
   }, [focus, inputEvents, onChange]);
 
-  const segments = buildInputSegments(prefix, value, cursor, width, focus && caretVisible);
-  return <Text color={color}>{segments.prefix}{segments.before}{focus && caretVisible ? <Text color="white">{segments.cursorCell}</Text> : segments.cursorCell}{segments.after}{segments.padding}</Text>;
+  const segments = buildInputSegments(prefix, value, cursor, width);
+  return <Text color={color}>{segments.prefix}{segments.before}{focus ? <Text color="black" backgroundColor="white">{segments.cursorCell}</Text> : segments.cursorCell}{segments.after}{segments.padding}</Text>;
 }

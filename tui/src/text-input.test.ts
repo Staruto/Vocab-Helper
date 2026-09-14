@@ -31,11 +31,10 @@ test("editing preserves complete Unicode grapheme clusters", () => {
   assert.deepEqual(editText({ value, cursor: 3 }, { kind: "backspace" }), { value: "e\u0301語", cursor: 2 });
 });
 
-test("input rendering uses a width-stable blinking vertical caret", () => {
-  assert.equal(buildInputLine("> ", "abcd", 2, 10, true), "> ab|d    ");
-  assert.equal(buildInputLine("> ", "abcd", 2, 10, false), "> abcd    ");
-  assert.equal(buildInputLine("> ", "abcdef", 5, 7, true), "> bcde|");
-  assert.equal(buildInputLine("> ", "日本", 2, 8, true), "> 日本| ");
+test("input rendering preserves the grapheme in a steady block cursor cell", () => {
+  assert.equal(buildInputLine("> ", "abcd", 2, 10), "> abcd    ");
+  assert.equal(buildInputLine("> ", "abcdef", 5, 7), "> bcdef");
+  assert.equal(buildInputLine("> ", "日本", 2, 8), "> 日本  ");
 });
 
 test("raw Windows Backspace and forward Delete map to distinct edits", () => {
