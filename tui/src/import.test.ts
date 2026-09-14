@@ -57,7 +57,7 @@ Example Sentence 2: 連休に海へ行きます。 (I will go to the sea during 
   assert.deepEqual(preview.diagnostics, []);
 });
 
-test("records report ignored data and skip malformed, missing, and duplicate entries", () => {
+test("records report every row with status, vocabulary, and compact ignored-data counts", () => {
   const preview = parseLabeledTextImport(`\uFEFFJapanese: 猫\r
 English: cat: a small feline\r
 Unused: value\r
@@ -78,10 +78,11 @@ Japanese: 魚`, workbook, tagTypes, ["猫"]);
   assert.deepEqual(preview.entries.map((entry) => entry.vocabulary), ["犬"]);
   assert.equal(preview.skippedDuplicates, 2);
   assert.equal(preview.skippedInvalid, 2);
-  assert.match(buildImportPreviewLines(preview).join("\n"), /ignored field 'Unused'/);
-  assert.match(buildImportPreviewLines(preview).join("\n"), /ignored Part of Speech tag 'unknown'/);
-  assert.match(buildImportPreviewLines(preview).join("\n"), /line has no ':' separator/);
-  assert.match(buildImportPreviewLines(preview).join("\n"), /missing required field 'English'/);
+  assert.deepEqual(preview.records.map((record) => [record.status, record.vocabulary]), [
+    ["duplicate", "猫"], ["ready", "犬"], ["duplicate", "犬"], ["invalid", "鳥"], ["invalid", "魚"],
+  ]);
+  assert.match(buildImportPreviewLines(preview).join("\n"), /\+1 ignored field, \+1 ignored tag/);
+  assert.doesNotMatch(buildImportPreviewLines(preview).join("\n"), /Record 1:/);
 });
 
 test("recognized labels are exact, unique, and unambiguous", () => {

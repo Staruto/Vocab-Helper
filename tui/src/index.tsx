@@ -4,7 +4,7 @@ import { CreateWorkbookInput, EntryRow, LANGUAGE_PRESET_DEFINITIONS, MeaningAttr
 import { VocabularyBackend } from "./backend.js";
 import { fitTagBadges, visibleAssignedTagGroups } from "./tag-display.js";
 import { adjacentEntryId, buildDetailSections, detailNavigationLabel, DetailField } from "./detail-display.js";
-import { buildImportPreviewLines, importFilePathsEqual, ImportPreview, loadLabeledTextFile, parseLabeledTextImport } from "./import.js";
+import { formatImportPreviewRecord, importFilePathsEqual, importPreviewRecords, ImportPreview, ImportPreviewFilter, loadLabeledTextFile, parseLabeledTextImport } from "./import.js";
 import { CaretInputLine } from "./text-input.js";
 
 type UiMode =
@@ -16,7 +16,7 @@ type UiMode =
   | { kind: "importPath"; alternate: boolean }
   | { kind: "importLoading"; path: string; alternate: boolean }
   | { kind: "importSaveDefault"; path: string; preview: ImportPreview; save: boolean }
-  | { kind: "importPreview"; path: string; preview: ImportPreview; scrollOffset: number; error?: string };
+  | { kind: "importPreview"; path: string; preview: ImportPreview; scrollOffset: number; filter: ImportPreviewFilter; error?: string };
 
 type AppScreen =
   | { kind: "menu" }
@@ -52,7 +52,7 @@ type ParameterizedCommand = "edit" | "delete";
 type LanguagePreset = { code: string; label: string };
 
 const PAGE_SIZE = 20;
-const TITLE = "VocabHelper 3.1.0";
+const TITLE = "VocabHelper 3.2.0";
 const FOOTER_HINT = "Navigate pages with <- -> | Esc returns to menu";
 const AUXILIARY_TEXT_COLOR = "#979797";
 const GRAY_TIER_COLOR = "#777777";
@@ -482,7 +482,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       setBuffer("");
       setMode(alternate && !importFilePathsEqual(source.path, savedImportFilePath)
         ? { kind: "importSaveDefault", path: source.path, preview, save: false }
-        : { kind: "importPreview", path: source.path, preview, scrollOffset: 0 });
+        : { kind: "importPreview", path: source.path, preview, scrollOffset: 0, filter: "records" });
     } catch (error) {
       if (request !== importRequest.current) return;
       setMode({ kind: "importPath", alternate: true });
@@ -497,7 +497,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       backend.setWorkbookImportFilePath(workbook.id, mode.path);
       setSavedImportFilePath(mode.path);
     }
-    setMode({ kind: "importPreview", path: mode.path, preview: mode.preview, scrollOffset: 0 });
+    setMode({ kind: "importPreview", path: mode.path, preview: mode.preview, scrollOffset: 0, filter: "records" });
   }
 
   function confirmImport(preview: ImportPreview): void {
@@ -838,10 +838,14 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     }
 
     if (mode.kind === "importPreview") {
-      const previewLineCount = buildImportPreviewLines(mode.preview).length;
       const visibleRows = Math.max(3, rows - (mode.error ? 8 : 7));
-      const maxOffset = Math.max(0, previewLineCount - visibleRows);
-      if (key.upArrow) setMode({ ...mode, scrollOffset: Math.max(0, mode.scrollOffset - 1) });
+      const maxOffset = Math.max(0, importPreviewRecords(mode.preview, mode.filter).length - Math.max(1, visibleRows - 2));
+      if (key.leftArrow || key.rightArrow) {
+        const filters: ImportPreviewFilter[] = ["records", "ready", "invalid", "duplicates"];
+        const current = filters.indexOf(mode.filter);
+        const next = key.leftArrow ? (current <= 0 ? filters.length - 1 : current - 1) : (current + 1) % filters.length;
+        setMode({ ...mode, filter: filters[next], scrollOffset: 0 });
+      } else if (key.upArrow) setMode({ ...mode, scrollOffset: Math.max(0, mode.scrollOffset - 1) });
       else if (key.downArrow) setMode({ ...mode, scrollOffset: Math.min(maxOffset, mode.scrollOffset + 1) });
       else if (key.return) confirmImport(mode.preview);
       else if (input.toLocaleLowerCase() === "d") {
@@ -928,9 +932,15 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   }
 
   if (mode.kind === "importPreview") {
-    const previewLines = buildImportPreviewLines(mode.preview);
     const visibleRows = Math.max(3, rows - (mode.error ? 8 : 7));
-    const visibleLines = previewLines.slice(mode.scrollOffset, mode.scrollOffset + visibleRows);
+    const filteredRecords = importPreviewRecords(mode.preview, mode.filter);
+    const filters: Array<{ key: ImportPreviewFilter; label: string; count: number }> = [
+      { key: "records", label: "Records", count: mode.preview.totalRecords },
+      { key: "ready", label: "Ready", count: mode.preview.entries.length },
+      { key: "invalid", label: "Invalid", count: mode.preview.skippedInvalid },
+      { key: "duplicates", label: "Duplicates", count: mode.preview.skippedDuplicates },
+    ];
+    const statusColor = (status: "ready" | "invalid" | "duplicate") => status === "ready" ? "green" : status === "invalid" ? "red" : GRAY_TIER_COLOR;
     const footer = mode.preview.entries.length > 0 ? "Enter imports | D different file | ↑↓ scroll | Esc cancels" : "D different file | ↑↓ scroll | Esc returns";
     return (
       <Box flexDirection="column">
@@ -938,7 +948,9 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
         <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Source: ${truncate(mode.path, Math.max(1, width - 8))}`, width)}</Text>
         {mode.error ? <Text color="red">{padLine(mode.error, width)}</Text> : null}
         <Text>{padLine("", width)}</Text>
-        {visibleLines.map((line, index) => <Text key={`${mode.scrollOffset + index}-${line}`} color={index < 2 && mode.scrollOffset === 0 ? "white" : AUXILIARY_TEXT_COLOR}>{padLine(line, width)}</Text>)}
+        <Box flexDirection="row" gap={1}>{filters.map((item) => <Text key={item.key} color={item.key === mode.filter ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} bold={item.key === mode.filter}>{`${item.label}: ${item.count}`}</Text>)}</Box>
+        <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Ignored fields: ${mode.preview.diagnostics.filter((item) => item.kind === "ignored-field").length} | Ignored tags: ${mode.preview.diagnostics.filter((item) => item.kind === "ignored-tag").length}`, width)}</Text>
+        {filteredRecords.length === 0 ? <Text color={AUXILIARY_TEXT_COLOR}>{padLine("No records in this category.", width)}</Text> : filteredRecords.slice(mode.scrollOffset, mode.scrollOffset + Math.max(1, visibleRows - 2)).map((record) => <Text key={record.recordNumber} color={statusColor(record.status)}>{padLine(formatImportPreviewRecord(record), width)}</Text>)}
         <Text>{padLine("", width)}</Text>
         <Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footer, width)}</Text>
       </Box>

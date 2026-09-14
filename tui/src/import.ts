@@ -5,12 +5,23 @@ import { ImportEntryInput, TagType, WorkbookRow } from "./db.js";
 export type ImportDiagnosticKind = "ignored-field" | "ignored-tag" | "invalid" | "duplicate";
 export type ImportDiagnostic = { recordNumber: number; kind: ImportDiagnosticKind; message: string };
 export type PreparedImportEntry = ImportEntryInput & { recordNumber: number };
+export type ImportRecordStatus = "ready" | "invalid" | "duplicate";
+export type ImportPreviewRecord = {
+  recordNumber: number;
+  status: ImportRecordStatus;
+  vocabulary: string;
+  entry?: PreparedImportEntry;
+  ignoredFieldCount: number;
+  ignoredTagCount: number;
+};
+export type ImportPreviewFilter = "records" | "ready" | "invalid" | "duplicates";
 export type ImportPreview = {
   totalRecords: number;
   entries: PreparedImportEntry[];
   skippedInvalid: number;
   skippedDuplicates: number;
   diagnostics: ImportDiagnostic[];
+  records: ImportPreviewRecord[];
 };
 
 type Destination =
@@ -54,6 +65,7 @@ export function parseLabeledTextImport(text: string, workbook: WorkbookRow, tagT
   const seenVocabulary = new Set(existingVocabulary.map((value) => value.trim()));
   const entries: PreparedImportEntry[] = [];
   const diagnostics: ImportDiagnostic[] = [];
+  const previewRecords: ImportPreviewRecord[] = [];
   let skippedInvalid = 0;
   let skippedDuplicates = 0;
 
@@ -61,6 +73,8 @@ export function parseLabeledTextImport(text: string, workbook: WorkbookRow, tagT
     const recordNumber = recordIndex + 1;
     let malformed = false;
     let vocabulary = "";
+    let ignoredFieldCount = 0;
+    let ignoredTagCount = 0;
     const meanings = workbook.meaningAttributes.map(() => "");
     const attributes: Record<string, string> = {};
     const tagIds: number[] = [];
@@ -80,10 +94,12 @@ export function parseLabeledTextImport(text: string, workbook: WorkbookRow, tagT
       const matches = destinations.get(label) ?? [];
       if (matches.length === 0) {
         diagnostics.push({ recordNumber, kind: "ignored-field", message: `ignored field '${label}'` });
+        ignoredFieldCount += 1;
         continue;
       }
       if (matches.length > 1) {
         diagnostics.push({ recordNumber, kind: "ignored-field", message: `ignored ambiguous field '${label}'` });
+        ignoredFieldCount += 1;
         continue;
       }
       if (recognizedLabels.has(label)) {
@@ -101,6 +117,7 @@ export function parseLabeledTextImport(text: string, workbook: WorkbookRow, tagT
         for (const tagName of value.split(",").map((item) => item.trim()).filter(Boolean)) {
           const tagId = tagsByName.get(tagName);
           if (tagId === undefined) diagnostics.push({ recordNumber, kind: "ignored-tag", message: `ignored ${destination.type.name} tag '${tagName}'` });
+          if (tagId === undefined) ignoredTagCount += 1;
           else tagIds.push(tagId);
         }
       }
@@ -117,26 +134,46 @@ export function parseLabeledTextImport(text: string, workbook: WorkbookRow, tagT
     }
     if (malformed) {
       skippedInvalid += 1;
+      previewRecords.push({ recordNumber, status: "invalid", vocabulary: vocabulary || "<missing vocabulary>", ignoredFieldCount, ignoredTagCount });
       return;
     }
     if (seenVocabulary.has(vocabulary)) {
       diagnostics.push({ recordNumber, kind: "duplicate", message: `skipped duplicate vocabulary '${vocabulary}'` });
       skippedDuplicates += 1;
+      previewRecords.push({ recordNumber, status: "duplicate", vocabulary, ignoredFieldCount, ignoredTagCount });
       return;
     }
     seenVocabulary.add(vocabulary);
-    entries.push({ recordNumber, vocabulary, meanings, attributes, tagIds: [...new Set(tagIds)] });
+    const entry = { recordNumber, vocabulary, meanings, attributes, tagIds: [...new Set(tagIds)] };
+    entries.push(entry);
+    previewRecords.push({ recordNumber, status: "ready", vocabulary, entry, ignoredFieldCount, ignoredTagCount });
   });
 
-  return { totalRecords: records.length, entries, skippedInvalid, skippedDuplicates, diagnostics };
+  return { totalRecords: records.length, entries, skippedInvalid, skippedDuplicates, diagnostics, records: previewRecords };
 }
 
-export function buildImportPreviewLines(preview: ImportPreview): string[] {
+export function importPreviewRecords(preview: ImportPreview, filter: ImportPreviewFilter): ImportPreviewRecord[] {
+  if (filter === "records") return preview.records;
+  const status = filter === "duplicates" ? "duplicate" : filter;
+  return preview.records.filter((record) => record.status === status);
+}
+
+export function formatImportPreviewRecord(record: ImportPreviewRecord): string {
+  const marker = record.status === "ready" ? "+" : record.status === "invalid" ? "!" : "=";
+  const suffix = [
+    record.ignoredFieldCount ? `+${record.ignoredFieldCount} ignored field${record.ignoredFieldCount === 1 ? "" : "s"}` : "",
+    record.ignoredTagCount ? `+${record.ignoredTagCount} ignored tag${record.ignoredTagCount === 1 ? "" : "s"}` : "",
+  ].filter(Boolean);
+  return `${marker} ${record.vocabulary}${suffix.length ? ` (${suffix.join(", ")})` : ""}`;
+}
+
+export function buildImportPreviewLines(preview: ImportPreview, filter: ImportPreviewFilter = "records"): string[] {
   const ignoredFields = preview.diagnostics.filter((item) => item.kind === "ignored-field").length;
   const ignoredTags = preview.diagnostics.filter((item) => item.kind === "ignored-tag").length;
+  const rows = importPreviewRecords(preview, filter).map(formatImportPreviewRecord);
   return [
     `Records: ${preview.totalRecords} | Ready: ${preview.entries.length} | Invalid: ${preview.skippedInvalid} | Duplicates: ${preview.skippedDuplicates}`,
     `Ignored fields: ${ignoredFields} | Ignored tags: ${ignoredTags}`,
-    ...preview.diagnostics.map((item) => `Record ${item.recordNumber}: ${item.message}`),
+    ...(rows.length ? rows : ["No records in this category."]),
   ];
 }
