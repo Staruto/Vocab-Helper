@@ -4,7 +4,7 @@ import { CreateWorkbookInput, EntryRow, LANGUAGE_PRESET_DEFINITIONS, MeaningAttr
 import { VocabularyBackend } from "./backend.js";
 import { fitTagBadges, visibleAssignedTagGroups } from "./tag-display.js";
 import { adjacentEntryId, buildDetailSections, detailNavigationLabel, DetailField } from "./detail-display.js";
-import { formatImportPreviewFilter, formatImportPreviewRecord, ImportPreview, ImportPreviewFilter, loadLabeledTextFile, paginateImportPreview, parseLabeledTextImport, shouldPromptToSaveImportPath } from "./import.js";
+import { formatImportPreviewFilter, formatImportPreviewRecord, importPreviewPageSize, ImportPreview, ImportPreviewFilter, loadLabeledTextFile, paginateImportPreview, parseLabeledTextImport, shouldPromptToSaveImportPath } from "./import.js";
 import { CaretInputLine } from "./text-input.js";
 
 type UiMode =
@@ -54,7 +54,7 @@ type ParameterizedCommand = "edit" | "delete";
 type LanguagePreset = { code: string; label: string };
 
 const PAGE_SIZE = 20;
-const TITLE = "VocabHelper 3.3.0";
+const TITLE = "VocabHelper 3.3.1";
 const FOOTER_HINT = "Navigate pages with <- -> | Esc returns to menu";
 const AUXILIARY_TEXT_COLOR = "#979797";
 const GRAY_TIER_COLOR = "#777777";
@@ -869,7 +869,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
 
     if (mode.kind === "importPreview") {
       const focuses: ImportPreviewFocus[] = ["path", "filters", "records"];
-      const pageSize = Math.max(1, rows - (mode.error ? 13 : 12));
+      const pageSize = importPreviewPageSize(rows, Boolean(mode.error));
       const { pageIndex: safePreviewPage, pageCount } = paginateImportPreview(mode.preview, mode.filter, mode.pageIndex, pageSize);
       if (key.upArrow || key.downArrow) {
         const current = focuses.indexOf(mode.focus);
@@ -966,7 +966,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   }
 
   if (mode.kind === "importPreview") {
-    const visibleRows = Math.max(1, rows - (mode.error ? 13 : 12));
+    const visibleRows = importPreviewPageSize(rows, Boolean(mode.error));
     const filters: Array<{ key: ImportPreviewFilter; label: string; count: number }> = [
       { key: "records", label: "Record", count: mode.preview.totalRecords },
       { key: "ready", label: "Ready", count: mode.preview.entries.length },
@@ -983,14 +983,14 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     return (
       <Box flexDirection="column">
         <Text color="cyan" bold>{centerLine(`Import — ${workbook.name}`, width)}</Text>
-        <Box flexDirection="column" borderStyle="single" borderColor={mode.focus === "path" ? SELECTED_TEXT_COLOR : "black"} paddingX={1}>
+        <Box flexDirection="column" borderStyle="single" borderColor={mode.focus === "path" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}>
           <CaretInputLine value={mode.pathBuffer} onChange={(pathBuffer) => setMode({ ...mode, pathBuffer, error: undefined })} prefix={mode.loading ? "Loading: " : "File: "} width={Math.max(1, width - 4)} color={mode.focus === "path" ? "white" : AUXILIARY_TEXT_COLOR} focus={mode.focus === "path" && !mode.loading} inputKey={`import-preview-path-${mode.path}`} />
         </Box>
         {mode.error ? <Text color="red">{padLine(mode.error, width)}</Text> : null}
         <Text>{padLine("", width)}</Text>
         <Box flexDirection="row" gap={1}>{filters.map((item) => <Text key={item.key} color={item.key === mode.filter && mode.focus === "filters" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} bold={item.key === mode.filter}>{formatImportPreviewFilter(item.label, item.count, item.key === mode.filter)}</Text>)}</Box>
         <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Ignored fields: ${mode.preview.diagnostics.filter((item) => item.kind === "ignored-field").length} | Ignored tags: ${mode.preview.diagnostics.filter((item) => item.kind === "ignored-tag").length}`, width)}</Text>
-        <Box flexDirection="column" borderStyle="single" borderColor={mode.focus === "records" ? SELECTED_TEXT_COLOR : "black"} paddingX={1}>
+        <Box flexDirection="column" borderStyle="single" borderColor={mode.focus === "records" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}>
           {pageRecords.length === 0 ? <Text color={AUXILIARY_TEXT_COLOR}>{padLine("No records in this category.", Math.max(1, width - 4))}</Text> : pageRecords.map((record) => <Text key={record.recordNumber} color={statusColor(record.status)}>{padLine(formatImportPreviewRecord(record), Math.max(1, width - 4))}</Text>)}
           {Array.from({ length: Math.max(0, visibleRows - Math.max(1, pageRecords.length)) }, (_, index) => <Text key={`blank-${index}`}>{padLine("", Math.max(1, width - 4))}</Text>)}
           <Text color={mode.focus === "records" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{rightLine(`Page ${safePageIndex + 1}/${pageCount}`, Math.max(1, width - 4))}</Text>

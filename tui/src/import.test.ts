@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { TagType, WorkbookRow } from "./db.js";
-import { buildImportPreviewLines, formatImportPreviewFilter, importFilePathsEqual, loadLabeledTextFile, paginateImportPreview, parseLabeledTextImport, shouldPromptToSaveImportPath } from "./import.js";
+import { buildImportPreviewLines, formatImportPreviewFilter, importFilePathsEqual, importPreviewPageSize, loadLabeledTextFile, paginateImportPreview, parseLabeledTextImport, shouldPromptToSaveImportPath } from "./import.js";
 
 const workbook: WorkbookRow = {
   id: 1, name: "Japanese", wordCount: 0, createdAt: "2026-01-01",
@@ -127,6 +127,12 @@ test("empty files produce an empty, non-importable preview", () => {
   const preview = parseLabeledTextImport(" \r\n\r\n ", workbook, tagTypes, []);
   assert.equal(preview.totalRecords, 0);
   assert.deepEqual(preview.entries, []);
+});
+
+test("import preview page sizing stays below the terminal repaint boundary", () => {
+  assert.equal(importPreviewPageSize(24, false), 9);
+  assert.equal(importPreviewPageSize(24, true), 8);
+  assert.equal(importPreviewPageSize(10, false), 1);
 });
 
 test("import file path comparison resolves equivalent paths", () => {

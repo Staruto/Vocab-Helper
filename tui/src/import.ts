@@ -171,6 +171,11 @@ export function paginateImportPreview(preview: ImportPreview, filter: ImportPrev
   return { records: filtered.slice(pageIndex * safePageSize, pageIndex * safePageSize + safePageSize), pageIndex, pageCount };
 }
 
+export function importPreviewPageSize(terminalRows: number, hasError: boolean): number {
+  // Leave room below the output so Ink can erase the preview correctly when the screen changes.
+  return Math.max(1, terminalRows - (hasError ? 16 : 15));
+}
+
 export function shouldPromptToSaveImportPath(importedPath: string, savedPath: string | null): boolean {
   return !importFilePathsEqual(importedPath, savedPath);
 }
