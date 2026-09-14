@@ -5,6 +5,7 @@ import { VocabularyBackend } from "./backend.js";
 import { fitTagBadges, visibleAssignedTagGroups } from "./tag-display.js";
 import { adjacentEntryId, buildDetailSections, detailNavigationLabel, DetailField } from "./detail-display.js";
 import { buildImportPreviewLines, importFilePathsEqual, ImportPreview, loadLabeledTextFile, parseLabeledTextImport } from "./import.js";
+import { CaretInputLine } from "./text-input.js";
 
 type UiMode =
   | { kind: "command" }
@@ -379,22 +380,6 @@ function buildWorkbookMenuLines(
   return { border, header, rows };
 }
 
-function buildWorkbookCreateLines(name: string, width: number): string[] {
-  return [
-    padLine(`Name: > ${name}_`, width),
-    padLine("", width),
-  ];
-}
-
-function buildWorkbookDeleteLines(workbook: WorkbookRow, confirm: string, width: number): string[] {
-  return [
-    padLine(`Delete ${workbook.name}?`, width),
-    padLine("", width),
-    padLine(`> ${confirm}_`, width),
-    padLine("", width),
-  ];
-}
-
 function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOpenTags, onViewEntry, onStartPractice }: VocabularyScreenProps): JSX.Element {
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
@@ -411,6 +396,10 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   const activeMetadata = workbook.metadataAttributes.filter((attribute) => attribute.role === "optional");
   const tagTypes = backend.listTagTypes(workbook.id);
   const selectableTags = tagTypes.flatMap((type) => type.tags);
+  const textInputActive = mode.kind === "command" || mode.kind === "commandArg" || mode.kind === "delete" || mode.kind === "importPath" || ((mode.kind === "add" || mode.kind === "edit") && mode.stage !== "tags");
+  const textInputKey = mode.kind === "add" || mode.kind === "edit"
+    ? `${mode.kind}-${mode.stage}-${mode.meaningIndex}-${mode.metadataIndex}`
+    : mode.kind;
 
   useEffect(() => {
     if (!stdout) {
@@ -875,6 +864,10 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       return;
     }
 
+    if ((key.leftArrow || key.rightArrow) && textInputActive && buffer.length > 0) {
+      return;
+    }
+
     if (key.leftArrow && mode.kind === "command" && !commandPaletteActive) {
       setPageIndex((current) => Math.max(0, current - 1));
       return;
@@ -885,8 +878,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       return;
     }
 
-    if (key.backspace || key.delete) {
-      setBuffer((current) => current.slice(0, -1));
+    if (key.leftArrow || key.rightArrow || key.backspace || key.delete) {
       return;
     }
 
@@ -909,9 +901,6 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       return;
     }
 
-    if (!key.ctrl && !key.meta && input) {
-      setBuffer((current) => current + input);
-    }
   });
 
   const pageCount = getPageCount(entries.length);
@@ -921,7 +910,6 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     () => buildTableLayout(entries, safePageIndex, width, PAGE_SIZE, workbook.vocabularyLabel, workbook.meaningAttributes[0]?.label ?? "Primary Meaning", workbook.metadataAttributes),
     [entries, safePageIndex, width, workbook.vocabularyLabel, workbook.meaningAttributes, workbook.metadataAttributes],
   );
-  const promptLine = `> ${buffer}_`;
   const screenTitle = `${TITLE} — ${workbook.name}`;
 
   if (mode.kind === "importSaveDefault") {
@@ -976,7 +964,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       <Text color={AUXILIARY_TEXT_COLOR}>{padLine(buildFooterLine(width, pageText, FOOTER_HINT), width)}</Text>
       <Text>{padLine("", width)}</Text>
       <Text>{padLine("", width)}</Text>
-      <Text color="cyan">{padLine(promptLine, width)}</Text>
+      <CaretInputLine key={textInputKey} prefix="> " value={buffer} onChange={setBuffer} width={width} color="cyan" focus={textInputActive} inputKey={textInputKey} />
       {(mode.kind === "add" || mode.kind === "edit") && mode.stage === "tags" ? (
         <>
           <Text>{padLine("", width)}</Text>
@@ -1162,6 +1150,17 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
   const presetDefinition = selectedType.code ? LANGUAGE_PRESET_DEFINITIONS[selectedType.code] : undefined;
   const presetOptionalAttributes = (presetDefinition?.optionalAttributes ?? []).map((item) => ({ ...item, required: false, visible: false, displayOrder: 0 }));
   const presetKeys = new Set(presetEnabled && selectedType.kind === "preset_language" ? presetOptionalAttributes.map((item) => item.key) : []);
+  const activeTextValue = stage === "destructive-confirm"
+    ? confirmBuffer
+    : editAction !== "none"
+      ? editBuffer
+      : stage === "name"
+        ? name
+        : stage === "label"
+          ? vocabularyLabel
+          : stage === "meaning"
+            ? meanings[meaningIndex]?.label ?? ""
+            : null;
   useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => { stdout.off("resize", f); }; }, [stdout]);
 
   function go(next: CreateStage): void { setHistory((items) => [...items, stage]); setStage(next); setError(""); setSelected(0); setEditAction("none"); setEditBuffer(""); }
@@ -1243,19 +1242,17 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
     if (key.ctrl && input === "c") return onQuit();
     if (key.escape) return onCancel();
     if (stage === "destructive-confirm") {
-      if (key.backspace || key.delete) setConfirmBuffer((value) => value.slice(0, -1));
-      else if (key.return) {
+      if (key.return) {
         if (confirmBuffer.trim().toLowerCase() !== "yes") setError("Type yes to confirm removal of populated fields.");
         else if (pendingConfiguration) submit(pendingConfiguration, true);
-      } else if (!key.ctrl && !key.meta && input) { setConfirmBuffer((value) => value + input); setError(""); }
+      }
       return;
     }
+    if ((key.leftArrow || key.rightArrow) && activeTextValue !== null && activeTextValue.length > 0) return;
     if (key.leftArrow) { if (editAction !== "none") { setEditAction("none"); setEditBuffer(""); } else if (stage === "meaning" && meaningIndex > 0) { setMeaningIndex((index) => index - 1); setMeaningPalette(null); } else back(); return; }
     if (key.rightArrow) { if (editAction === "none") advance(); return; }
     if (editAction !== "none") {
-      if (key.backspace || key.delete) setEditBuffer((value) => value.slice(0, -1));
-      else if (key.return) commitListEdit();
-      else if (!key.ctrl && !key.meta && input) setEditBuffer((value) => value + input);
+      if (key.return) commitListEdit();
       return;
     }
     if (!existingWorkbook && stage === "type" && (key.upArrow || key.downArrow)) { setTypeIndex((value) => key.upArrow ? (value <= 0 ? VOCABULARY_TYPES.length - 1 : value - 1) : (value + 1) % VOCABULARY_TYPES.length); return; }
@@ -1274,18 +1271,6 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
       if (key.delete && items.length) { stage === "tags" ? setTags((values) => values.filter((_, i) => i !== selected)) : setAttributes((values) => values.filter((_, i) => i !== selected)); setSelected((value) => Math.max(0, value - 1)); return; }
     }
     if (key.return) { advance(); return; }
-    if (key.backspace || key.delete) {
-      if (stage === "name") setName((value) => value.slice(0, -1));
-      else if (stage === "label") setVocabularyLabel((value) => value.slice(0, -1));
-      else if (stage === "meaning") setMeanings((items) => items.map((item, index) => index === meaningIndex ? { ...item, label: item.label.slice(0, -1), languageCode: null } : item));
-      return;
-    }
-    if (!key.ctrl && !key.meta && input) {
-      if (stage === "name") setName((value) => value + input);
-      else if (stage === "label") setVocabularyLabel((value) => value + input);
-      else if (stage === "meaning") { setMeaningPalette(null); setMeanings((items) => items.map((item, index) => index === meaningIndex ? { ...item, label: item.label + input, languageCode: null } : item)); }
-      setError("");
-    }
   });
 
   const question = ["name"].includes(stage) ? 1 : ["type", "label", "preset", "pos", "tags"].includes(stage) ? 2 : ["meaning-count", "meaning"].includes(stage) ? 3 : stage === "attributes" ? 4 : 4;
@@ -1306,16 +1291,16 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
   if (stage === "confirm") { description = `Review the workbook configuration before ${existingWorkbook ? "saving" : "creating"} it.`; footer = `← back | Enter ${existingWorkbook ? "save" : "create"} | Esc cancel`; }
   if (stage === "destructive-confirm") { description = "This change will permanently remove stored field values."; footer = "Type yes and press Enter | Esc cancel"; }
   return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(title, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(description, width)}</Text><Text>{padLine("", width)}</Text>
-    {stage === "name" ? <Text color="cyan">{padLine(`Workbook name: ${name}_`, width)}</Text> : null}
+    {stage === "name" ? <CaretInputLine key="workbook-name" prefix="Workbook name: " value={name} onChange={(value) => { setName(value); setError(""); }} width={width} color="cyan" inputKey="workbook-name" /> : null}
     {stage === "type" ? existingWorkbook ? <Text color={SELECTED_TEXT_COLOR}>{padLine(selectedType.label, width)}</Text> : VOCABULARY_TYPES.map((item, index) => <Text key={item.label} color={index === typeIndex ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${index === typeIndex ? ">" : " "} ${item.label}`, width)}</Text>) : null}
-    {stage === "label" ? <Text color="cyan">{padLine(`Vocabulary label: ${vocabularyLabel}_`, width)}</Text> : null}
+    {stage === "label" ? <CaretInputLine key="vocabulary-label" prefix="Vocabulary label: " value={vocabularyLabel} onChange={(value) => { setVocabularyLabel(value); setError(""); }} width={width} color="cyan" inputKey="vocabulary-label" /> : null}
     {stage === "preset" ? <><Text color={presetEnabled ? "green" : AUXILIARY_TEXT_COLOR}>{padLine(`Exclusive attributes: ${presetEnabled ? "Enabled" : "Disabled"}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(presetOptionalAttributes.length ? `Available: ${presetOptionalAttributes.map((item) => item.label).join(", ")}` : "No exclusive attributes are currently defined for this language.", width)}</Text></> : null}
     {stage === "pos" ? <><Text color={addPosType ? "green" : AUXILIARY_TEXT_COLOR}>{padLine(`Add Part of Speech: ${addPosType ? "Yes" : "No"}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine((presetDefinition?.partOfSpeechTags ?? []).length ? `Preset tags: ${(presetDefinition?.partOfSpeechTags ?? []).join(", ")}` : "No preset tags are currently defined for this language.", width)}</Text></> : null}
     {stage === "meaning-count" ? <Text color="cyan">{padLine(`Meaning attributes: ${meaningCount}`, width)}</Text> : null}
-    {stage === "meaning" ? <><Text color="cyan">{padLine(`Meaning ${meaningIndex + 1}/${meaningCount}: ${meanings[meaningIndex]?.label ?? ""}_`, width)}</Text>{meaningPalette !== null ? LANGUAGE_PRESETS.map((item, index) => <Text key={item.code} color={index === meaningPalette ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${index === meaningPalette ? ">" : " "} ${item.label} (${item.code})`, width)}</Text>) : null}</> : null}
-    {(stage === "tags" || stage === "attributes") ? <>{listItems.length ? listItems.map((item, index) => <Text key={`${index}-${typeof item === "string" ? item : ""}`} color={index === selected ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${index === selected ? ">" : " "} ${item}`, width)}</Text>) : <Text color={AUXILIARY_TEXT_COLOR}>{padLine(stage === "tags" ? "No tags." : "No optional attributes.", width)}</Text>}<Text color="cyan">{padLine(editAction === "none" ? "" : `${editAction === "add" ? "Add" : "Rename"}: ${editBuffer}_`, width)}</Text></> : null}
+    {stage === "meaning" ? <><CaretInputLine key={`meaning-${meaningIndex}`} prefix={`Meaning ${meaningIndex + 1}/${meaningCount}: `} value={meanings[meaningIndex]?.label ?? ""} onChange={(value) => { setMeaningPalette(null); setMeanings((items) => items.map((item, index) => index === meaningIndex ? { ...item, label: value, languageCode: null } : item)); setError(""); }} width={width} color="cyan" inputKey={`meaning-${meaningIndex}`} />{meaningPalette !== null ? LANGUAGE_PRESETS.map((item, index) => <Text key={item.code} color={index === meaningPalette ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${index === meaningPalette ? ">" : " "} ${item.label} (${item.code})`, width)}</Text>) : null}</> : null}
+    {(stage === "tags" || stage === "attributes") ? <>{listItems.length ? listItems.map((item, index) => <Text key={`${index}-${typeof item === "string" ? item : ""}`} color={index === selected ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${index === selected ? ">" : " "} ${item}`, width)}</Text>) : <Text color={AUXILIARY_TEXT_COLOR}>{padLine(stage === "tags" ? "No tags." : "No optional attributes.", width)}</Text>}{editAction !== "none" ? <CaretInputLine key={`${stage}-${editAction}-${selected}`} prefix={`${editAction === "add" ? "Add" : "Rename"}: `} value={editBuffer} onChange={(value) => { setEditBuffer(value); setError(""); }} width={width} color="cyan" inputKey={`${stage}-${editAction}-${selected}`} /> : <Text>{padLine("", width)}</Text>}</> : null}
     {stage === "confirm" ? <>{summary.map((line) => <Text key={line} color={AUXILIARY_TEXT_COLOR}>{padLine(line, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color="green">{padLine(`Press Enter to ${existingWorkbook ? "save changes" : "create the workbook"}.`, width)}</Text></> : null}
-    {stage === "destructive-confirm" ? <>{destructiveFields.map((field) => <Text key={field.label} color="red">{padLine(`${field.label}: ${field.valueCount} populated value(s)`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color="cyan">{padLine(`Confirmation: ${confirmBuffer}_`, width)}</Text></> : null}
+    {stage === "destructive-confirm" ? <>{destructiveFields.map((field) => <Text key={field.label} color="red">{padLine(`${field.label}: ${field.valueCount} populated value(s)`, width)}</Text>)}<Text>{padLine("", width)}</Text><CaretInputLine key="workbook-destructive-confirm" prefix="Confirmation: " value={confirmBuffer} onChange={(value) => { setConfirmBuffer(value); setError(""); }} width={width} color="cyan" inputKey="workbook-destructive-confirm" /></> : null}
     <Text>{padLine("", width)}</Text><Text color="red">{padLine(error, width)}</Text><Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footer, width)}</Text></Box>;
 }
 
@@ -1406,13 +1391,6 @@ function WorkbookEditScreen({
       return;
     }
 
-    if (key.backspace || key.delete) {
-      setBuffer((current) => current.slice(0, -1));
-      setPaletteActive(false);
-      setError("");
-      return;
-    }
-
     if (key.return) {
       if (stage === "name") {
         const trimmed = buffer.trim();
@@ -1474,20 +1452,13 @@ function WorkbookEditScreen({
       }
     }
 
-    if (!key.ctrl && !key.meta && input) {
-      setBuffer((current) => current + input);
-      setPaletteActive(false);
-      setError("");
-    }
   });
 
-  const currentPrompt = stage === "name"
-    ? `Name: > ${buffer}_`
+  const promptPrefix = stage === "name"
+    ? "Name: > "
     : stage === "vocabulary"
-      ? `Vocabulary: > ${buffer}_`
-      : stage === "count"
-        ? `Meaning attributes: ${meaningCount}`
-        : `${meaningAttributes[meaningIndex]?.label ?? `Meaning ${meaningIndex + 1}`}: > ${buffer}_`;
+      ? "Vocabulary: > "
+      : `${meaningAttributes[meaningIndex]?.label ?? `Meaning ${meaningIndex + 1}`}: > `;
   const stageHint = stage === "name"
     ? "Enter a workbook name."
     : stage === "vocabulary"
@@ -1503,7 +1474,9 @@ function WorkbookEditScreen({
       </Text>
       <Text color={AUXILIARY_TEXT_COLOR}>{padLine(stageHint, width)}</Text>
       <Text>{padLine("", width)}</Text>
-      <Text color="cyan">{padLine(currentPrompt, width)}</Text>
+      {stage === "count"
+        ? <Text color="cyan">{padLine(`Meaning attributes: ${meaningCount}`, width)}</Text>
+        : <CaretInputLine key={`${stage}-${meaningIndex}`} prefix={promptPrefix} value={buffer} onChange={(value) => { setBuffer(value); setPaletteActive(false); setError(""); }} width={width} color="cyan" inputKey={`${stage}-${meaningIndex}`} />}
       {(stage === "vocabulary" || stage === "meaning") && paletteActive ? (
         <>
           <Text>{padLine("", width)}</Text>
@@ -1562,11 +1535,6 @@ function WorkbookDeleteConfirmScreen({
       return;
     }
 
-    if (key.backspace || key.delete) {
-      setConfirm((current) => current.slice(0, -1));
-      return;
-    }
-
     if (key.return) {
       if (confirm.trim().toLowerCase() === "yes") {
         onConfirm();
@@ -1576,13 +1544,7 @@ function WorkbookDeleteConfirmScreen({
       return;
     }
 
-    if (!key.ctrl && !key.meta && input) {
-      setConfirm((current) => current + input);
-      setError("");
-    }
   });
-
-  const lines = buildWorkbookDeleteLines(workbook, confirm, width);
 
   return (
     <Box flexDirection="column">
@@ -1591,11 +1553,9 @@ function WorkbookDeleteConfirmScreen({
       </Text>
       <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Workbook: ${workbook.name}`, width)}</Text>
       <Text>{padLine("", width)}</Text>
-      {lines.map((line, index) => (
-        <Text key={`${index}-${line}`} color={AUXILIARY_TEXT_COLOR}>
-          {padLine(line, width)}
-        </Text>
-      ))}
+      <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Delete ${workbook.name}?`, width)}</Text>
+      <Text>{padLine("", width)}</Text>
+      <CaretInputLine prefix="> " value={confirm} onChange={(value) => { setConfirm(value); setError(""); }} width={width} color="cyan" inputKey="delete-workbook-confirm" />
       <Text>{padLine("", width)}</Text>
       <Text color={AUXILIARY_TEXT_COLOR}>{padLine(error || WORKBOOK_DELETE_HINT, width)}</Text>
     </Box>
@@ -1630,7 +1590,6 @@ function ImportSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook
     if (key.escape) { request.current += 1; onCancel(); return; }
     if (saving) return;
     if (key.ctrl && input === "u") { setBuffer(""); setMessage(""); setHasError(false); return; }
-    if (key.backspace || key.delete) { setBuffer((current) => current.slice(0, -1)); setMessage(""); setHasError(false); return; }
     if (key.return) {
       const value = buffer.trim();
       if (!value) { onSave(backend.setWorkbookImportFilePath(workbook.id, null)); return; }
@@ -1649,9 +1608,8 @@ function ImportSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook
       });
       return;
     }
-    if (!key.ctrl && !key.meta && input) { setBuffer((current) => current + input); setMessage(""); setHasError(false); }
   });
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Import Settings — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Default import file", width)}</Text><Text>{padLine("", width)}</Text><Text color="cyan">{padLine(`> ${buffer}_`, width)}</Text><Text>{padLine("", width)}</Text><Text color={hasError ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Enter saves | Ctrl+U clears | Esc cancels", width)}</Text></Box>;
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Import Settings — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Default import file", width)}</Text><Text>{padLine("", width)}</Text><CaretInputLine prefix="> " value={buffer} onChange={(value) => { setBuffer(value); setMessage(""); setHasError(false); }} width={width} color="cyan" focus={!saving} inputKey="import-settings-path" /><Text>{padLine("", width)}</Text><Text color={hasError ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Enter saves | Ctrl+U clears | Esc cancels", width)}</Text></Box>;
 }
 
 function AppearanceSettingsScreen({ onCancel, onQuit }: { onCancel: () => void; onQuit: () => void }): JSX.Element {
@@ -1775,9 +1733,7 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
     if (key.ctrl && input === "c") return onQuit();
     if (screenMode === "destructive-confirm") {
       if (key.escape) { setScreenMode("edit"); setConfirmBuffer(""); return; }
-      if (key.backspace || key.delete) { setConfirmBuffer((value) => value.slice(0, -1)); return; }
       if (key.return) { if (confirmBuffer.trim().toLowerCase() === "yes") save(true); else setMessage("Type yes to confirm removal of populated fields."); return; }
-      if (!key.ctrl && !key.meta && input) { setConfirmBuffer((value) => value + input); setMessage(""); }
       return;
     }
     if (screenMode === "exit-confirm") {
@@ -1789,9 +1745,7 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
     }
     if (editAction !== "none") {
       if (key.escape) { setEditAction("none"); setBuffer(""); setMessage(""); return; }
-      if (key.backspace || key.delete) { setBuffer((value) => value.slice(0, -1)); return; }
       if (key.return) { commitEdit(); return; }
-      if (!key.ctrl && !key.meta && input) { setBuffer((value) => value + input); setMessage(""); }
       return;
     }
     if (key.escape) { if (dirty) { setExitChoice(0); setScreenMode("exit-confirm"); } else onCancel(); return; }
@@ -1818,7 +1772,7 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
     return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Unsaved attribute changes", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Choose what to do with your changes.", width)}</Text><Text>{padLine("", width)}</Text>{choices.map((choice, index) => <Text key={choice} color={index === exitChoice ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${index === exitChoice ? ">" : " "} ${choice}`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("↑↓ select | Enter confirm | Esc continue editing", width)}</Text></Box>;
   }
   if (screenMode === "destructive-confirm") {
-    return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Confirm data removal", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Saving will permanently remove stored values from these fields:", width)}</Text><Text>{padLine("", width)}</Text>{destructiveFields.map((field) => <Text key={field.label} color="red">{padLine(`${field.label}: ${field.valueCount} populated value(s)`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color="cyan">{padLine(`Type yes: ${confirmBuffer}_`, width)}</Text><Text color="red">{padLine(message, width)}</Text><Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Enter confirm | Esc continue editing", width)}</Text></Box>;
+    return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Confirm data removal", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Saving will permanently remove stored values from these fields:", width)}</Text><Text>{padLine("", width)}</Text>{destructiveFields.map((field) => <Text key={field.label} color="red">{padLine(`${field.label}: ${field.valueCount} populated value(s)`, width)}</Text>)}<Text>{padLine("", width)}</Text><CaretInputLine prefix="Type yes: " value={confirmBuffer} onChange={(value) => { setConfirmBuffer(value); setMessage(""); }} width={width} color="cyan" inputKey="attribute-destructive-confirm" /><Text color="red">{padLine(message, width)}</Text><Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Enter confirm | Esc continue editing", width)}</Text></Box>;
   }
 
   const meaningFooter = meanings[0] === selectedField ? "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Esc leave" : `↑↓ navigate | Ctrl+A add | Ctrl+R rename${selectedField?.id === undefined ? "" : " | Ctrl+P make primary"} | Space show/hide | Del remove | Esc leave`;
@@ -1828,7 +1782,7 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
     <Box flexDirection="column" borderStyle="single" borderColor={selected.section === "vocabulary" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}><Text bold color={selected.section === "vocabulary" ? SELECTED_TEXT_COLOR : undefined}>Vocabulary</Text><Text color={AUXILIARY_TEXT_COLOR}>The workbook type is fixed. Only this display name can be changed.</Text><Text color={selected.section === "vocabulary" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{`${selected.section === "vocabulary" ? ">" : " "} ${vocabularyLabel} [shown] (required)`}</Text></Box>
     <Box flexDirection="column" borderStyle="single" borderColor={selected.section === "meaning" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}><Text bold color={selected.section === "meaning" ? SELECTED_TEXT_COLOR : undefined}>Meanings</Text><Text color={AUXILIARY_TEXT_COLOR}>The Primary Meaning is required and always shown. Up to five meanings are supported.</Text>{fields.map((field, index) => field.role === "meaning" ? row(field, index) : null)}</Box>
     <Box flexDirection="column" borderStyle="single" borderColor={selected.section === "optional" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}><Text bold color={selected.section === "optional" ? SELECTED_TEXT_COLOR : undefined}>Optional Attributes</Text><Text color={AUXILIARY_TEXT_COLOR}>Supplemental fields can be freely added, renamed, hidden, shown, or removed.</Text>{optional.length ? fields.map((field, index) => field.role === "optional" ? row(field, index) : null) : <Text color={selected.section === "optional" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{`${selected.section === "optional" ? ">" : " "} No optional attributes`}</Text>}</Box>
-    {editAction !== "none" ? <Text color="cyan">{padLine(`${editAction === "add" ? "New attribute" : "Display name"}: ${buffer}_`, width)}</Text> : null}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footer, width)}</Text></Box>;
+    {editAction !== "none" ? <CaretInputLine key={`${editAction}-${selectedIndex}`} prefix={`${editAction === "add" ? "New attribute" : "Display name"}: `} value={buffer} onChange={(value) => { setBuffer(value); setMessage(""); }} width={width} color="cyan" inputKey={`${editAction}-${selectedIndex}`} /> : null}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footer, width)}</Text></Box>;
 }
 
 type TagSelection = { kind: "type"; typeIndex: number } | { kind: "tag"; typeIndex: number; tagIndex: number } | { kind: "add-type" };
@@ -1892,9 +1846,8 @@ function TagSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook: W
     if (key.ctrl && input === "c") return onQuit();
     if (screenMode === "destructive-confirm") {
       if (key.escape) { setScreenMode("edit"); setConfirmBuffer(""); return; }
-      if (key.backspace || key.delete) { setConfirmBuffer((value) => value.slice(0, -1)); return; }
       if (key.return) { if (confirmBuffer.trim().toLowerCase() === "yes") save(true); else setMessage("Type yes to permanently remove assigned tag data."); return; }
-      if (!key.ctrl && !key.meta && input) { setConfirmBuffer((value) => value + input); setMessage(""); } return;
+      return;
     }
     if (screenMode === "exit-confirm") {
       if (key.escape) { setScreenMode("edit"); return; }
@@ -1904,9 +1857,8 @@ function TagSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook: W
     }
     if (action !== "none") {
       if (key.escape) { setAction("none"); setBuffer(""); setMessage(""); return; }
-      if (key.backspace || key.delete) { setBuffer((value) => value.slice(0, -1)); return; }
       if (key.return) { commitEdit(); return; }
-      if (!key.ctrl && !key.meta && input) { setBuffer((value) => value + input); setMessage(""); } return;
+      return;
     }
     if (key.escape) { if (dirty) { setExitChoice(0); setScreenMode("exit-confirm"); } else onCancel(); return; }
     if (key.upArrow) { setSelectedIndex((value) => value <= 0 ? selections.length - 1 : value - 1); setMessage(""); return; }
@@ -1931,13 +1883,13 @@ function TagSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook: W
     return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Unsaved tag changes", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Choose what to do with your changes.", width)}</Text><Text>{padLine("", width)}</Text>{choices.map((choice, index) => <Text key={choice} color={index === exitChoice ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${index === exitChoice ? ">" : " "} ${choice}`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("↑↓ select | Enter confirm | Esc continue editing", width)}</Text></Box>;
   }
   if (screenMode === "destructive-confirm") {
-    return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Confirm tag data removal", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Saving will permanently remove these entry assignments:", width)}</Text><Text>{padLine("", width)}</Text>{removals.map((item, index) => <Text key={`${item.typeName}-${item.tagName}-${index}`} color="red">{padLine(`${item.typeName}${item.tagName ? ` / ${item.tagName}` : ""}: ${item.assignmentCount} assignment(s) across ${item.entryCount} entry/entries`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color="cyan">{padLine(`Type yes: ${confirmBuffer}_`, width)}</Text><Text color="red">{padLine(message, width)}</Text><Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Enter confirm | Esc continue editing", width)}</Text></Box>;
+    return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Confirm tag data removal", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Saving will permanently remove these entry assignments:", width)}</Text><Text>{padLine("", width)}</Text>{removals.map((item, index) => <Text key={`${item.typeName}-${item.tagName}-${index}`} color="red">{padLine(`${item.typeName}${item.tagName ? ` / ${item.tagName}` : ""}: ${item.assignmentCount} assignment(s) across ${item.entryCount} entry/entries`, width)}</Text>)}<Text>{padLine("", width)}</Text><CaretInputLine prefix="Type yes: " value={confirmBuffer} onChange={(value) => { setConfirmBuffer(value); setMessage(""); }} width={width} color="cyan" inputKey="tag-destructive-confirm" /><Text color="red">{padLine(message, width)}</Text><Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Enter confirm | Esc continue editing", width)}</Text></Box>;
   }
   const footer = action !== "none" ? "Enter confirm | Esc cancel edit" : selected.kind === "add-type" ? "↑↓ navigate | Enter add tag type | Esc leave" : selected.kind === "type" ? "↑↓ navigate | Space show/hide | Ctrl+A add tag | Ctrl+R rename | Del remove | Esc leave" : "↑↓ navigate | Ctrl+A add tag | Ctrl+R rename | Del remove | Esc leave";
   return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Tags — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Organize tags into types. Changes are staged until you leave this page.", width)}</Text><Text color={message ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text>
     {types.map((type, typeIndex) => { const active = selected.kind !== "add-type" && selected.typeIndex === typeIndex; const titleActive = selected.kind === "type" && active; return <Box key={type.id ?? `new-${typeIndex}`} flexDirection="column" borderStyle="single" borderColor={active ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}><Text bold color={titleActive ? SELECTED_TEXT_COLOR : undefined}>{`${titleActive ? "> " : ""}${type.name} [${type.visible ? "shown" : "hidden"}]`}</Text>{type.tags.length ? type.tags.map((tag, tagIndex) => { const tagActive = selected.kind === "tag" && selected.typeIndex === typeIndex && selected.tagIndex === tagIndex; return <Text key={tag.id ?? `new-${tagIndex}`} color={tagActive ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{`${tagActive ? ">" : " "} ${tag.name}`}</Text>; }) : <Text color={AUXILIARY_TEXT_COLOR}>No tags</Text>}</Box>; })}
     <Box flexDirection="column" borderStyle="classic" borderColor={selected.kind === "add-type" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}><Text color={selected.kind === "add-type" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{`${selected.kind === "add-type" ? "> " : ""} + Add tag type`}</Text></Box>
-    {action !== "none" ? <Text color="cyan">{padLine(`${action.includes("type") ? "Tag type" : "Tag"} name: ${buffer}_`, width)}</Text> : null}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footer, width)}</Text></Box>;
+    {action !== "none" ? <CaretInputLine key={`${action}-${safeSelectedIndex}`} prefix={`${action.includes("type") ? "Tag type" : "Tag"} name: `} value={buffer} onChange={(value) => { setBuffer(value); setMessage(""); }} width={width} color="cyan" inputKey={`${action}-${safeSelectedIndex}`} /> : null}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footer, width)}</Text></Box>;
 }
 
 function wrapDetailText(value: string, width: number): string[] {
@@ -2103,7 +2055,6 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
       if (key.return) { setFeedback(null); setAnswer(""); advanceAfterAnswer(); }
       return;
     }
-    if (key.backspace || key.delete) { setAnswer((v) => v.slice(0, -1)); return; }
     if (key.return) {
       if (!current) { setPhase("done"); return; }
       const given = answer.trim(); const correct = given === current.vocabulary;
@@ -2118,13 +2069,12 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
       }
       return;
     }
-    if (!key.ctrl && !key.meta && input) setAnswer((v) => v + input);
   });
   if (questions.length === 0) return <PracticeEmptyScreen workbook={workbook} onCancel={onCancel} onQuit={onQuit} />;
   if (phase === "done") return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice — ${workbook.name}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="green">{padLine(`Final initial-round score: ${score}/${questions.length}`, width)}</Text><Text>{padLine("Press Enter to return.", width)}</Text></Box>;
   if (phase === "detail" && detailEntry) return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Entry #${detailEntry.id}`, width)}</Text><Text color="red">{padLine(`Incorrect — expected: ${detailEntry.vocabulary}`, width)}</Text><Text>{padLine("", width)}</Text>{buildExplicitEntryLines(workbook, detailEntry).map((line, i) => <Text key={`${i}-${line}`} color={AUXILIARY_TEXT_COLOR}>{padLine(line, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Enter advances. Esc cancels.", width)}</Text></Box>;
   const roundLabel = phase === "retry" ? `Retry round ${retryNumber} — Question ${index + 1}/${retryRound.length}` : `Question ${index + 1}/${questions.length}`;
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(roundLabel, width)}</Text><Text>{padLine("", width)}</Text><Text color="yellow">{padLine(`${workbook.meaningAttributes[0]?.label ?? "Primary Meaning"}: ${current?.meaning ?? ""}`, width)}</Text>{visibleTagGroups.map((group) => <PracticeTagLine key={group.typeId} typeName={group.typeName} tagNames={group.tagNames} width={width} />)}<Text>{padLine("", width)}</Text><Text color="cyan">{padLine(`Answer: ${answer}_`, width)}</Text><Text>{padLine("", width)}</Text><Text color="green">{padLine(feedback ?? "Enter submits. Esc cancels.", width)}</Text></Box>;
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(roundLabel, width)}</Text><Text>{padLine("", width)}</Text><Text color="yellow">{padLine(`${workbook.meaningAttributes[0]?.label ?? "Primary Meaning"}: ${current?.meaning ?? ""}`, width)}</Text>{visibleTagGroups.map((group) => <PracticeTagLine key={group.typeId} typeName={group.typeName} tagNames={group.tagNames} width={width} />)}<Text>{padLine("", width)}</Text><CaretInputLine key={`${phase}-${index}-${retryNumber}`} prefix="Answer: " value={answer} onChange={setAnswer} width={width} color="cyan" focus={feedback === null} inputKey={`${phase}-${index}-${retryNumber}`} /><Text>{padLine("", width)}</Text><Text color="green">{padLine(feedback ?? "Enter submits. Esc cancels.", width)}</Text></Box>;
 }
 
 function PracticeEmptyScreen({ workbook, onCancel, onQuit }: { workbook: WorkbookRow; onCancel: () => void; onQuit: () => void }): JSX.Element {
