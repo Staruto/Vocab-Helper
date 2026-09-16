@@ -968,7 +968,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   if (mode.kind === "importPreview") {
     const visibleRows = importPreviewPageSize(rows, Boolean(mode.error));
     const filters: Array<{ key: ImportPreviewFilter; label: string; count: number }> = [
-      { key: "records", label: "Record", count: mode.preview.totalRecords },
+      { key: "records", label: "All", count: mode.preview.totalRecords },
       { key: "ready", label: "Ready", count: mode.preview.entries.length },
       { key: "invalid", label: "Invalid", count: mode.preview.skippedInvalid },
       { key: "duplicates", label: "Duplicates", count: mode.preview.skippedDuplicates },
@@ -988,7 +988,11 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
         </Box>
         {mode.error ? <Text color="red">{padLine(mode.error, width)}</Text> : null}
         <Text>{padLine("", width)}</Text>
-        <Box flexDirection="row" gap={1}>{filters.map((item) => <Text key={item.key} color={item.key === mode.filter && mode.focus === "filters" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} bold={item.key === mode.filter}>{formatImportPreviewFilter(item.label, item.count, item.key === mode.filter)}</Text>)}</Box>
+        <Text color={mode.focus === "filters" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{"─".repeat(width)}</Text>
+        <Box flexDirection="row" gap={3}>
+          <Text color={"white"}>Filters</Text>
+          {filters.map((item) => <Text key={item.key} color={item.key === mode.filter && mode.focus === "filters" ? SELECTED_TEXT_COLOR : "white"} bold={item.key === mode.filter}>{formatImportPreviewFilter(item.label, item.count, item.key === mode.filter)}</Text>)}
+        </Box>
         <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Ignored fields: ${mode.preview.diagnostics.filter((item) => item.kind === "ignored-field").length} | Ignored tags: ${mode.preview.diagnostics.filter((item) => item.kind === "ignored-tag").length}`, width)}</Text>
         <Box flexDirection="column" borderStyle="single" borderColor={mode.focus === "records" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}>
           {pageRecords.length === 0 ? <Text color={AUXILIARY_TEXT_COLOR}>{padLine("No records in this category.", Math.max(1, width - 4))}</Text> : pageRecords.map((record) => <Text key={record.recordNumber} color={statusColor(record.status)}>{padLine(formatImportPreviewRecord(record), Math.max(1, width - 4))}</Text>)}
