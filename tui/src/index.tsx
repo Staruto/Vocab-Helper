@@ -990,7 +990,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
         <Text>{padLine("", width)}</Text>
         <Text color={mode.focus === "filters" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{"─".repeat(width)}</Text>
         <Box flexDirection="row" gap={3}>
-          <Text color={"white"}>Filters</Text>
+          <Text color={mode.focus === "filters" ? SELECTED_TEXT_COLOR : "white"} bold={true}>Filters</Text>
           {filters.map((item) => <Text key={item.key} color={item.key === mode.filter && mode.focus === "filters" ? SELECTED_TEXT_COLOR : "white"} bold={item.key === mode.filter}>{formatImportPreviewFilter(item.label, item.count, item.key === mode.filter)}</Text>)}
         </Box>
         <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Ignored fields: ${mode.preview.diagnostics.filter((item) => item.kind === "ignored-field").length} | Ignored tags: ${mode.preview.diagnostics.filter((item) => item.kind === "ignored-tag").length}`, width)}</Text>
