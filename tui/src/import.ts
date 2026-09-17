@@ -137,14 +137,15 @@ export function parseLabeledTextImport(text: string, workbook: WorkbookRow, tagT
       previewRecords.push({ recordNumber, status: "invalid", vocabulary: vocabulary || "<missing vocabulary>", ignoredFieldCount, ignoredTagCount });
       return;
     }
+    const entry = { recordNumber, vocabulary, meanings, attributes, tagIds: [...new Set(tagIds)] };
     if (seenVocabulary.has(vocabulary)) {
-      diagnostics.push({ recordNumber, kind: "duplicate", message: `skipped duplicate vocabulary '${vocabulary}'` });
+      diagnostics.push({ recordNumber, kind: "duplicate", message: `duplicate vocabulary '${vocabulary}'` });
       skippedDuplicates += 1;
-      previewRecords.push({ recordNumber, status: "duplicate", vocabulary, ignoredFieldCount, ignoredTagCount });
+      previewRecords.push({ recordNumber, status: "duplicate", vocabulary, entry, ignoredFieldCount, ignoredTagCount });
+      entries.push(entry);
       return;
     }
     seenVocabulary.add(vocabulary);
-    const entry = { recordNumber, vocabulary, meanings, attributes, tagIds: [...new Set(tagIds)] };
     entries.push(entry);
     previewRecords.push({ recordNumber, status: "ready", vocabulary, entry, ignoredFieldCount, ignoredTagCount });
   });
@@ -194,7 +195,7 @@ export function buildImportPreviewLines(preview: ImportPreview, filter: ImportPr
   const ignoredTags = preview.diagnostics.filter((item) => item.kind === "ignored-tag").length;
   const rows = importPreviewRecords(preview, filter).map(formatImportPreviewRecord);
   return [
-    `Records: ${preview.totalRecords} | Ready: ${preview.entries.length} | Invalid: ${preview.skippedInvalid} | Duplicates: ${preview.skippedDuplicates}`,
+    `Records: ${preview.totalRecords} | Ready: ${preview.records.filter((record) => record.status === "ready").length} | Invalid: ${preview.skippedInvalid} | Duplicates: ${preview.skippedDuplicates}`,
     `Ignored fields: ${ignoredFields} | Ignored tags: ${ignoredTags}`,
     ...(rows.length ? rows : ["No records in this category."]),
   ];

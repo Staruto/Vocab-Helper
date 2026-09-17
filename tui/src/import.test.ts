@@ -75,7 +75,7 @@ English: bird\r
 \r
 Japanese: 魚`, workbook, tagTypes, ["猫"]);
 
-  assert.deepEqual(preview.entries.map((entry) => entry.vocabulary), ["犬"]);
+  assert.deepEqual(preview.entries.map((entry) => entry.vocabulary), ["猫", "犬", "犬"]);
   assert.equal(preview.skippedDuplicates, 2);
   assert.equal(preview.skippedInvalid, 2);
   assert.deepEqual(preview.records.map((record) => [record.status, record.vocabulary]), [
@@ -84,7 +84,7 @@ Japanese: 魚`, workbook, tagTypes, ["猫"]);
   assert.match(buildImportPreviewLines(preview).join("\n"), /\+1 ignored field, \+1 ignored tag/);
   assert.doesNotMatch(buildImportPreviewLines(preview).join("\n"), /Record 1:/);
   assert.equal(formatImportPreviewFilter("Record", preview.totalRecords, true), "[Record: 5]");
-  assert.equal(formatImportPreviewFilter("Ready", preview.entries.length, false), "Ready: 1");
+  assert.equal(formatImportPreviewFilter("Ready", preview.records.filter((record) => record.status === "ready").length, false), "Ready: 1");
   assert.deepEqual(paginateImportPreview(preview, "duplicates", 1, 1).records.map((record) => record.vocabulary), ["犬"]);
   assert.equal(paginateImportPreview(preview, "ready", 99, 10).pageIndex, 0);
 });

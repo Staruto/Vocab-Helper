@@ -1,4 +1,4 @@
-import { CreateWorkbookInput, defaultDbPath, EntryRow, ImportEntryInput, MeaningAttribute, MeaningPromotionImpact, MetadataAttribute, TagType, TagUpdateImpact, WorkbookAttributesDraft, WorkbookConfigurationInput, WorkbookRow, WorkbookTagsDraft, WorkbookUpdateImpact, VocabularyRepository } from "./db.js";
+import { CreateWorkbookInput, defaultDbPath, EntryRow, ImportEntryInput, ImportResult, MeaningAttribute, MeaningPromotionImpact, MetadataAttribute, TagType, TagUpdateImpact, WorkbookAttributesDraft, WorkbookConfigurationInput, WorkbookRow, WorkbookTagsDraft, WorkbookUpdateImpact, VocabularyRepository } from "./db.js";
 
 export class VocabularyBackend {
   private readonly repository: VocabularyRepository;
@@ -81,7 +81,7 @@ export class VocabularyBackend {
     return this.repository.addEntry(workbookId, vocabulary, meaning, meanings, attributes, tagIds);
   }
 
-  importEntries(workbookId: number, entries: ImportEntryInput[]): EntryRow[] {
+  importEntries(workbookId: number, entries: ImportEntryInput[]): ImportResult {
     return this.repository.importEntries(workbookId, entries);
   }
 

@@ -54,7 +54,7 @@ type ParameterizedCommand = "edit" | "delete";
 type LanguagePreset = { code: string; label: string };
 
 const PAGE_SIZE = 20;
-const TITLE = "VocabHelper 3.3.1";
+const TITLE = "VocabHelper 3.4.0";
 const FOOTER_HINT = "Navigate pages with <- -> | Esc returns to menu";
 const AUXILIARY_TEXT_COLOR = "#878787";
 const GRAY_TIER_COLOR = "#777777";
@@ -526,10 +526,10 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     const preview = mode.preview;
     if (preview.entries.length === 0) return;
     try {
-      const imported = backend.importEntries(workbook.id, preview.entries.map(({ recordNumber: _recordNumber, ...entry }) => entry));
+      const result = backend.importEntries(workbook.id, preview.entries.map(({ recordNumber: _recordNumber, ...entry }) => entry));
       const ignoredFields = preview.diagnostics.filter((item) => item.kind === "ignored-field").length;
       const ignoredTags = preview.diagnostics.filter((item) => item.kind === "ignored-tag").length;
-      const resultMessage = `Imported ${imported.length}. Invalid ${preview.skippedInvalid}; duplicates ${preview.skippedDuplicates}; ignored fields ${ignoredFields}; ignored tags ${ignoredTags}.`;
+      const resultMessage = `Added ${result.added}; Updated ${result.updated}; Unchanged ${result.unchanged}; Invalid ${preview.skippedInvalid}; ignored fields ${ignoredFields}; ignored tags ${ignoredTags}.`;
       if (shouldPromptToSaveImportPath(mode.path, savedImportFilePath)) {
         setMode({ kind: "importSaveDefault", path: mode.path, save: false, resultMessage });
       } else {
@@ -969,7 +969,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     const visibleRows = importPreviewPageSize(rows, Boolean(mode.error));
     const filters: Array<{ key: ImportPreviewFilter; label: string; count: number }> = [
       { key: "records", label: "All", count: mode.preview.totalRecords },
-      { key: "ready", label: "Ready", count: mode.preview.entries.length },
+      { key: "ready", label: "Ready", count: mode.preview.records.filter((record) => record.status === "ready").length },
       { key: "invalid", label: "Invalid", count: mode.preview.skippedInvalid },
       { key: "duplicates", label: "Duplicates", count: mode.preview.skippedDuplicates },
     ];

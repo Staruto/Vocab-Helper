@@ -159,7 +159,7 @@ test("import file paths are persisted per workbook and can be cleared", () => {
   } finally { temp.cleanup(); }
 });
 
-test("bulk imports write complete entries atomically and reject duplicates", () => {
+test("bulk imports write complete entries atomically and synchronize duplicates", () => {
   const temp = temporaryDatabase();
   try {
     const repository = new VocabularyRepository(temp.path);
@@ -175,12 +175,14 @@ test("bulk imports write complete entries atomically and reject duplicates", () 
       { vocabulary: "猫", meanings: ["cat"], attributes: { kana: "ねこ" }, tagIds: [noun.id] },
       { vocabulary: "犬", meanings: ["dog"], attributes: {}, tagIds: [] },
     ]);
-    assert.equal(imported.length, 2);
-    assert.equal(imported[0].attributes.kana, "ねこ");
-    assert.deepEqual(imported[0].tags.map((tag) => tag.id), [noun.id]);
-    assert.throws(() => repository.importEntries(workbook.id, [
+    assert.equal(imported.added, 2);
+    assert.equal(imported.entries[0].attributes.kana, "ねこ");
+    assert.deepEqual(imported.entries[0].tags.map((tag) => tag.id), [noun.id]);
+    const synchronized = repository.importEntries(workbook.id, [
       { vocabulary: "猫", meanings: ["feline"], attributes: {}, tagIds: [] },
-    ]), /already exists/);
+    ]);
+    assert.equal(synchronized.updated, 1);
+    assert.equal(repository.getEntry(imported.entries[0].id)?.meaning, "feline");
     assert.equal(repository.countEntries(workbook.id), 2);
     repository.close();
   } finally { temp.cleanup(); }
