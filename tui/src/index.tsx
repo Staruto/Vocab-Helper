@@ -6,6 +6,7 @@ import { fitTagBadges, visibleAssignedTagGroups } from "./tag-display.js";
 import { adjacentEntryId, buildDetailSections, detailNavigationLabel, DetailField } from "./detail-display.js";
 import { formatImportPreviewFilter, formatImportPreviewRecord, importPreviewPageSize, ImportPreview, ImportPreviewFilter, loadLabeledTextFile, paginateImportPreview, parseLabeledTextImport, shouldPromptToSaveImportPath } from "./import.js";
 import { CaretInputLine } from "./text-input.js";
+import { filterEntriesForSearch } from "./search.js";
 
 type UiMode =
   | { kind: "command" }
@@ -80,6 +81,7 @@ const WORKBOOK_CREATE_HINT = "Type a name and press Enter. Esc returns to the me
 const WORKBOOK_DELETE_HINT = "Type yes to confirm. Enter deletes. Esc cancels.";
 const COMMANDS: CommandSpec[] = [
   { name: "list", hint: "Refresh and show entries" },
+  { name: "search", hint: "Search visible vocabulary properties" },
   { name: "add", hint: "Add a new entry" },
   { name: "import", hint: "Import entries from labeled text" },
   { name: "edit", hint: "Edit an entry by id" },
@@ -390,15 +392,19 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   const [pageIndex, setPageIndex] = useState(0);
   const [mode, setMode] = useState<UiMode>({ kind: "command" });
   const [buffer, setBuffer] = useState("");
+  const [searchDraft, setSearchDraft] = useState("");
+  const [activeSearchQuery, setActiveSearchQuery] = useState("");
+  const [inputFocus, setInputFocus] = useState<"command" | "search">("command");
   const [suggestionIndex, setSuggestionIndex] = useState(0);
   const [statusLines, setStatusLines] = useState<string[]>(() => buildStatusLines("Ready."));
   const [tierColorsEnabled, setTierColorsEnabled] = useState(() => backend.getTierColorsEnabled());
   const [savedImportFilePath, setSavedImportFilePath] = useState(workbook.importFilePath);
   const importRequest = useRef(0);
   const activeMetadata = workbook.metadataAttributes.filter((attribute) => attribute.role === "optional");
-  const tagTypes = backend.listTagTypes(workbook.id);
+  const tagTypes = useMemo(() => backend.listTagTypes(workbook.id), [workbook.id]);
+  const visibleEntries = useMemo(() => filterEntriesForSearch(entries, workbook, tagTypes, activeSearchQuery), [entries, workbook, tagTypes, activeSearchQuery]);
   const selectableTags = tagTypes.flatMap((type) => type.tags);
-  const textInputActive = mode.kind === "command" || mode.kind === "commandArg" || mode.kind === "delete" || mode.kind === "importPath" || ((mode.kind === "add" || mode.kind === "edit") && mode.stage !== "tags");
+  const textInputActive = (mode.kind === "command" && inputFocus === "command") || mode.kind === "commandArg" || mode.kind === "delete" || mode.kind === "importPath" || ((mode.kind === "add" || mode.kind === "edit") && mode.stage !== "tags");
   const textInputKey = mode.kind === "add" || mode.kind === "edit"
     ? `${mode.kind}-${mode.stage}-${mode.meaningIndex}-${mode.metadataIndex}`
     : mode.kind;
@@ -420,8 +426,8 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   }, [stdout]);
 
   useEffect(() => {
-    setPageIndex((current) => clampPageIndex(current, entries.length));
-  }, [entries.length]);
+    setPageIndex((current) => clampPageIndex(current, visibleEntries.length));
+  }, [visibleEntries.length]);
 
   const commandSuggestions = useMemo(() => buildCommandSuggestions(buffer), [buffer]);
   const commandSuggestionIndex = commandSuggestions.length === 0 ? 0 : Math.min(suggestionIndex, commandSuggestions.length - 1);
@@ -431,7 +437,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
         Math.max(0, commandSuggestionIndex - COMMAND_SUGGESTION_ROWS + 1),
         commandSuggestions.length - COMMAND_SUGGESTION_ROWS,
       );
-  const commandPaletteActive = mode.kind === "command" && getCommandPrefix(buffer) !== null;
+  const commandPaletteActive = mode.kind === "command" && inputFocus === "command" && getCommandPrefix(buffer) !== null;
   const suggestionLines = useMemo(
     () => buildSuggestionLines(commandSuggestions, commandSuggestionIndex, width, commandSuggestionScrollOffset),
     [commandSuggestions, commandSuggestionIndex, commandSuggestionScrollOffset, width],
@@ -451,6 +457,15 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     setEntries(next);
     setPageIndex((current) => clampPageIndex(current, next.length));
     setStatusLines(buildStatusLines(message ?? `Loaded ${next.length} entr${next.length === 1 ? "y" : "ies"}.`));
+  }
+
+  function applySearch(query: string): void {
+    const normalized = query.trim();
+    setSearchDraft(normalized);
+    setActiveSearchQuery(normalized);
+    setPageIndex(0);
+    const count = filterEntriesForSearch(entries, workbook, tagTypes, normalized).length;
+    setStatusLines(buildStatusLines(normalized ? `Found ${count} matching entr${count === 1 ? "y" : "ies"}.` : "Search cleared."));
   }
 
   function beginAdd(): void {
@@ -645,6 +660,13 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
 
     if (lower === "list") {
       refreshEntries();
+      return;
+    }
+
+    if (lower === "search") {
+      setBuffer("");
+      if (args.length === 0) setInputFocus("search");
+      else applySearch(args.join(" "));
       return;
     }
 
@@ -844,6 +866,8 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
         continueImportAfterSaveChoice({ ...mode, save: false });
       } else if (mode.kind !== "command") {
         cancelActiveMode("Cancelled.");
+      } else if (activeSearchQuery) {
+        applySearch("");
       } else {
         onBackToMenu();
       }
@@ -891,6 +915,11 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
 
     if (mode.kind === "importLoading") return;
 
+    if (mode.kind === "command" && (key.upArrow || key.downArrow) && !commandPaletteActive) {
+      setInputFocus((current) => current === "command" ? "search" : "command");
+      return;
+    }
+
     if (key.upArrow && commandPaletteActive) {
       setSuggestionIndex((current) => (current <= 0 ? commandSuggestions.length - 1 : current - 1));
       return;
@@ -905,13 +934,17 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       return;
     }
 
+    if ((key.leftArrow || key.rightArrow) && mode.kind === "command" && inputFocus === "search" && searchDraft.length > 0) {
+      return;
+    }
+
     if (key.leftArrow && mode.kind === "command" && !commandPaletteActive) {
       setPageIndex((current) => Math.max(0, current - 1));
       return;
     }
 
     if (key.rightArrow && mode.kind === "command" && !commandPaletteActive) {
-      setPageIndex((current) => Math.min(getPageCount(entries.length) - 1, current + 1));
+      setPageIndex((current) => Math.min(getPageCount(visibleEntries.length) - 1, current + 1));
       return;
     }
 
@@ -928,7 +961,9 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
 
     if (key.return) {
       const current = buffer;
-      if (commandPaletteActive && commandSuggestions.length > 0) {
+      if (mode.kind === "command" && inputFocus === "search") {
+        applySearch(searchDraft);
+      } else if (commandPaletteActive && commandSuggestions.length > 0) {
         submitHighlightedCommand();
       } else if (mode.kind === "command" || mode.kind === "commandArg") {
         submitCommand(current);
@@ -940,14 +975,20 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
 
   });
 
-  const pageCount = getPageCount(entries.length);
-  const safePageIndex = clampPageIndex(pageIndex, entries.length);
-  const pageText = `Page ${safePageIndex + 1}/${pageCount}`;
+  const pageCount = getPageCount(visibleEntries.length);
+  const safePageIndex = clampPageIndex(pageIndex, visibleEntries.length);
+  const pageText = activeSearchQuery
+    ? visibleEntries.length === 0 ? "0 matches" : `Page ${safePageIndex + 1}/${pageCount} | ${visibleEntries.length} matches`
+    : `Page ${safePageIndex + 1}/${pageCount}`;
   const tableLayout = useMemo(
-    () => buildTableLayout(entries, safePageIndex, width, PAGE_SIZE, workbook.vocabularyLabel, workbook.meaningAttributes[0]?.label ?? "Primary Meaning", workbook.metadataAttributes),
-    [entries, safePageIndex, width, workbook.vocabularyLabel, workbook.meaningAttributes, workbook.metadataAttributes],
+    () => buildTableLayout(visibleEntries, safePageIndex, width, PAGE_SIZE, workbook.vocabularyLabel, workbook.meaningAttributes[0]?.label ?? "Primary Meaning", workbook.metadataAttributes),
+    [visibleEntries, safePageIndex, width, workbook.vocabularyLabel, workbook.meaningAttributes, workbook.metadataAttributes],
   );
   const screenTitle = `${TITLE} — ${workbook.name}`;
+  const searchBoxWidth = Math.min(34, Math.max(12, width - 56));
+  const footerLeftWidth = Math.floor((width - searchBoxWidth) / 2);
+  const footerRightWidth = Math.max(0, width - searchBoxWidth - footerLeftWidth);
+  const footerHint = activeSearchQuery ? "Up/Down focus | <- -> pages | Esc clears" : "Up/Down focus | <- -> pages | Esc menu";
 
   if (mode.kind === "importSaveDefault") {
     return (
@@ -1018,10 +1059,17 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
           |{tableLayout.columns.map((column, index) => <React.Fragment key={column.key}>{column.key === "vocab" ? <VocabularyTableCell entry={entry} width={tableLayout.widths[index]} tagTypes={tagTypes} /> : padLine(tableValueFor(entry, column.key), tableLayout.widths[index])}|</React.Fragment>)}
         </Text>
       ))}
+      {activeSearchQuery && tableLayout.entries.length === 0 ? (
+        <Text color={AUXILIARY_TEXT_COLOR}>|{padLine(`No vocabulary matches "${activeSearchQuery}".`, Math.max(1, tableLayout.border.length - 2))}|</Text>
+      ) : null}
       <Text>{tableLayout.border}</Text>
       <Text>{padLine("", width)}</Text>
       <Text>{padLine("", width)}</Text>
-      <Text color={AUXILIARY_TEXT_COLOR}>{padLine(buildFooterLine(width, pageText, FOOTER_HINT), width)}</Text>
+      <Box flexDirection="row" width={width}>
+        <Box width={footerLeftWidth}><Text color={AUXILIARY_TEXT_COLOR}>{padLine(pageText, footerLeftWidth)}</Text></Box>
+        <Box width={searchBoxWidth}><CaretInputLine prefix="Search: " value={searchDraft} onChange={setSearchDraft} width={searchBoxWidth} color={inputFocus === "search" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} focus={mode.kind === "command" && inputFocus === "search"} inputKey="workbook-search" /></Box>
+        <Box width={footerRightWidth}><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footerHint, footerRightWidth)}</Text></Box>
+      </Box>
       <Text>{padLine("", width)}</Text>
       <Text>{padLine("", width)}</Text>
       <CaretInputLine key={textInputKey} prefix="> " value={buffer} onChange={setBuffer} width={width} color="cyan" focus={textInputActive} inputKey={textInputKey} />
