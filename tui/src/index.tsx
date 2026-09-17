@@ -1065,9 +1065,11 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       <Text>{tableLayout.border}</Text>
       <Text>{padLine("", width)}</Text>
       <Text>{padLine("", width)}</Text>
-      <Box flexDirection="row" width={width}>
+      <Box flexDirection="row" width={width} alignItems="center">
         <Box width={footerLeftWidth}><Text color={AUXILIARY_TEXT_COLOR}>{padLine(pageText, footerLeftWidth)}</Text></Box>
-        <Box width={searchBoxWidth}><CaretInputLine prefix="Search: " value={searchDraft} onChange={setSearchDraft} width={searchBoxWidth} color={inputFocus === "search" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} focus={mode.kind === "command" && inputFocus === "search"} inputKey="workbook-search" /></Box>
+        <Box width={searchBoxWidth} borderStyle="single" borderColor={inputFocus === "search" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}>
+          <CaretInputLine prefix="Search: " value={searchDraft} onChange={setSearchDraft} width={Math.max(1, searchBoxWidth - 4)} color="white" focus={mode.kind === "command" && inputFocus === "search"} inputKey="workbook-search" />
+        </Box>
         <Box width={footerRightWidth}><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footerHint, footerRightWidth)}</Text></Box>
       </Box>
       <Text>{padLine("", width)}</Text>
