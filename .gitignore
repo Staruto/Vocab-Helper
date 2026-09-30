@@ -1,14 +1,18 @@
-__pycache__/
-*.py[cod]
-.venv/
-.vscode/
+# legacy cache
 .pytest_cache/
+
+# database
 vocab.db
 vocab.db.backup-*
 vocab.db.v1.tmp
 *.conversion-report.json
+
+# build artifacts
 build/
 dist/
 *.spec
+
+# miscellaneous
 VocabHelper.exe
 AGENTS.md
+CONTEXT.md

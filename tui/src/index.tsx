@@ -61,6 +61,7 @@ const AUXILIARY_TEXT_COLOR = "#878787";
 const GRAY_TIER_COLOR = "#777777";
 const SELECTED_TEXT_COLOR = "#cea8ff";
 const TAG_BADGE_COLOR = "#5fd7d7";
+const YELLOW_TIER_COLOR = "#e5c65f";
 const COMMAND_SUGGESTION_ROWS = 6;
 const LANGUAGE_PRESETS: LanguagePreset[] = [
   { code: "JP", label: "Japanese" },
@@ -290,7 +291,7 @@ function buildPendingCommandText(command: ParameterizedCommand): string {
 }
 
 function tierColor(tier: EntryRow["tier"]): string {
-  return tier === "gray" ? GRAY_TIER_COLOR : tier === "green" ? "green" : tier === "yellow" ? "yellow" : "red";
+  return tier === "gray" ? GRAY_TIER_COLOR : tier === "green" ? "green" : tier === "yellow" ? YELLOW_TIER_COLOR : "red";
 }
 
 function formatLastTested(value: string | null): string {
@@ -2082,8 +2083,8 @@ function EntryViewScreen({ workbook, entryId, onNavigate, onCancel, onQuit }: { 
     {boundaryMessage ? <Text color={AUXILIARY_TEXT_COLOR}>{padLine(boundaryMessage, width)}</Text> : null}
     <Text color={AUXILIARY_TEXT_COLOR}>{centerLine("Esc returns to the vocabulary list", width)}</Text>
     <Box width={width} justifyContent="space-between">
-      <Text color={AUXILIARY_TEXT_COLOR}>{previousLabel}</Text>
-      <Text color={AUXILIARY_TEXT_COLOR}>{nextLabel}</Text>
+      <Text>{previousLabel}</Text>
+      <Text>{nextLabel}</Text>
     </Box>
   </Box>;
 }
@@ -2184,7 +2185,7 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
   if (phase === "done") return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice — ${workbook.name}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="green">{padLine(`Final initial-round score: ${score}/${questions.length}`, width)}</Text><Text>{padLine("Press Enter to return.", width)}</Text></Box>;
   if (phase === "detail" && detailEntry) return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Entry #${detailEntry.id}`, width)}</Text><Text color="red">{padLine(`Incorrect — expected: ${detailEntry.vocabulary}`, width)}</Text><Text>{padLine("", width)}</Text>{buildExplicitEntryLines(workbook, detailEntry).map((line, i) => <Text key={`${i}-${line}`} color={AUXILIARY_TEXT_COLOR}>{padLine(line, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Enter advances. Esc cancels.", width)}</Text></Box>;
   const roundLabel = phase === "retry" ? `Retry round ${retryNumber} — Question ${index + 1}/${retryRound.length}` : `Question ${index + 1}/${questions.length}`;
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(roundLabel, width)}</Text><Text>{padLine("", width)}</Text><Text color="yellow">{padLine(`${workbook.meaningAttributes[0]?.label ?? "Primary Meaning"}: ${current?.meaning ?? ""}`, width)}</Text>{visibleTagGroups.map((group) => <PracticeTagLine key={group.typeId} typeName={group.typeName} tagNames={group.tagNames} width={width} />)}<Text>{padLine("", width)}</Text><CaretInputLine key={`${phase}-${index}-${retryNumber}`} prefix="Answer: " value={answer} onChange={setAnswer} width={width} color="cyan" focus={feedback === null} inputKey={`${phase}-${index}-${retryNumber}`} /><Text>{padLine("", width)}</Text><Text color="green">{padLine(feedback ?? "Enter submits. Esc cancels.", width)}</Text></Box>;
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(roundLabel, width)}</Text><Text>{padLine("", width)}</Text><Text>{padLine(`${workbook.meaningAttributes[0]?.label ?? "Primary Meaning"}: ${current?.meaning ?? ""}`, width)}</Text>{visibleTagGroups.map((group) => <PracticeTagLine key={group.typeId} typeName={group.typeName} tagNames={group.tagNames} width={width} />)}<Text>{padLine("", width)}</Text><CaretInputLine key={`${phase}-${index}-${retryNumber}`} prefix="Answer: " value={answer} onChange={setAnswer} width={width} color="cyan" focus={feedback === null} inputKey={`${phase}-${index}-${retryNumber}`} /><Text>{padLine("", width)}</Text><Text color="green">{padLine(feedback ?? "Enter submits. Esc cancels.", width)}</Text></Box>;
 }
 
 function PracticeEmptyScreen({ workbook, onCancel, onQuit }: { workbook: WorkbookRow; onCancel: () => void; onQuit: () => void }): JSX.Element {
