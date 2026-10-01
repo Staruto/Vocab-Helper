@@ -7,17 +7,8 @@ import { adjacentEntryId, buildDetailSections, detailNavigationLabel, DetailFiel
 import { formatImportPreviewFilter, formatImportPreviewRecord, importPreviewPageSize, ImportPreview, ImportPreviewFilter, loadLabeledTextFile, paginateImportPreview, parseLabeledTextImport, shouldPromptToSaveImportPath } from "./import.js";
 import { CaretInputLine } from "./text-input.js";
 import { filterEntriesForSearch } from "./search.js";
-
-type UiMode =
-  | { kind: "command" }
-  | { kind: "commandArg"; command: ParameterizedCommand }
-  | { kind: "add"; stage: "vocabulary" | "meaning" | "metadata" | "tags"; vocabulary: string; meanings: string[]; meaningIndex: number; metadata: Record<string, string>; metadataIndex: number; selectedTagIds: number[]; tagIndex: number }
-  | { kind: "edit"; stage: "vocabulary" | "meaning" | "metadata" | "tags"; entryId: number; vocabulary: string; meanings: string[]; meaningIndex: number; metadata: Record<string, string>; metadataIndex: number; selectedTagIds: number[]; tagIndex: number }
-  | { kind: "delete"; entryId: number; label: string }
-  | { kind: "importPath"; alternate: boolean }
-  | { kind: "importLoading"; path: string; alternate: boolean }
-  | { kind: "importSaveDefault"; path: string; save: boolean; resultMessage: string }
-  | { kind: "importPreview"; path: string; pathBuffer: string; preview: ImportPreview; pageIndex: number; filter: ImportPreviewFilter; focus: ImportPreviewFocus; loading?: boolean; error?: string };
+import { UiMode } from "./orchestration.js";
+import { createOrchestrationCapabilities } from "./orchestration-runner.js";
 
 type ImportPreviewFocus = "path" | "filters" | "records";
 
@@ -96,6 +87,7 @@ const COMMANDS: CommandSpec[] = [
   { name: "exit", hint: "Exit the app" },
 ];
 const backend = new VocabularyBackend();
+const orchestrationCapabilities = createOrchestrationCapabilities(backend);
 
 function writeToStdout(text: string): void {
   process.stdout?.write?.(text);
