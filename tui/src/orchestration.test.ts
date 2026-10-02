@@ -63,3 +63,14 @@ test("practice initial scoring and empty candidates are explicit", () => {
   state = update(transition.state, { type: "practiceResultRecorded", entry: entry(1, "answer"), isCorrect: true, initialRound: true }).state;
   assert.equal(state.practice.score, 1);
 });
+
+test("practice candidate loading is an effect and commit failures stay visible", () => {
+  let state = createInitialState(workbook);
+  let transition = update(state, { type: "practiceCandidatesRequested", workbookId: workbook.id, count: 3 });
+  assert.equal(transition.effects[0]?.type, "loadPracticeCandidates");
+  state = update(state, { type: "commandSubmitted", raw: "/import" }).state;
+  state = update(state, { type: "importPreviewLoaded", requestId: state.importRequestId, path: "words.txt", preview: { totalRecords: 1, entries: [{ recordNumber: 1, vocabulary: "word", meanings: ["meaning"], attributes: {}, tagIds: [] }], skippedInvalid: 0, skippedDuplicates: 0, diagnostics: [], records: [] } }).state;
+  transition = update(state, { type: "importCommitFailed", error: "Import failed; no entries were written." });
+  assert.equal(transition.state.mode.kind, "importPreview");
+  assert.equal(transition.state.mode.error, "Import failed; no entries were written.");
+});

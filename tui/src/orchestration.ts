@@ -42,6 +42,8 @@ export type OrchestrationCapabilities = {
 };
 
 export type Intent =
+  | { type: "modeCancelled"; message?: string }
+  | { type: "inputFocusChanged"; focus: "command" | "search" }
   | { type: "commandSubmitted"; raw: string }
   | { type: "searchChanged"; query: string }
   | { type: "pageChanged"; delta: number }
@@ -57,11 +59,15 @@ export type Intent =
   | { type: "importPathBufferChanged"; path: string }
   | { type: "importConfirmed" }
   | { type: "importSavePathDecision"; save: boolean }
+  | { type: "importSavePathToggled" }
+  | { type: "importPreviewFocusChanged"; focus: ImportPreviewFocus }
   | { type: "entriesLoaded"; entries: EntryRow[]; message?: string }
   | { type: "importPreviewLoaded"; requestId: number; path: string; preview: ImportPreview }
   | { type: "importLoadFailed"; requestId: number; path: string; error: string }
+  | { type: "importCommitFailed"; error: string }
   | { type: "importCommitted"; result: ImportResult; resultMessage: string; path: string }
   | { type: "importPathSaved"; path: string | null }
+  | { type: "practiceCandidatesRequested"; workbookId: number; count: number }
   | { type: "practiceStarted"; candidates: EntryRow[] }
   | { type: "practiceAnswerSubmitted"; answer: string }
   | { type: "practiceRetryAdvanced" }
@@ -70,6 +76,7 @@ export type Intent =
 
 export type Effect =
   | { type: "loadEntries"; workbookId: number }
+  | { type: "loadPracticeCandidates"; workbookId: number; count: number }
   | { type: "loadImportPreview"; workbookId: number; path: string; requestId: number }
   | { type: "commitImport"; workbookId: number; path: string; entries: ImportEntryInput[] }
   | { type: "saveImportPath"; workbookId: number; path: string | null }
@@ -99,8 +106,11 @@ function formComplete(state: OrchestrationState, form: Extract<UiMode, { kind: "
 export function update(state: OrchestrationState, intent: Intent): Transition {
   let next = state;
   const effects: Effect[] = [];
+  if (intent.type === "modeCancelled") return { state: { ...state, importRequestId: state.importRequestId + 1, mode: { kind: "command" }, commandBuffer: "", statusLines: status(intent.message ?? "Cancelled.") }, effects: [] };
+  if (intent.type === "inputFocusChanged") return { state: { ...state, inputFocus: intent.focus }, effects: [] };
+  if (intent.type === "practiceCandidatesRequested") return { state: { ...state, practice: { ...state.practice, phase: "empty", candidates: [], currentEntry: null } }, effects: [{ type: "loadPracticeCandidates", workbookId: intent.workbookId, count: intent.count }] };
   if (intent.type === "entriesLoaded") return { state: { ...state, entries: intent.entries, pageIndex: clampPage(state.pageIndex, intent.entries.length), statusLines: status(intent.message ?? `Loaded ${intent.entries.length} entr${intent.entries.length === 1 ? "y" : "ies"}.`) }, effects: [] };
-  if (intent.type === "searchChanged") return { state: { ...state, activeSearchQuery: intent.query.trim(), pageIndex: 0, statusLines: status(intent.query.trim() ? "Search updated." : "Search cleared.") }, effects: [] };
+  if (intent.type === "searchChanged") return { state: { ...state, commandBuffer: "", activeSearchQuery: intent.query.trim(), pageIndex: 0, statusLines: status(intent.query.trim() ? "Search updated." : "Search cleared.") }, effects: [] };
   if (intent.type === "pageChanged") return { state: { ...state, pageIndex: clampPage(state.pageIndex + intent.delta, state.entries.length) }, effects: [] };
   if (intent.type === "commandSubmitted") {
     const [command, ...args] = normalize(intent.raw); const lower = command?.toLowerCase();
@@ -124,8 +134,11 @@ export function update(state: OrchestrationState, intent: Intent): Transition {
   if (intent.type === "importPathLoadRequested") { const requestId = state.importRequestId + 1; const path = intent.path.trim(); if (!path) return { state: { ...state, statusLines: status("A file path is required.") }, effects: [] }; return { state: { ...state, importRequestId: requestId, mode: { kind: "importLoading", path, alternate: Boolean(intent.alternate), requestId }, statusLines: status("Reading and validating import file...") }, effects: [{ type: "loadImportPreview", workbookId: state.workbook.id, path, requestId }] }; }
   if (intent.type === "importPreviewLoaded") { if (intent.requestId !== state.importRequestId) return { state, effects: [] }; return { state: { ...state, mode: { kind: "importPreview", path: intent.path, pathBuffer: intent.path, preview: intent.preview, pageIndex: 0, filter: "records", focus: "filters" }, statusLines: status("Import preview ready.") }, effects: [] }; }
   if (intent.type === "importLoadFailed") { if (intent.requestId !== state.importRequestId) return { state, effects: [] }; return { state: { ...state, mode: { kind: "importPath", alternate: true }, commandBuffer: intent.path, statusLines: status(`Could not load '${intent.path}': ${intent.error}`), importError: intent.error }, effects: [] }; }
+  if (intent.type === "importCommitFailed") { const mode = state.mode; return mode.kind === "importPreview" ? { state: { ...state, mode: { ...mode, error: intent.error }, statusLines: status(intent.error) }, effects: [] } : { state, effects: [] }; }
   if (intent.type === "importPathBufferChanged") { const mode = state.mode; return mode.kind === "importPreview" ? { state: { ...state, mode: { ...mode, pathBuffer: intent.path, error: undefined } }, effects: [] } : { state: { ...state, commandBuffer: intent.path }, effects: [] }; }
   if (intent.type === "importPreviewFilterChanged") { const mode = state.mode; return mode.kind === "importPreview" ? { state: { ...state, mode: { ...mode, filter: intent.filter, pageIndex: 0 } }, effects: [] } : { state, effects: [] }; }
+  if (intent.type === "importSavePathToggled") { const mode = state.mode; return mode.kind === "importSaveDefault" ? { state: { ...state, mode: { ...mode, save: !mode.save } }, effects: [] } : { state, effects: [] }; }
+  if (intent.type === "importPreviewFocusChanged") { const mode = state.mode; return mode.kind === "importPreview" ? { state: { ...state, mode: { ...mode, focus: intent.focus } }, effects: [] } : { state, effects: [] }; }
   if (intent.type === "importPreviewPageChanged") { const mode = state.mode; return mode.kind === "importPreview" ? { state: { ...state, mode: { ...mode, pageIndex: Math.max(0, mode.pageIndex + intent.delta) } }, effects: [] } : { state, effects: [] }; }
   if (intent.type === "importConfirmed") { const mode = state.mode; if (mode.kind !== "importPreview" || mode.preview.entries.length === 0) return { state, effects: [] }; return { state: { ...state, statusLines: status("Importing entries...") }, effects: [{ type: "commitImport", workbookId: state.workbook.id, path: mode.path, entries: mode.preview.entries.map(({ recordNumber: _recordNumber, ...entry }) => entry) }] }; }
   if (intent.type === "importCommitted") { const save = state.workbook.importFilePath !== intent.path; return { state: { ...state, mode: save ? { kind: "importSaveDefault", path: intent.path, save: false, resultMessage: intent.resultMessage } : { kind: "command" }, commandBuffer: "", statusLines: status(intent.resultMessage) }, effects: save ? [] : [{ type: "loadEntries", workbookId: state.workbook.id }] }; }

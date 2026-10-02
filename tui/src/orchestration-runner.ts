@@ -1,11 +1,13 @@
 import type { EntryRow, WorkbookRow } from "./db.js";
-import { loadLabeledTextFile, parseLabeledTextImport, shouldPromptToSaveImportPath } from "./import.js";
+import { loadLabeledTextFile, parseLabeledTextImport } from "./import.js";
 import type { Effect, Intent, OrchestrationCapabilities, OrchestrationState } from "./orchestration.js";
 
 export async function executeEffect(effect: Effect, state: OrchestrationState, capabilities: OrchestrationCapabilities): Promise<Intent> {
   switch (effect.type) {
     case "loadEntries":
       return { type: "entriesLoaded", entries: capabilities.reads.listEntries(effect.workbookId) };
+    case "loadPracticeCandidates":
+      return { type: "practiceStarted", candidates: capabilities.practice.selectPracticeCandidates(effect.workbookId, effect.count) };
     case "loadImportPreview": {
       try {
         const source = await capabilities.import.readLabeledTextFile(effect.path);
@@ -19,10 +21,13 @@ export async function executeEffect(effect: Effect, state: OrchestrationState, c
       try {
         const result = capabilities.import.importEntries(effect.workbookId, effect.entries);
         const previewPath = effect.path;
-        const resultMessage = `Added ${result.added}; Updated ${result.updated}; Unchanged ${result.unchanged}.`;
+        const preview = state.mode.kind === "importPreview" ? state.mode.preview : null;
+        const ignoredFields = preview?.diagnostics.filter((item) => item.kind === "ignored-field").length ?? 0;
+        const ignoredTags = preview?.diagnostics.filter((item) => item.kind === "ignored-tag").length ?? 0;
+        const resultMessage = `Added ${result.added}; Updated ${result.updated}; Unchanged ${result.unchanged}; Invalid ${preview?.skippedInvalid ?? 0}; ignored fields ${ignoredFields}; ignored tags ${ignoredTags}.`;
         return { type: "importCommitted", result, resultMessage, path: previewPath };
       } catch (error) {
-        return { type: "importLoadFailed", requestId: state.importRequestId, path: effect.path, error: error instanceof Error ? error.message : "Import failed; no entries were written." };
+        return { type: "importCommitFailed", error: error instanceof Error ? error.message : "Import failed; no entries were written." };
       }
     }
     case "saveImportPath": {

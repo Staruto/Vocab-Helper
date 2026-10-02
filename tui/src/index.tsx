@@ -4,13 +4,13 @@ import { CreateWorkbookInput, EntryRow, LANGUAGE_PRESET_DEFINITIONS, MeaningAttr
 import { VocabularyBackend } from "./backend.js";
 import { fitTagBadges, visibleAssignedTagGroups } from "./tag-display.js";
 import { adjacentEntryId, buildDetailSections, detailNavigationLabel, DetailField } from "./detail-display.js";
-import { formatImportPreviewFilter, formatImportPreviewRecord, importPreviewPageSize, ImportPreview, ImportPreviewFilter, loadLabeledTextFile, paginateImportPreview, parseLabeledTextImport, shouldPromptToSaveImportPath } from "./import.js";
+import { formatImportPreviewFilter, formatImportPreviewRecord, importPreviewPageSize, ImportPreview, ImportPreviewFilter, loadLabeledTextFile, paginateImportPreview } from "./import.js";
 import { CaretInputLine } from "./text-input.js";
 import { filterEntriesForSearch } from "./search.js";
 import { UiMode } from "./orchestration.js";
 import { createOrchestrationCapabilities } from "./orchestration-runner.js";
 import { createInitialState, update as updateOrchestration } from "./orchestration.js";
-import { executeEffect } from "./orchestration-runner.js";
+import { runTransitionEffects } from "./ink-orchestration.js";
 
 type ImportPreviewFocus = "path" | "filters" | "records";
 
@@ -70,7 +70,7 @@ const VOCABULARY_TYPES: Array<{ kind: VocabularyKind; code: string | null; label
   { kind: "other_language", code: null, label: "Other Language" },
   { kind: "non_language", code: null, label: "Not a Language" },
 ];
-const WORKBOOK_MENU_HINT = "â†‘â†“ select | Enter open | Ctrl+E edit | Del delete | + create | Esc exit";
+const WORKBOOK_MENU_HINT = "ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Å“ select | Enter open | Ctrl+E edit | Del delete | + create | Esc exit";
 const WORKBOOK_CREATE_HINT = "Type a name and press Enter. Esc returns to the menu.";
 const WORKBOOK_DELETE_HINT = "Type yes to confirm. Enter deletes. Esc cancels.";
 const COMMANDS: CommandSpec[] = [
@@ -383,7 +383,9 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
   const [rows, setRows] = useState(() => stdout?.rows ?? 24);
-  const [entries, setEntries] = useState<EntryRow[]>(() => backend.listEntries(workbook.id));
+  const [orchestration, setOrchestration] = useState(() => createInitialState(workbook, orchestrationCapabilities.reads.listEntries(workbook.id), orchestrationCapabilities.reads.listTagTypes(workbook.id)));
+  const [entries, setEntries] = useState<EntryRow[]>(() => orchestration.entries);
+  const orchestrationRef = useRef(orchestration);
   const [pageIndex, setPageIndex] = useState(0);
   const [mode, setMode] = useState<UiMode>({ kind: "command" });
   const [buffer, setBuffer] = useState("");
@@ -394,9 +396,8 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   const [statusLines, setStatusLines] = useState<string[]>(() => buildStatusLines("Ready."));
   const [tierColorsEnabled, setTierColorsEnabled] = useState(() => backend.getTierColorsEnabled());
   const [savedImportFilePath, setSavedImportFilePath] = useState(workbook.importFilePath);
-  const importRequest = useRef(0);
   const activeMetadata = workbook.metadataAttributes.filter((attribute) => attribute.role === "optional");
-  const tagTypes = useMemo(() => backend.listTagTypes(workbook.id), [workbook.id]);
+  const tagTypes = orchestration.tagTypes;
   const visibleEntries = useMemo(() => filterEntriesForSearch(entries, workbook, tagTypes, activeSearchQuery), [entries, workbook, tagTypes, activeSearchQuery]);
   const selectableTags = tagTypes.flatMap((type) => type.tags);
   const textInputActive = (mode.kind === "command" && inputFocus === "command") || mode.kind === "commandArg" || mode.kind === "delete" || mode.kind === "importPath" || ((mode.kind === "add" || mode.kind === "edit") && mode.stage !== "tags");
@@ -419,6 +420,30 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       stdout.off("resize", onResize);
     };
   }, [stdout]);
+
+  function syncOrchestration(next: ReturnType<typeof createInitialState>): void {
+    orchestrationRef.current = next;
+    setOrchestration(next);
+    setEntries(next.entries);
+    setPageIndex(next.pageIndex);
+    setMode(next.mode);
+    setBuffer(next.commandBuffer);
+    setActiveSearchQuery(next.activeSearchQuery);
+    setInputFocus(next.inputFocus);
+    setStatusLines(next.statusLines);
+  }
+
+  function dispatchIntent(intent: import("./orchestration.js").Intent): void {
+    const transition = updateOrchestration(orchestrationRef.current, intent);
+    syncOrchestration(transition.state);
+    void runTransitionEffects(transition.effects, transition.state, orchestrationCapabilities).then((results) => {
+      for (const result of results) {
+        const next = updateOrchestration(orchestrationRef.current, result).state;
+        syncOrchestration(next);
+        if (result.type === "importPathSaved") setSavedImportFilePath(result.path);
+      }
+    });
+  }
 
   useEffect(() => {
     setPageIndex((current) => clampPageIndex(current, visibleEntries.length));
@@ -448,158 +473,54 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   }, [buffer, mode.kind, commandSuggestions.length]);
 
   function refreshEntries(message?: string): void {
-    const next = backend.listEntries(workbook.id);
-    setEntries(next);
-    setPageIndex((current) => clampPageIndex(current, next.length));
-    setStatusLines(buildStatusLines(message ?? `Loaded ${next.length} entr${next.length === 1 ? "y" : "ies"}.`));
+    if (message) {
+      const next = { ...orchestrationRef.current, statusLines: buildStatusLines(message) };
+      syncOrchestration(next);
+    }
+    dispatchIntent({ type: "commandSubmitted", raw: "/list" });
   }
 
   function applySearch(query: string): void {
     const normalized = query.trim();
     setSearchDraft(normalized);
-    setActiveSearchQuery(normalized);
-    setPageIndex(0);
-    const count = filterEntriesForSearch(entries, workbook, tagTypes, normalized).length;
-    setStatusLines(buildStatusLines(normalized ? `Found ${count} matching entr${count === 1 ? "y" : "ies"}.` : "Search cleared."));
+    dispatchIntent({ type: "searchChanged", query: normalized });
   }
 
   function beginAdd(): void {
-    setMode({ kind: "add", stage: "vocabulary", vocabulary: "", meanings: [], meaningIndex: 0, metadata: {}, metadataIndex: 0, selectedTagIds: [], tagIndex: 0 });
-    setBuffer("");
-    setStatusLines(buildStatusLines(`Adding a new entry.\nEnter ${workbook.vocabularyLabel}.`));
+    dispatchIntent({ type: "commandSubmitted", raw: "/add" });
   }
 
   function beginImport(): void {
-    if (savedImportFilePath) {
-      void loadImportPreview(savedImportFilePath, false);
-    } else {
-      setMode({ kind: "importPath", alternate: true });
-      setBuffer("");
-      setStatusLines(buildStatusLines("Enter the path to a UTF-8 .txt import file."));
-    }
-  }
-
-  async function loadImportPreview(inputPath: string, alternate: boolean): Promise<void> {
-    if (!inputPath.trim()) {
-      setStatusLines(buildStatusLines("A file path is required."));
-      return;
-    }
-    const request = ++importRequest.current;
-    setMode({ kind: "importLoading", path: inputPath.trim(), alternate });
-    setStatusLines(buildStatusLines("Reading and validating import file..."));
-    try {
-      const source = await loadLabeledTextFile(inputPath);
-      if (request !== importRequest.current) return;
-      const preview = parseLabeledTextImport(source.text, workbook, tagTypes, entries.map((entry) => entry.vocabulary));
-      setBuffer("");
-      setMode({ kind: "importPreview", path: source.path, pathBuffer: source.path, preview, pageIndex: 0, filter: "records", focus: "filters" });
-    } catch (error) {
-      if (request !== importRequest.current) return;
-      setMode({ kind: "importPath", alternate: true });
-      setBuffer(alternate ? inputPath : "");
-      const reason = error instanceof Error ? error.message : "Could not read the import file.";
-      setStatusLines(buildStatusLines(`Could not load '${inputPath.trim()}': ${reason}`));
-    }
+    dispatchIntent({ type: "commandSubmitted", raw: "/import" });
   }
 
   async function reloadImportPreview(mode: Extract<UiMode, { kind: "importPreview" }>): Promise<void> {
-    const inputPath = mode.pathBuffer.trim();
-    if (!inputPath) {
-      setMode({ ...mode, focus: "path", error: "A file path is required." });
-      return;
-    }
-    const request = ++importRequest.current;
-    setMode({ ...mode, loading: true, error: undefined });
-    try {
-      const source = await loadLabeledTextFile(inputPath);
-      if (request !== importRequest.current) return;
-      const preview = parseLabeledTextImport(source.text, workbook, tagTypes, entries.map((entry) => entry.vocabulary));
-      setMode({ kind: "importPreview", path: source.path, pathBuffer: source.path, preview, pageIndex: 0, filter: "records", focus: "filters" });
-    } catch (error) {
-      if (request !== importRequest.current) return;
-      const reason = error instanceof Error ? error.message : "Could not read the import file.";
-      setMode({ ...mode, loading: false, focus: "path", error: reason });
-    }
+    dispatchIntent({ type: "importPathLoadRequested", path: mode.pathBuffer, alternate: true });
   }
 
   function continueImportAfterSaveChoice(mode: Extract<UiMode, { kind: "importSaveDefault" }>): void {
-    if (mode.save) {
-      backend.setWorkbookImportFilePath(workbook.id, mode.path);
-      setSavedImportFilePath(mode.path);
-    }
-    setMode({ kind: "command" });
-    setBuffer("");
-    refreshEntries(mode.resultMessage);
+    dispatchIntent({ type: "importSavePathDecision", save: mode.save });
   }
 
   function confirmImport(mode: Extract<UiMode, { kind: "importPreview" }>): void {
-    const preview = mode.preview;
-    if (preview.entries.length === 0) return;
-    try {
-      const result = backend.importEntries(workbook.id, preview.entries.map(({ recordNumber: _recordNumber, ...entry }) => entry));
-      const ignoredFields = preview.diagnostics.filter((item) => item.kind === "ignored-field").length;
-      const ignoredTags = preview.diagnostics.filter((item) => item.kind === "ignored-tag").length;
-      const resultMessage = `Added ${result.added}; Updated ${result.updated}; Unchanged ${result.unchanged}; Invalid ${preview.skippedInvalid}; ignored fields ${ignoredFields}; ignored tags ${ignoredTags}.`;
-      if (shouldPromptToSaveImportPath(mode.path, savedImportFilePath)) {
-        setMode({ kind: "importSaveDefault", path: mode.path, save: false, resultMessage });
-      } else {
-        setMode({ kind: "command" });
-        setBuffer("");
-        refreshEntries(resultMessage);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Import failed; no entries were written.";
-      setMode((current) => current.kind === "importPreview" ? { ...current, error: message } : current);
-    }
+    if (mode.preview.entries.length > 0) dispatchIntent({ type: "importConfirmed" });
   }
 
   function beginPendingCommand(command: ParameterizedCommand): void {
-    setMode({ kind: "commandArg", command });
-    setBuffer(`/${command} `);
-    setStatusLines(buildStatusLines(buildPendingCommandText(command)));
+    dispatchIntent({ type: "commandSubmitted", raw: `/${command}` });
   }
 
   function beginEdit(entryId: number): void {
-    const entry = backend.getEntry(entryId);
-    if (!entry) {
-      setStatusLines(buildStatusLines(`Entry #${entryId} was not found.`));
-      return;
-    }
-
-    setMode({
-      kind: "edit",
-      stage: "vocabulary",
-      entryId,
-      vocabulary: entry.vocabulary,
-      meanings: entry.meanings,
-      meaningIndex: 0,
-      metadata: entry.attributes,
-      metadataIndex: 0,
-      selectedTagIds: entry.tags.map((tag) => tag.id),
-      tagIndex: 0,
-    });
-    setBuffer(entry.vocabulary);
-    setStatusLines(buildStatusLines(`Editing #${entryId}.\nEdit vocabulary.`));
+    dispatchIntent({ type: "commandSubmitted", raw: `/edit ${entryId}` });
   }
 
   function beginDelete(entryId: number): void {
-    const entry = backend.getEntry(entryId);
-    if (!entry) {
-      setStatusLines(buildStatusLines(`Entry #${entryId} was not found.`));
-      return;
-    }
-
-    setMode({ kind: "delete", entryId, label: buildEntryLabel(entry) });
-    setBuffer("");
-    setStatusLines(buildStatusLines(`Type yes to delete ${buildEntryLabel(entry)}.`));
+    dispatchIntent({ type: "commandSubmitted", raw: `/delete ${entryId}` });
   }
 
   function cancelActiveMode(message = "Cancelled."): void {
-    importRequest.current += 1;
-    setMode({ kind: "command" });
-    setBuffer("");
+    dispatchIntent({ type: "modeCancelled", message });
     setSuggestionIndex(0);
-    setStatusLines(buildStatusLines(message));
   }
 
   function submitHighlightedCommand(): void {
@@ -641,7 +562,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     if (lower === "view") {
       const entryId = Number(args[0]);
       if (!args[0] || !Number.isInteger(entryId)) { setStatusLines(buildStatusLines("Usage: /view <id>")); return; }
-      const entry = backend.getEntry(entryId);
+      const entry = orchestrationRef.current.entries.find((item) => item.id === entryId) ?? null;
       if (!entry || entry.workbookId !== workbook.id) { setStatusLines(buildStatusLines(`Entry #${entryId} was not found.`)); return; }
       onViewEntry(entry.id);
       return;
@@ -654,14 +575,14 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     }
 
     if (lower === "list") {
-      refreshEntries();
+      dispatchIntent({ type: "commandSubmitted", raw: "/list" });
       return;
     }
 
     if (lower === "search") {
       setBuffer("");
-      if (args.length === 0) setInputFocus("search");
-      else applySearch(args.join(" "));
+      if (args.length === 0) dispatchIntent({ type: "inputFocusChanged", focus: "search" });
+      else dispatchIntent({ type: "searchChanged", query: args.join(" ") });
       return;
     }
 
@@ -671,13 +592,13 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     }
 
     if (lower === "add") {
-      beginAdd();
+      dispatchIntent({ type: "commandSubmitted", raw: "/add" });
       return;
     }
 
     if (lower === "import") {
       if (args.length > 0) { setStatusLines(buildStatusLines("Usage: /import")); return; }
-      beginImport();
+      dispatchIntent({ type: "commandSubmitted", raw: "/import" });
       return;
     }
 
@@ -687,7 +608,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
         beginPendingCommand("edit");
         return;
       }
-      beginEdit(entryId);
+      dispatchIntent({ type: "commandSubmitted", raw: `/edit ${entryId}` });
       return;
     }
 
@@ -697,7 +618,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
         beginPendingCommand("delete");
         return;
       }
-      beginDelete(entryId);
+      dispatchIntent({ type: "commandSubmitted", raw: `/delete ${entryId}` });
       return;
     }
 
@@ -711,145 +632,14 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
 
   function submitForm(value: string): void {
     const text = value.trim();
-
-    if (mode.kind === "importPath") {
-      void loadImportPreview(value, mode.alternate);
-      return;
-    }
-    if (mode.kind === "importPreview") {
-      confirmImport(mode);
-      return;
-    }
+    if (mode.kind === "importPath") { dispatchIntent({ type: "importPathLoadRequested", path: value, alternate: mode.alternate }); return; }
+    if (mode.kind === "importPreview") { dispatchIntent({ type: "importConfirmed" }); return; }
     if (mode.kind === "importLoading") return;
-    if (mode.kind === "importSaveDefault") {
-      continueImportAfterSaveChoice(mode);
-      return;
-    }
-
-    if (mode.kind === "add") {
-      if (mode.stage === "vocabulary") {
-        if (!text) {
-          setStatusLines(buildStatusLines("Vocabulary is required."));
-          return;
-        }
-
-        setMode({
-          kind: "add",
-          stage: "meaning",
-          vocabulary: text,
-          meanings: [],
-          meaningIndex: 0,
-          metadata: {}, metadataIndex: 0, selectedTagIds: [], tagIndex: 0,
-        });
-        setBuffer("");
-        setStatusLines(buildStatusLines(`Enter ${workbook.meaningAttributes[0]?.label ?? "Primary Meaning"}.`));
-        return;
-      }
-
-      if (mode.stage === "metadata") {
-        const field = activeMetadata[mode.metadataIndex];
-        const metadata = { ...mode.metadata, [field.key]: text };
-        if (mode.metadataIndex + 1 < activeMetadata.length) { setMode({ ...mode, metadata, metadataIndex: mode.metadataIndex + 1 }); setBuffer(""); setStatusLines(buildStatusLines(`Enter ${activeMetadata[mode.metadataIndex + 1].label}. Optional.`)); return; }
-        if (selectableTags.length > 0) { setMode({ ...mode, metadata, stage: "tags", tagIndex: 0 }); setBuffer(""); setStatusLines(buildStatusLines("Select tags with Space, then press Enter.")); return; }
-        const entry = backend.addEntry(workbook.id, mode.vocabulary, mode.meanings[0], mode.meanings, metadata, mode.selectedTagIds); setMode({ kind: "command" }); setBuffer(""); refreshEntries(`Added #${entry.id}.`); return;
-      }
-      if (mode.stage === "tags") {
-        const entry = backend.addEntry(workbook.id, mode.vocabulary, mode.meanings[0], mode.meanings, mode.metadata, mode.selectedTagIds); setMode({ kind: "command" }); setBuffer(""); refreshEntries(`Added #${entry.id}.`); return;
-      }
-
-      if (mode.meaningIndex === 0 && !text) {
-        setStatusLines(buildStatusLines("Meaning is required."));
-        return;
-      }
-
-      const meanings = [...mode.meanings, text];
-      const attributeCount = workbook.meaningAttributes.length;
-      if (mode.meaningIndex + 1 < attributeCount) {
-        setMode({ ...mode, meanings, meaningIndex: mode.meaningIndex + 1 });
-        setBuffer("");
-        setStatusLines(buildStatusLines(`Enter ${workbook.meaningAttributes[mode.meaningIndex + 1].label}. Optional.`));
-        return;
-      }
-
-      if (activeMetadata.length > 0) {
-        setMode({ ...mode, meanings, stage: "metadata", metadataIndex: 0 });
-        setBuffer(""); setStatusLines(buildStatusLines(`Enter ${activeMetadata[0].label}. Optional.`)); return;
-      }
-      if (selectableTags.length > 0) { setMode({ ...mode, meanings, stage: "tags", tagIndex: 0 }); setBuffer(""); setStatusLines(buildStatusLines("Select tags with Space, then press Enter.")); return; }
-      const entry = backend.addEntry(workbook.id, mode.vocabulary, meanings[0], meanings, mode.metadata, mode.selectedTagIds);
-      setMode({ kind: "command" });
-      setBuffer("");
-      refreshEntries(`Added #${entry.id}.`);
-      return;
-    }
-
-    if (mode.kind === "edit") {
-      if (mode.stage === "vocabulary") {
-        if (!text) {
-          setStatusLines(buildStatusLines("Vocabulary is required."));
-          return;
-        }
-
-        setMode({
-          kind: "edit",
-          stage: "meaning",
-          entryId: mode.entryId,
-          vocabulary: text,
-          meanings: mode.meanings,
-          meaningIndex: 0,
-          metadata: mode.metadata, metadataIndex: 0, selectedTagIds: mode.selectedTagIds, tagIndex: 0,
-        });
-        setBuffer(mode.meanings[0] ?? "");
-        setStatusLines(buildStatusLines(`Update ${workbook.meaningAttributes[0]?.label ?? "Primary Meaning"}.`));
-        return;
-      }
-
-      if (mode.stage === "metadata") {
-        const field = activeMetadata[mode.metadataIndex];
-        const metadata = { ...mode.metadata, [field.key]: text };
-        if (mode.metadataIndex + 1 < activeMetadata.length) { setMode({ ...mode, metadata, metadataIndex: mode.metadataIndex + 1 }); setBuffer(mode.metadata[activeMetadata[mode.metadataIndex + 1].key] ?? ""); setStatusLines(buildStatusLines(`Update ${activeMetadata[mode.metadataIndex + 1].label}. Optional.`)); return; }
-        if (selectableTags.length > 0) { setMode({ ...mode, metadata, stage: "tags", tagIndex: 0 }); setBuffer(""); setStatusLines(buildStatusLines("Select tags with Space, then press Enter.")); return; }
-        const entry = backend.updateEntry(mode.entryId, mode.vocabulary, mode.meanings[0], mode.meanings, metadata, mode.selectedTagIds); setMode({ kind: "command" }); setBuffer(""); refreshEntries(`Updated #${entry.id}.`); return;
-      }
-      if (mode.stage === "tags") {
-        const entry = backend.updateEntry(mode.entryId, mode.vocabulary, mode.meanings[0], mode.meanings, mode.metadata, mode.selectedTagIds); setMode({ kind: "command" }); setBuffer(""); refreshEntries(`Updated #${entry.id}.`); return;
-      }
-
-      if (mode.meaningIndex === 0 && !text) {
-        setStatusLines(buildStatusLines("Meaning is required."));
-        return;
-      }
-
-      const meanings = [...mode.meanings];
-      meanings[mode.meaningIndex] = text;
-      if (mode.meaningIndex + 1 < workbook.meaningAttributes.length) {
-        setMode({ ...mode, meanings, meaningIndex: mode.meaningIndex + 1 });
-        setBuffer(mode.meanings[mode.meaningIndex + 1] ?? "");
-        setStatusLines(buildStatusLines(`Update ${workbook.meaningAttributes[mode.meaningIndex + 1].label}. Optional.`));
-        return;
-      }
-      if (activeMetadata.length > 0) { setMode({ ...mode, meanings, stage: "metadata", metadataIndex: 0 }); setBuffer(mode.metadata[activeMetadata[0].key] ?? ""); setStatusLines(buildStatusLines(`Update ${activeMetadata[0].label}. Optional.`)); return; }
-      if (selectableTags.length > 0) { setMode({ ...mode, meanings, stage: "tags", tagIndex: 0 }); setBuffer(""); setStatusLines(buildStatusLines("Select tags with Space, then press Enter.")); return; }
-      const entry = backend.updateEntry(mode.entryId, mode.vocabulary, meanings[0], meanings, mode.metadata, mode.selectedTagIds);
-      setMode({ kind: "command" });
-      setBuffer("");
-      refreshEntries(`Updated #${entry.id}.`);
-      return;
-    }
-
-    if (mode.kind === "delete") {
-      if (text.toLowerCase() !== "yes") {
-        cancelActiveMode("Delete cancelled.");
-        return;
-      }
-
-      backend.deleteEntry(mode.entryId);
-      setMode({ kind: "command" });
-      setBuffer("");
-      refreshEntries(`Deleted ${mode.label}.`);
-    }
+    if (mode.kind === "importSaveDefault") { dispatchIntent({ type: "importSavePathDecision", save: mode.save }); return; }
+    if (mode.kind === "add") { dispatchIntent({ type: "addFieldSubmitted", value }); return; }
+    if (mode.kind === "edit") { dispatchIntent({ type: "editFieldSubmitted", value }); return; }
+    if (mode.kind === "delete") { dispatchIntent({ type: "deleteConfirmationSubmitted", value: text }); }
   }
-
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
       onQuit();
@@ -870,13 +660,13 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     }
 
     if ((mode.kind === "add" || mode.kind === "edit") && mode.stage === "tags" && selectableTags.length > 0) {
-      if (key.upArrow) { setMode({ ...mode, tagIndex: Math.max(0, mode.tagIndex - 1) }); return; }
-      if (key.downArrow) { setMode({ ...mode, tagIndex: Math.min(selectableTags.length - 1, mode.tagIndex + 1) }); return; }
-      if (input === " ") { const id = selectableTags[mode.tagIndex].id; setMode({ ...mode, selectedTagIds: mode.selectedTagIds.includes(id) ? mode.selectedTagIds.filter((v) => v !== id) : [...mode.selectedTagIds, id] }); return; }
+      if (key.upArrow) { dispatchIntent({ type: "tagCursorMoved", delta: -1 }); return; }
+      if (key.downArrow) { dispatchIntent({ type: "tagCursorMoved", delta: 1 }); return; }
+      if (input === " " ) { const id = selectableTags[mode.tagIndex].id; dispatchIntent({ type: "tagSelectionToggled", tagId: id }); return; }
     }
 
     if (mode.kind === "importSaveDefault") {
-      if (key.leftArrow || key.upArrow || key.rightArrow || key.downArrow) setMode({ ...mode, save: !mode.save });
+      if (key.leftArrow || key.upArrow || key.rightArrow || key.downArrow) dispatchIntent({ type: "importSavePathToggled" });
       else if (key.return) continueImportAfterSaveChoice(mode);
       return;
     }
@@ -893,17 +683,17 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       if (key.upArrow || key.downArrow) {
         const current = focuses.indexOf(mode.focus);
         const next = key.upArrow ? Math.max(0, current - 1) : Math.min(focuses.length - 1, current + 1);
-        setMode({ ...mode, focus: focuses[next], pathBuffer: mode.focus === "path" ? mode.path : mode.pathBuffer, error: mode.focus === "path" ? undefined : mode.error });
+        dispatchIntent({ type: "importPreviewFocusChanged", focus: focuses[next] });
       } else if (mode.focus === "path") {
-        if (key.ctrl && input === "u") setMode({ ...mode, pathBuffer: "", error: undefined });
+        if (key.ctrl && input === "u") dispatchIntent({ type: "importPathBufferChanged", path: "" });
         else if (key.return && !mode.loading) void reloadImportPreview(mode);
       } else if (mode.focus === "filters" && (key.leftArrow || key.rightArrow)) {
         const filters: ImportPreviewFilter[] = ["records", "ready", "invalid", "duplicates"];
         const current = filters.indexOf(mode.filter);
         const next = key.leftArrow ? (current <= 0 ? filters.length - 1 : current - 1) : (current + 1) % filters.length;
-        setMode({ ...mode, filter: filters[next], pageIndex: 0 });
-      } else if (mode.focus === "records" && key.leftArrow) setMode({ ...mode, pageIndex: Math.max(0, safePreviewPage - 1) });
-      else if (mode.focus === "records" && key.rightArrow) setMode({ ...mode, pageIndex: Math.min(pageCount - 1, safePreviewPage + 1) });
+        dispatchIntent({ type: "importPreviewFilterChanged", filter: filters[next] });
+      } else if (mode.focus === "records" && key.leftArrow) dispatchIntent({ type: "importPreviewPageChanged", delta: -1 });
+      else if (mode.focus === "records" && key.rightArrow) dispatchIntent({ type: "importPreviewPageChanged", delta: 1 });
       else if (key.return) confirmImport(mode);
       return;
     }
@@ -911,7 +701,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     if (mode.kind === "importLoading") return;
 
     if (mode.kind === "command" && (key.upArrow || key.downArrow) && !commandPaletteActive) {
-      setInputFocus((current) => current === "command" ? "search" : "command");
+      dispatchIntent({ type: "inputFocusChanged", focus: inputFocus === "command" ? "search" : "command" });
       return;
     }
 
@@ -934,12 +724,12 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     }
 
     if (key.leftArrow && mode.kind === "command" && !commandPaletteActive) {
-      setPageIndex((current) => Math.max(0, current - 1));
+      dispatchIntent({ type: "pageChanged", delta: -1 });
       return;
     }
 
     if (key.rightArrow && mode.kind === "command" && !commandPaletteActive) {
-      setPageIndex((current) => Math.min(getPageCount(visibleEntries.length) - 1, current + 1));
+      dispatchIntent({ type: "pageChanged", delta: 1 });
       return;
     }
 
@@ -979,7 +769,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     () => buildTableLayout(visibleEntries, safePageIndex, width, PAGE_SIZE, workbook.vocabularyLabel, workbook.meaningAttributes[0]?.label ?? "Primary Meaning", workbook.metadataAttributes),
     [visibleEntries, safePageIndex, width, workbook.vocabularyLabel, workbook.meaningAttributes, workbook.metadataAttributes],
   );
-  const screenTitle = `${TITLE} â€” ${workbook.name}`;
+  const screenTitle = `${TITLE} ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ${workbook.name}`;
   const searchBoxWidth = Math.min(34, Math.max(12, width - 56));
   const footerLeftWidth = Math.floor((width - searchBoxWidth) / 2);
   const footerRightWidth = Math.max(0, width - searchBoxWidth - footerLeftWidth);
@@ -988,7 +778,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   if (mode.kind === "importSaveDefault") {
     return (
       <Box flexDirection="column">
-        <Text color="cyan" bold>{centerLine(`Import â€” ${workbook.name}`, width)}</Text>
+        <Text color="cyan" bold>{centerLine(`Import ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ${workbook.name}`, width)}</Text>
         <Text color="green">{padLine(mode.resultMessage, width)}</Text>
         <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Imported from: ${truncate(mode.path, Math.max(1, width - 15))}`, width)}</Text>
         <Text>{padLine("", width)}</Text>
@@ -1018,13 +808,13 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
         : `${mode.preview.entries.length > 0 ? "Enter imports | " : ""}Up/Down select | Left/Right page | Esc cancels`;
     return (
       <Box flexDirection="column">
-        <Text color="cyan" bold>{centerLine(`Import â€” ${workbook.name}`, width)}</Text>
+        <Text color="cyan" bold>{centerLine(`Import ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ${workbook.name}`, width)}</Text>
         <Box flexDirection="column" borderStyle="single" borderColor={mode.focus === "path" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}>
-          <CaretInputLine value={mode.pathBuffer} onChange={(pathBuffer) => setMode({ ...mode, pathBuffer, error: undefined })} prefix={mode.loading ? "Loading: " : "File: "} width={Math.max(1, width - 4)} color={mode.focus === "path" ? "white" : AUXILIARY_TEXT_COLOR} focus={mode.focus === "path" && !mode.loading} inputKey={`import-preview-path-${mode.path}`} />
+          <CaretInputLine value={mode.pathBuffer} onChange={(pathBuffer) => dispatchIntent({ type: "importPathBufferChanged", path: pathBuffer })} prefix={mode.loading ? "Loading: " : "File: "} width={Math.max(1, width - 4)} color={mode.focus === "path" ? "white" : AUXILIARY_TEXT_COLOR} focus={mode.focus === "path" && !mode.loading} inputKey={`import-preview-path-${mode.path}`} />
         </Box>
         {mode.error ? <Text color="red">{padLine(mode.error, width)}</Text> : null}
         <Text>{padLine("", width)}</Text>
-        <Text color={mode.focus === "filters" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{"â”€".repeat(width)}</Text>
+        <Text color={mode.focus === "filters" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{"ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬".repeat(width)}</Text>
         <Box flexDirection="row" gap={3}>
           <Text color={mode.focus === "filters" ? SELECTED_TEXT_COLOR : "white"} bold={true}>Filters</Text>
           {filters.map((item) => <Text key={item.key} color={item.key === mode.filter && mode.focus === "filters" ? SELECTED_TEXT_COLOR : "white"} bold={item.key === mode.filter}>{formatImportPreviewFilter(item.label, item.count, item.key === mode.filter)}</Text>)}
@@ -1083,7 +873,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
               </Text>)}
             </Box>;
           })}
-          <Text color={AUXILIARY_TEXT_COLOR}>{padLine("Space selects | â†‘â†“ moves | Enter confirms", width)}</Text>
+          <Text color={AUXILIARY_TEXT_COLOR}>{padLine("Space selects | ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Å“ moves | Enter confirms", width)}</Text>
         </>
       ) : null}
       <Text>{padLine("", width)}</Text>
@@ -1382,18 +1172,18 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
   const title = stage === "destructive-confirm" ? "Confirm data removal" : stage === "confirm" ? `Confirm ${existingWorkbook ? "changes" : "creation"}` : `Question ${question}/4`;
   const listItems = stage === "tags" ? tags.map((item) => item.name) : attributes.map((item) => `${item.label}${presetKeys.has(item.key) ? " (preset)" : ""}`);
   const tagSummary = existingWorkbook ? existingTagTypes.map((type) => `${type.name} (${type.tags.length} tags)`).join(", ") || "None" : addPosType ? `Part of Speech (${tags.length} tags)` : "None";
-  const summary = [`Name: ${name}`, `Vocabulary: ${vocabularyLabel} â€” ${selectedType.label}`, `Preset attributes: ${presetEnabled && selectedType.kind === "preset_language" ? "enabled" : "disabled"}`, `Tag types: ${tagSummary}`, `Meanings: ${meanings.map((item) => item.label).join(", ")}`, `Optional attributes: ${attributes.map((item) => item.label).join(", ") || "None"}`];
+  const summary = [`Name: ${name}`, `Vocabulary: ${vocabularyLabel} ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ${selectedType.label}`, `Preset attributes: ${presetEnabled && selectedType.kind === "preset_language" ? "enabled" : "disabled"}`, `Tag types: ${tagSummary}`, `Meanings: ${meanings.map((item) => item.label).join(", ")}`, `Optional attributes: ${attributes.map((item) => item.label).join(", ") || "None"}`];
   let description = `Enter a name for the ${existingWorkbook ? "workbook" : "new workbook"}.`;
   let footer = "Enter next | Esc cancel";
-  if (stage === "type") { description = existingWorkbook ? "The vocabulary type is fixed after workbook creation." : "Choose a vocabulary type with Up/Down. This selection is required."; footer = existingWorkbook ? "â†/â†’ navigate questions | Esc cancel" : "â†‘â†“ choose type | â†/â†’ navigate questions | Esc cancel"; }
-  if (stage === "label") { description = "Choose the label users will see for vocabulary entries. You can edit the default."; footer = "â†/â†’ to navigate questions | Enter next | Esc cancel"; }
-  if (stage === "preset") { description = "Choose whether to add the language preset fields now. After creation they become ordinary attributes managed in Settings."; footer = "â†‘â†“/Space toggle | â†/â†’ navigate questions | Esc cancel"; }
-  if (stage === "pos") { description = "Choose whether to add the Part of Speech tag type and its preset tags. After creation, manage it in Settings."; footer = "â†‘â†“/Space toggle | â†/â†’ to navigate questions | Esc cancel"; }
-  if (stage === "tags") { description = "Review and customize the Part of Speech tags for this workbook."; footer = "â†‘â†“ select | Ctrl+A add | Ctrl+R rename | Del delete | â†/â†’ navigate"; }
-  if (stage === "meaning-count") { description = "Choose how many meaning fields each vocabulary entry will have."; footer = "â†‘â†“ choose number | â†/â†’ to navigate questions | Esc cancel"; }
-  if (stage === "meaning") { description = "Name each meaning field. Use a language preset or type your own label."; footer = "â†‘â†“ choose preset | â†/â†’ to navigate questions | Esc cancel"; }
-  if (stage === "attributes") { description = "Add any other fields you want to store, such as examples or notes. Preset fields are marked."; footer = "â†‘â†“ select | Ctrl+A add | Ctrl+R rename | Del delete | â†/â†’ navigate"; }
-  if (stage === "confirm") { description = `Review the workbook configuration before ${existingWorkbook ? "saving" : "creating"} it.`; footer = `â† back | Enter ${existingWorkbook ? "save" : "create"} | Esc cancel`; }
+  if (stage === "type") { description = existingWorkbook ? "The vocabulary type is fixed after workbook creation." : "Choose a vocabulary type with Up/Down. This selection is required."; footer = existingWorkbook ? "ÃƒÂ¢Ã¢â‚¬Â Ã‚Â/ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ navigate questions | Esc cancel" : "ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Å“ choose type | ÃƒÂ¢Ã¢â‚¬Â Ã‚Â/ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ navigate questions | Esc cancel"; }
+  if (stage === "label") { description = "Choose the label users will see for vocabulary entries. You can edit the default."; footer = "ÃƒÂ¢Ã¢â‚¬Â Ã‚Â/ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ to navigate questions | Enter next | Esc cancel"; }
+  if (stage === "preset") { description = "Choose whether to add the language preset fields now. After creation they become ordinary attributes managed in Settings."; footer = "ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Å“/Space toggle | ÃƒÂ¢Ã¢â‚¬Â Ã‚Â/ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ navigate questions | Esc cancel"; }
+  if (stage === "pos") { description = "Choose whether to add the Part of Speech tag type and its preset tags. After creation, manage it in Settings."; footer = "ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Å“/Space toggle | ÃƒÂ¢Ã¢â‚¬Â Ã‚Â/ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ to navigate questions | Esc cancel"; }
+  if (stage === "tags") { description = "Review and customize the Part of Speech tags for this workbook."; footer = "ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Å“ select | Ctrl+A add | Ctrl+R rename | Del delete | ÃƒÂ¢Ã¢â‚¬Â Ã‚Â/ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ navigate"; }
+  if (stage === "meaning-count") { description = "Choose how many meaning fields each vocabulary entry will have."; footer = "ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Å“ choose number | ÃƒÂ¢Ã¢â‚¬Â Ã‚Â/ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ to navigate questions | Esc cancel"; }
+  if (stage === "meaning") { description = "Name each meaning field. Use a language preset or type your own label."; footer = "ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Å“ choose preset | ÃƒÂ¢Ã¢â‚¬Â Ã‚Â/ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ to navigate questions | Esc cancel"; }
+  if (stage === "attributes") { description = "Add any other fields you want to store, such as examples or notes. Preset fields are marked."; footer = "ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Å“ select | Ctrl+A add | Ctrl+R rename | Del delete | ÃƒÂ¢Ã¢â‚¬Â Ã‚Â/ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ navigate"; }
+  if (stage === "confirm") { description = `Review the workbook configuration before ${existingWorkbook ? "saving" : "creating"} it.`; footer = `ÃƒÂ¢Ã¢â‚¬Â Ã‚Â back | Enter ${existingWorkbook ? "save" : "create"} | Esc cancel`; }
   if (stage === "destructive-confirm") { description = "This change will permanently remove stored field values."; footer = "Type yes and press Enter | Esc cancel"; }
   return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(title, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(description, width)}</Text><Text>{padLine("", width)}</Text>
     {stage === "name" ? <CaretInputLine key="workbook-name" prefix="Workbook name: " value={name} onChange={(value) => { setName(value); setError(""); }} width={width} color="cyan" inputKey="workbook-name" /> : null}
@@ -1567,10 +1357,10 @@ function WorkbookEditScreen({
   const stageHint = stage === "name"
     ? "Enter a workbook name."
     : stage === "vocabulary"
-      ? "Type a custom label, or use â†‘â†“ to choose a language. Blank uses Vocabulary."
+      ? "Type a custom label, or use ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Å“ to choose a language. Blank uses Vocabulary."
       : stage === "count"
-        ? "Use â†‘â†“ to choose 1â€“5 meaning attributes, then press Enter."
-        : `Meaning ${meaningIndex + 1}/${meaningCount}: type a label or use â†‘â†“ for a language preset.`;
+        ? "Use ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Å“ to choose 1ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“5 meaning attributes, then press Enter."
+        : `Meaning ${meaningIndex + 1}/${meaningCount}: type a label or use ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Å“ for a language preset.`;
 
   return (
     <Box flexDirection="column">
@@ -1672,7 +1462,7 @@ function SettingsHomeScreen({ workbook, onAttributes, onTags, onImport, onAppear
   const sections = ["Attributes", "Tags", "Import", "Appearance"];
   useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => { stdout.off("resize", f); }; }, [stdout]);
   useInput((input, key) => { if (key.ctrl && input === "c") onQuit(); else if (key.escape) onCancel(); else if (key.upArrow) setSelected((v) => v <= 0 ? sections.length - 1 : v - 1); else if (key.downArrow) setSelected((v) => (v + 1) % sections.length); else if (key.return) [onAttributes, onTags, onImport, onAppearance][selected](); });
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Settings â€” ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Choose a settings section.", width)}</Text><Text>{padLine("", width)}</Text>{sections.map((section, index) => <Text key={section} color={index === selected ? SELECTED_TEXT_COLOR : "white"}>{padLine(`${index === selected ? ">" : " "} ${section}`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Up/Down select | Enter open | Esc back", width)}</Text></Box>;
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Settings ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Choose a settings section.", width)}</Text><Text>{padLine("", width)}</Text>{sections.map((section, index) => <Text key={section} color={index === selected ? SELECTED_TEXT_COLOR : "white"}>{padLine(`${index === selected ? ">" : " "} ${section}`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Up/Down select | Enter open | Esc back", width)}</Text></Box>;
 }
 
 function ImportSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook: WorkbookRow; onSave: (workbook: WorkbookRow) => void; onCancel: () => void; onQuit: () => void }): JSX.Element {
@@ -1714,7 +1504,7 @@ function ImportSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook
       return;
     }
   });
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Import Settings â€” ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Default import file", width)}</Text><Text>{padLine("", width)}</Text><CaretInputLine prefix="> " value={buffer} onChange={(value) => { setBuffer(value); setMessage(""); setHasError(false); }} width={width} color="cyan" focus={!saving} inputKey="import-settings-path" /><Text>{padLine("", width)}</Text><Text color={hasError ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Enter saves | Ctrl+U clears | Esc cancels", width)}</Text></Box>;
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Import Settings ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Default import file", width)}</Text><Text>{padLine("", width)}</Text><CaretInputLine prefix="> " value={buffer} onChange={(value) => { setBuffer(value); setMessage(""); setHasError(false); }} width={width} color="cyan" focus={!saving} inputKey="import-settings-path" /><Text>{padLine("", width)}</Text><Text color={hasError ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Enter saves | Ctrl+U clears | Esc cancels", width)}</Text></Box>;
 }
 
 function AppearanceSettingsScreen({ onCancel, onQuit }: { onCancel: () => void; onQuit: () => void }): JSX.Element {
@@ -1874,16 +1664,16 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
 
   if (screenMode === "exit-confirm") {
     const choices = ["Save changes", "Discard changes", "Continue editing"];
-    return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Unsaved attribute changes", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Choose what to do with your changes.", width)}</Text><Text>{padLine("", width)}</Text>{choices.map((choice, index) => <Text key={choice} color={index === exitChoice ? SELECTED_TEXT_COLOR : "white"}>{padLine(`${index === exitChoice ? ">" : " "} ${choice}`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("â†‘â†“ select | Enter confirm | Esc continue editing", width)}</Text></Box>;
+    return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Unsaved attribute changes", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Choose what to do with your changes.", width)}</Text><Text>{padLine("", width)}</Text>{choices.map((choice, index) => <Text key={choice} color={index === exitChoice ? SELECTED_TEXT_COLOR : "white"}>{padLine(`${index === exitChoice ? ">" : " "} ${choice}`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Å“ select | Enter confirm | Esc continue editing", width)}</Text></Box>;
   }
   if (screenMode === "destructive-confirm") {
     return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Confirm data removal", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Saving will permanently remove stored values from these fields:", width)}</Text><Text>{padLine("", width)}</Text>{destructiveFields.map((field) => <Text key={field.label} color="red">{padLine(`${field.label}: ${field.valueCount} populated value(s)`, width)}</Text>)}<Text>{padLine("", width)}</Text><CaretInputLine prefix="Type yes: " value={confirmBuffer} onChange={(value) => { setConfirmBuffer(value); setMessage(""); }} width={width} color="cyan" inputKey="attribute-destructive-confirm" /><Text color="red">{padLine(message, width)}</Text><Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Enter confirm | Esc continue editing", width)}</Text></Box>;
   }
 
-  const meaningFooter = meanings[0] === selectedField ? "â†‘â†“ navigate | Ctrl+A add | Ctrl+R rename | Esc leave" : `â†‘â†“ navigate | Ctrl+A add | Ctrl+R rename${selectedField?.id === undefined ? "" : " | Ctrl+P make primary"} | Space show/hide | Del remove | Esc leave`;
-  const footer = editAction !== "none" ? "Enter confirm | Esc cancel edit" : selected.section === "vocabulary" ? "â†‘â†“ navigate | Ctrl+R rename | Esc leave" : selected.section === "meaning" ? meaningFooter : "â†‘â†“ navigate | Ctrl+A add | Ctrl+R rename | Space show/hide | Del remove | Esc leave";
+  const meaningFooter = meanings[0] === selectedField ? "ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Å“ navigate | Ctrl+A add | Ctrl+R rename | Esc leave" : `ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Å“ navigate | Ctrl+A add | Ctrl+R rename${selectedField?.id === undefined ? "" : " | Ctrl+P make primary"} | Space show/hide | Del remove | Esc leave`;
+  const footer = editAction !== "none" ? "Enter confirm | Esc cancel edit" : selected.section === "vocabulary" ? "ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Å“ navigate | Ctrl+R rename | Esc leave" : selected.section === "meaning" ? meaningFooter : "ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Å“ navigate | Ctrl+A add | Ctrl+R rename | Space show/hide | Del remove | Esc leave";
   const row = (field: MetadataAttribute, fieldIndex: number) => <Text key={field.id ?? field.key} color={selected.fieldIndex === fieldIndex ? SELECTED_TEXT_COLOR : "white"}>{`${selected.fieldIndex === fieldIndex ? ">" : " "} ${field.label} [${field.visible ? "shown" : "hidden"}]${meanings[0] === field ? " (primary, required)" : ""}`}</Text>;
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Attributes â€” ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Configure field names and visibility. Changes are staged until you leave this page.", width)}</Text><Text color={message ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text>
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Attributes ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Configure field names and visibility. Changes are staged until you leave this page.", width)}</Text><Text color={message ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text>
     <Box flexDirection="column" borderStyle="single" borderColor={selected.section === "vocabulary" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}><Text bold color={selected.section === "vocabulary" ? SELECTED_TEXT_COLOR : undefined}>Vocabulary</Text><Text color={AUXILIARY_TEXT_COLOR}>The workbook type is fixed. Only this display name can be changed.</Text><Text color={selected.section === "vocabulary" ? SELECTED_TEXT_COLOR : "white"}>{`${selected.section === "vocabulary" ? ">" : " "} ${vocabularyLabel} [shown] (required)`}</Text></Box>
     <Box flexDirection="column" borderStyle="single" borderColor={selected.section === "meaning" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}><Text bold color={selected.section === "meaning" ? SELECTED_TEXT_COLOR : undefined}>Meanings</Text><Text color={AUXILIARY_TEXT_COLOR}>The Primary Meaning is required and always shown. Up to five meanings are supported.</Text>{fields.map((field, index) => field.role === "meaning" ? row(field, index) : null)}</Box>
     <Box flexDirection="column" borderStyle="single" borderColor={selected.section === "optional" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}><Text bold color={selected.section === "optional" ? SELECTED_TEXT_COLOR : undefined}>Optional Attributes</Text><Text color={AUXILIARY_TEXT_COLOR}>Supplemental fields can be freely added, renamed, hidden, shown, or removed.</Text>{optional.length ? fields.map((field, index) => field.role === "optional" ? row(field, index) : null) : <Text color={selected.section === "optional" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{`${selected.section === "optional" ? ">" : " "} No optional attributes`}</Text>}</Box>
@@ -1985,13 +1775,13 @@ function TagSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook: W
 
   if (screenMode === "exit-confirm") {
     const choices = ["Save changes", "Discard changes", "Continue editing"];
-    return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Unsaved tag changes", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Choose what to do with your changes.", width)}</Text><Text>{padLine("", width)}</Text>{choices.map((choice, index) => <Text key={choice} color={index === exitChoice ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${index === exitChoice ? ">" : " "} ${choice}`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("â†‘â†“ select | Enter confirm | Esc continue editing", width)}</Text></Box>;
+    return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Unsaved tag changes", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Choose what to do with your changes.", width)}</Text><Text>{padLine("", width)}</Text>{choices.map((choice, index) => <Text key={choice} color={index === exitChoice ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${index === exitChoice ? ">" : " "} ${choice}`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Å“ select | Enter confirm | Esc continue editing", width)}</Text></Box>;
   }
   if (screenMode === "destructive-confirm") {
     return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Confirm tag data removal", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Saving will permanently remove these entry assignments:", width)}</Text><Text>{padLine("", width)}</Text>{removals.map((item, index) => <Text key={`${item.typeName}-${item.tagName}-${index}`} color="red">{padLine(`${item.typeName}${item.tagName ? ` / ${item.tagName}` : ""}: ${item.assignmentCount} assignment(s) across ${item.entryCount} entry/entries`, width)}</Text>)}<Text>{padLine("", width)}</Text><CaretInputLine prefix="Type yes: " value={confirmBuffer} onChange={(value) => { setConfirmBuffer(value); setMessage(""); }} width={width} color="cyan" inputKey="tag-destructive-confirm" /><Text color="red">{padLine(message, width)}</Text><Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Enter confirm | Esc continue editing", width)}</Text></Box>;
   }
-  const footer = action !== "none" ? "Enter confirm | Esc cancel edit" : selected.kind === "add-type" ? "â†‘â†“ navigate | Enter add tag type | Esc leave" : selected.kind === "type" ? "â†‘â†“ navigate | Space show/hide | Ctrl+A add tag | Ctrl+R rename | Del remove | Esc leave" : "â†‘â†“ navigate | Ctrl+A add tag | Ctrl+R rename | Del remove | Esc leave";
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Tags â€” ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Organize tags into types. Changes are staged until you leave this page.", width)}</Text><Text color={message ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text>
+  const footer = action !== "none" ? "Enter confirm | Esc cancel edit" : selected.kind === "add-type" ? "ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Å“ navigate | Enter add tag type | Esc leave" : selected.kind === "type" ? "ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Å“ navigate | Space show/hide | Ctrl+A add tag | Ctrl+R rename | Del remove | Esc leave" : "ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ËœÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Å“ navigate | Ctrl+A add tag | Ctrl+R rename | Del remove | Esc leave";
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Tags ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Organize tags into types. Changes are staged until you leave this page.", width)}</Text><Text color={message ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text>
     {types.map((type, typeIndex) => { const active = selected.kind !== "add-type" && selected.typeIndex === typeIndex; const titleActive = selected.kind === "type" && active; return <Box key={type.id ?? `new-${typeIndex}`} flexDirection="column" borderStyle="single" borderColor={active ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}><Text bold color={titleActive ? SELECTED_TEXT_COLOR : undefined}>{`${titleActive ? "> " : ""}${type.name} [${type.visible ? "shown" : "hidden"}]`}</Text>{type.tags.length ? type.tags.map((tag, tagIndex) => { const tagActive = selected.kind === "tag" && selected.typeIndex === typeIndex && selected.tagIndex === tagIndex; return <Text key={tag.id ?? `new-${tagIndex}`} color={tagActive ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{`${tagActive ? ">" : " "} ${tag.name}`}</Text>; }) : <Text color={AUXILIARY_TEXT_COLOR}>No tags</Text>}</Box>; })}
     <Box flexDirection="column" borderStyle="classic" borderColor={selected.kind === "add-type" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}><Text color={selected.kind === "add-type" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{`${selected.kind === "add-type" ? "> " : ""} + Add tag type`}</Text></Box>
     {action !== "none" ? <CaretInputLine key={`${action}-${safeSelectedIndex}`} prefix={`${action.includes("type") ? "Tag type" : "Tag"} name: `} value={buffer} onChange={(value) => { setBuffer(value); setMessage(""); }} width={width} color="cyan" inputKey={`${action}-${safeSelectedIndex}`} /> : null}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footer, width)}</Text></Box>;
@@ -2048,8 +1838,8 @@ function EntryViewScreen({ workbook, entryId, onNavigate, onCancel, onQuit }: { 
   const previousEntry = currentIndex > 0 ? entries[currentIndex - 1] : null;
   const nextEntry = currentIndex >= 0 && currentIndex + 1 < entries.length ? entries[currentIndex + 1] : null;
   const navigationHalfWidth = Math.max(1, Math.floor(width / 2) - 2);
-  const previousLabel = previousEntry ? `â† ${truncate(previousEntry.vocabulary, Math.max(1, navigationHalfWidth - 2))}` : detailNavigationLabel(null, "previous");
-  const nextLabel = nextEntry ? `${truncate(nextEntry.vocabulary, Math.max(1, navigationHalfWidth - 2))} â†’` : detailNavigationLabel(null, "next");
+  const previousLabel = previousEntry ? `ÃƒÂ¢Ã¢â‚¬Â Ã‚Â ${truncate(previousEntry.vocabulary, Math.max(1, navigationHalfWidth - 2))}` : detailNavigationLabel(null, "previous");
+  const nextLabel = nextEntry ? `${truncate(nextEntry.vocabulary, Math.max(1, navigationHalfWidth - 2))} ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢` : detailNavigationLabel(null, "next");
   const tagTypes = backend.listTagTypes(workbook.id);
   const sections = buildDetailSections(workbook, entry, tagTypes);
   const fields = [...sections.meanings, ...sections.attributes];
@@ -2107,23 +1897,25 @@ function PracticeTagLine({ typeName, tagNames, width }: { typeName: string; tagN
 function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workbook: WorkbookRow; count: number; onCancel: () => void; onQuit: () => void; onDone: (score: number, total: number) => void }): JSX.Element {
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
-  const [orchestration, setOrchestration] = useState(() => {
-    const candidates = orchestrationCapabilities.practice.selectPracticeCandidates(workbook.id, count);
-    return updateOrchestration(createInitialState(workbook, [], orchestrationCapabilities.reads.listTagTypes(workbook.id)), { type: "practiceStarted", candidates }).state;
-  });
+  const [orchestration, setOrchestration] = useState(() => createInitialState(workbook, [], orchestrationCapabilities.reads.listTagTypes(workbook.id)));
   const practice = orchestration.practice;
   const tagTypes = orchestration.tagTypes;
   const current = practice.currentEntry;
   useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => { stdout.off("resize", f); }; }, [stdout]);
+  useEffect(() => {
+    const transition = updateOrchestration(orchestration, { type: "practiceCandidatesRequested", workbookId: workbook.id, count });
+    setOrchestration(transition.state);
+    void runTransitionEffects(transition.effects, transition.state, orchestrationCapabilities).then((results) => {
+      for (const result of results) setOrchestration((latest) => updateOrchestration(latest, result).state);
+    });
+  }, [workbook.id, count]);
 
   function dispatch(intent: import("./orchestration.js").Intent): void {
     setOrchestration((currentState) => {
       const transition = updateOrchestration(currentState, intent);
-      for (const effect of transition.effects) {
-        void executeEffect(effect, transition.state, orchestrationCapabilities).then((result) => {
-          setOrchestration((latest) => updateOrchestration(latest, result).state);
-        });
-      }
+      void runTransitionEffects(transition.effects, transition.state, orchestrationCapabilities).then((results) => {
+        for (const result of results) setOrchestration((latest) => updateOrchestration(latest, result).state);
+      });
       return transition.state;
     });
   }
@@ -2139,11 +1931,11 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
   });
 
   if (practice.phase === "empty") return <PracticeEmptyScreen workbook={workbook} onCancel={onCancel} onQuit={onQuit} />;
-  if (practice.phase === "done") return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice — ${workbook.name}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="green">{padLine(`Final initial-round score: ${practice.score}/${practice.candidates.length}`, width)}</Text><Text>{padLine("Press Enter to return.", width)}</Text></Box>;
-  if (practice.phase === "detail" && current) return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Entry #${current.id}`, width)}</Text><Text color="red">{padLine(`Incorrect — expected: ${current.vocabulary}`, width)}</Text><Text>{padLine("", width)}</Text>{buildExplicitEntryLines(workbook, current).map((line, i) => <Text key={`${i}-${line}`} color={AUXILIARY_TEXT_COLOR}>{padLine(line, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Enter advances. Esc cancels.", width)}</Text></Box>;
-  const roundLabel = practice.phase === "retry" ? `Retry round ${practice.retryNumber} — Question ${practice.index + 1}/${practice.retryRound.length}` : `Question ${practice.index + 1}/${practice.candidates.length}`;
+  if (practice.phase === "done") return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice Ã¢â‚¬â€ ${workbook.name}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="green">{padLine(`Final initial-round score: ${practice.score}/${practice.candidates.length}`, width)}</Text><Text>{padLine("Press Enter to return.", width)}</Text></Box>;
+  if (practice.phase === "detail" && current) return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Entry #${current.id}`, width)}</Text><Text color="red">{padLine(`Incorrect Ã¢â‚¬â€ expected: ${current.vocabulary}`, width)}</Text><Text>{padLine("", width)}</Text>{buildExplicitEntryLines(workbook, current).map((line, i) => <Text key={`${i}-${line}`} color={AUXILIARY_TEXT_COLOR}>{padLine(line, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Enter advances. Esc cancels.", width)}</Text></Box>;
+  const roundLabel = practice.phase === "retry" ? `Retry round ${practice.retryNumber} Ã¢â‚¬â€ Question ${practice.index + 1}/${practice.retryRound.length}` : `Question ${practice.index + 1}/${practice.candidates.length}`;
   const visibleTagGroups = current ? visibleAssignedTagGroups(current, tagTypes) : [];
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice — ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(roundLabel, width)}</Text><Text>{padLine("", width)}</Text><Text>{padLine(`${workbook.meaningAttributes[0]?.label ?? "Primary Meaning"}: ${current?.meaning ?? ""}`, width)}</Text>{visibleTagGroups.map((group) => <PracticeTagLine key={group.typeId} typeName={group.typeName} tagNames={group.tagNames} width={width} />)}<Text>{padLine("", width)}</Text><CaretInputLine key={`${practice.phase}-${practice.index}-${practice.retryNumber}`} prefix="Answer: " value={orchestration.commandBuffer} onChange={(value) => setOrchestration((state) => ({ ...state, commandBuffer: value }))} width={width} color="cyan" focus={practice.feedback === null} inputKey={`${practice.phase}-${practice.index}-${practice.retryNumber}`} /><Text>{padLine("", width)}</Text><Text color="green">{padLine(practice.feedback ?? "Enter submits. Esc cancels.", width)}</Text></Box>;
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice Ã¢â‚¬â€ ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(roundLabel, width)}</Text><Text>{padLine("", width)}</Text><Text>{padLine(`${workbook.meaningAttributes[0]?.label ?? "Primary Meaning"}: ${current?.meaning ?? ""}`, width)}</Text>{visibleTagGroups.map((group) => <PracticeTagLine key={group.typeId} typeName={group.typeName} tagNames={group.tagNames} width={width} />)}<Text>{padLine("", width)}</Text><CaretInputLine key={`${practice.phase}-${practice.index}-${practice.retryNumber}`} prefix="Answer: " value={orchestration.commandBuffer} onChange={(value) => setOrchestration((state) => ({ ...state, commandBuffer: value }))} width={width} color="cyan" focus={practice.feedback === null} inputKey={`${practice.phase}-${practice.index}-${practice.retryNumber}`} /><Text>{padLine("", width)}</Text><Text color="green">{padLine(practice.feedback ?? "Enter submits. Esc cancels.", width)}</Text></Box>;
 }
 function PracticeEmptyScreen({ workbook, onCancel, onQuit }: { workbook: WorkbookRow; onCancel: () => void; onQuit: () => void }): JSX.Element {
   useInput((input, key) => { if (key.ctrl && input === "c") onQuit(); else if (key.escape || key.return) onCancel(); });
