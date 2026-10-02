@@ -49,7 +49,6 @@ type LanguagePreset = { code: string; label: string };
 
 const PAGE_SIZE = 20;
 const TITLE = "VocabHelper 3.4.0";
-const FOOTER_HINT = "Navigate pages with <- -> | Esc returns to menu";
 const AUXILIARY_TEXT_COLOR = "#878787";
 const GRAY_TIER_COLOR = "#777777";
 const SELECTED_TEXT_COLOR = "#cea8ff";
@@ -71,7 +70,6 @@ const VOCABULARY_TYPES: Array<{ kind: VocabularyKind; code: string | null; label
   { kind: "non_language", code: null, label: "Not a Language" },
 ];
 const WORKBOOK_MENU_HINT = "Up/Down select | Enter open | Ctrl+E edit | Del delete | + create | Esc exit";
-const WORKBOOK_CREATE_HINT = "Type a name and press Enter. Esc returns to the menu.";
 const WORKBOOK_DELETE_HINT = "Type yes to confirm. Enter deletes. Esc cancels.";
 const COMMANDS: CommandSpec[] = [
   { name: "list", hint: "Refresh and show entries" },
@@ -224,23 +222,6 @@ function clampPageIndex(pageIndex: number, totalEntries: number): number {
   return Math.max(0, Math.min(pageIndex, getPageCount(totalEntries) - 1));
 }
 
-function buildFooterLine(width: number, pageText: string, hintText: string): string {
-  if (width <= 0) {
-    return "";
-  }
-
-  const left = truncate(pageText, width);
-  const right = truncate(hintText, width);
-  const leftWidth = displayWidth(left);
-  const rightWidth = displayWidth(right);
-  if (leftWidth + rightWidth + 2 >= width) {
-    const gap = Math.max(1, width - leftWidth);
-    return `${left}${" ".repeat(gap)}${truncate(right, width - leftWidth - gap)}`;
-  }
-
-  return `${left}${" ".repeat(width - leftWidth - rightWidth)}${right}`;
-}
-
 type VocabularyTableLayout = { border: string; header: string; columns: Array<{ key: string; label: string }>; widths: number[]; entries: EntryRow[] };
 
 function buildTableLayout(entries: EntryRow[], pageIndex: number, width: number, availableRows: number, vocabularyLabel: string, meaningLabel: string, attributes?: MetadataAttribute[]): VocabularyTableLayout {
@@ -278,10 +259,6 @@ function VocabularyTableCell({ entry, width, tagTypes }: { entry: EntryRow; widt
 
 function buildHelpText(): string {
   return ["Commands:", ...COMMANDS.map((command) => `/${command.name}  ${command.hint}`), "Esc cancels forms.", "Use <- -> to change pages."].join("\n");
-}
-
-function buildPendingCommandText(command: ParameterizedCommand): string {
-  return `Enter id for /${command}.`;
 }
 
 function tierColor(tier: EntryRow["tier"]): string {
@@ -472,26 +449,10 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     setSuggestionIndex(0);
   }, [buffer, mode.kind, commandSuggestions.length]);
 
-  function refreshEntries(message?: string): void {
-    if (message) {
-      const next = { ...orchestrationRef.current, statusLines: buildStatusLines(message) };
-      syncOrchestration(next);
-    }
-    dispatchIntent({ type: "commandSubmitted", raw: "/list" });
-  }
-
   function applySearch(query: string): void {
     const normalized = query.trim();
     setSearchDraft(normalized);
     dispatchIntent({ type: "searchChanged", query: normalized });
-  }
-
-  function beginAdd(): void {
-    dispatchIntent({ type: "commandSubmitted", raw: "/add" });
-  }
-
-  function beginImport(): void {
-    dispatchIntent({ type: "commandSubmitted", raw: "/import" });
   }
 
   async function reloadImportPreview(mode: Extract<UiMode, { kind: "importPreview" }>): Promise<void> {
@@ -508,14 +469,6 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
 
   function beginPendingCommand(command: ParameterizedCommand): void {
     dispatchIntent({ type: "commandSubmitted", raw: `/${command}` });
-  }
-
-  function beginEdit(entryId: number): void {
-    dispatchIntent({ type: "commandSubmitted", raw: `/edit ${entryId}` });
-  }
-
-  function beginDelete(entryId: number): void {
-    dispatchIntent({ type: "commandSubmitted", raw: `/delete ${entryId}` });
   }
 
   function cancelActiveMode(message = "Cancelled."): void {
@@ -994,11 +947,15 @@ function WorkbookMenuScreen({
       <Text>{displayRows.border}</Text>
       <Text>{displayRows.header}</Text>
       <Text>{displayRows.border}</Text>
-      {displayRows.rows.map((row, index) => (
-        <Text key={`${index}-${row.line}`} color={row.selected ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>
-          {padLine(row.line, width)}
-        </Text>
-      ))}
+      {displayRows.rows.map((row, index) => {
+        const isLast = index === displayRows.rows.length - 1;
+        const color = row.selected ? SELECTED_TEXT_COLOR : isLast ? AUXILIARY_TEXT_COLOR : "white";
+        return (
+          <Text key={`${index}-${row.line}`} color={color}>
+            {padLine(row.line, width)}
+          </Text>
+        );
+      })}
       <Text>{padLine("", width)}</Text>
       <Text color={AUXILIARY_TEXT_COLOR}>{rightLine(WORKBOOK_MENU_HINT, width)}</Text>
       <Text>{padLine("", width)}</Text>
@@ -1197,195 +1154,6 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
     {stage === "confirm" ? <>{summary.map((line) => <Text key={line} color={AUXILIARY_TEXT_COLOR}>{padLine(line, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color="green">{padLine(`Press Enter to ${existingWorkbook ? "save changes" : "create the workbook"}.`, width)}</Text></> : null}
     {stage === "destructive-confirm" ? <>{destructiveFields.map((field) => <Text key={field.label} color="red">{padLine(`${field.label}: ${field.valueCount} populated value(s)`, width)}</Text>)}<Text>{padLine("", width)}</Text><CaretInputLine key="workbook-destructive-confirm" prefix="Confirmation: " value={confirmBuffer} onChange={(value) => { setConfirmBuffer(value); setError(""); }} width={width} color="cyan" inputKey="workbook-destructive-confirm" /></> : null}
     <Text>{padLine("", width)}</Text><Text color="red">{padLine(error, width)}</Text><Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footer, width)}</Text></Box>;
-}
-
-function WorkbookEditScreen({
-  onCreate,
-  onCancel,
-  onQuit,
-  existingWorkbook,
-}: {
-  onCreate: (name: string, vocabularyLabel: string, vocabularyLanguageCode: string | null, meaningAttributes: MeaningAttribute[]) => void;
-  onCancel: () => void;
-  onQuit: () => void;
-  existingWorkbook?: WorkbookRow;
-}): JSX.Element {
-  const { stdout } = useStdout();
-  const [width, setWidth] = useState(() => stdout?.columns ?? 80);
-  const [stage, setStage] = useState<"name" | "vocabulary" | "count" | "meaning">("name");
-  const [name, setName] = useState(existingWorkbook?.name ?? "");
-  const [vocabularyLabel, setVocabularyLabel] = useState(existingWorkbook?.vocabularyLabel ?? "");
-  const [vocabularyLanguageCode, setVocabularyLanguageCode] = useState<string | null>(existingWorkbook?.vocabularyLanguageCode ?? null);
-  const [meaningCount, setMeaningCount] = useState(existingWorkbook?.meaningAttributes.length ?? 1);
-  const [meaningAttributes, setMeaningAttributes] = useState<MeaningAttribute[]>(existingWorkbook?.meaningAttributes ?? [
-    { position: 1, label: "Primary Meaning", languageCode: null },
-  ]);
-  const [meaningIndex, setMeaningIndex] = useState(0);
-  const [buffer, setBuffer] = useState(existingWorkbook?.name ?? "");
-  const [paletteIndex, setPaletteIndex] = useState(0);
-  const [paletteActive, setPaletteActive] = useState(false);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    if (!stdout) {
-      return;
-    }
-
-    const onResize = () => {
-      setWidth(stdout.columns ?? 80);
-    };
-
-    stdout.on("resize", onResize);
-    return () => {
-      stdout.off("resize", onResize);
-    };
-  }, [stdout]);
-
-  useInput((input, key) => {
-    if (key.ctrl && input === "c") {
-      onQuit();
-      return;
-    }
-
-    if (key.escape) {
-      onCancel();
-      return;
-    }
-
-    if (stage === "count") {
-      if (key.upArrow) {
-        setMeaningCount((current) => Math.min(5, current + 1));
-        return;
-      }
-      if (key.downArrow) {
-        setMeaningCount((current) => Math.max(1, current - 1));
-        return;
-      }
-      if (key.return) {
-        const nextAttributes = Array.from({ length: meaningCount }, (_, index) => meaningAttributes[index] ?? {
-          position: index + 1,
-          label: `Meaning ${index + 1}`,
-          languageCode: null,
-        });
-        setMeaningAttributes(nextAttributes);
-        setMeaningIndex(0);
-        setBuffer(nextAttributes[0]?.label ?? "Primary Meaning");
-        setStage("meaning");
-        setError("");
-      }
-      return;
-    }
-
-    if (key.upArrow || key.downArrow) {
-      if (stage === "vocabulary" || stage === "meaning") {
-        setPaletteActive(true);
-        setPaletteIndex((current) => key.upArrow
-          ? (current <= 0 ? LANGUAGE_PRESETS.length - 1 : current - 1)
-          : (current >= LANGUAGE_PRESETS.length - 1 ? 0 : current + 1));
-      }
-      return;
-    }
-
-    if (key.return) {
-      if (stage === "name") {
-        const trimmed = buffer.trim();
-        if (!trimmed) {
-          setError("Workbook name is required.");
-          return;
-        }
-        setName(trimmed);
-        setBuffer("");
-        setStage("vocabulary");
-        setError("");
-        return;
-      }
-
-      if (stage === "vocabulary") {
-        if (paletteActive) {
-          const preset = LANGUAGE_PRESETS[paletteIndex];
-          setVocabularyLabel(preset.label);
-          setVocabularyLanguageCode(preset.code);
-        } else {
-          const label = buffer.trim() || "Vocabulary";
-          setVocabularyLabel(label);
-          setVocabularyLanguageCode(existingWorkbook && label === existingWorkbook.vocabularyLabel ? existingWorkbook.vocabularyLanguageCode : null);
-        }
-        setBuffer("");
-        setStage("count");
-        setPaletteActive(false);
-        setError("");
-        return;
-      }
-
-      if (stage === "meaning") {
-        const label = paletteActive ? LANGUAGE_PRESETS[paletteIndex].label : (buffer.trim() || `Meaning ${meaningIndex + 1}`);
-        if (!label) {
-          setError("Meaning label is required.");
-          return;
-        }
-        const nextAttributes = meaningAttributes.map((attribute, index) => index === meaningIndex
-          ? { ...attribute, label, languageCode: paletteActive ? LANGUAGE_PRESETS[paletteIndex].code : (existingWorkbook && label === attribute.label ? attribute.languageCode : null) }
-          : attribute);
-        if (new Set(nextAttributes.map((attribute) => attribute.label.toLocaleLowerCase())).size !== nextAttributes.length) {
-          setError("Meaning attribute labels must be unique.");
-          return;
-        }
-        setMeaningAttributes(nextAttributes);
-        if (meaningIndex + 1 < meaningCount) {
-          setMeaningIndex((current) => current + 1);
-          setBuffer(nextAttributes[meaningIndex + 1]?.label ?? `Meaning ${meaningIndex + 2}`);
-          setPaletteActive(false);
-          setError("");
-          return;
-        }
-        try {
-          onCreate(name, vocabularyLabel || "Vocabulary", vocabularyLanguageCode, nextAttributes);
-        } catch (caught) {
-          setError(caught instanceof Error ? caught.message : "Could not create workbook.");
-        }
-        return;
-      }
-    }
-
-  });
-
-  const promptPrefix = stage === "name"
-    ? "Name: > "
-    : stage === "vocabulary"
-      ? "Vocabulary: > "
-      : `${meaningAttributes[meaningIndex]?.label ?? `Meaning ${meaningIndex + 1}`}: > `;
-  const stageHint = stage === "name"
-    ? "Enter a workbook name."
-    : stage === "vocabulary"
-      ? "Type a custom label, or use Up/Down to choose a language. Blank uses Vocabulary."
-      : stage === "count"
-        ? "Use Up/Down to choose 1-5 meaning attributes, then press Enter."
-        : `Meaning ${meaningIndex + 1}/${meaningCount}: type a label or use Up/Down for a language preset.`;
-
-  return (
-    <Box flexDirection="column">
-      <Text color="cyan" bold>
-        {centerLine(existingWorkbook ? "Edit workbook settings" : "Create workbook", width)}
-      </Text>
-      <Text color={AUXILIARY_TEXT_COLOR}>{padLine(stageHint, width)}</Text>
-      <Text>{padLine("", width)}</Text>
-      {stage === "count"
-        ? <Text color="cyan">{padLine(`Meaning attributes: ${meaningCount}`, width)}</Text>
-        : <CaretInputLine key={`${stage}-${meaningIndex}`} prefix={promptPrefix} value={buffer} onChange={(value) => { setBuffer(value); setPaletteActive(false); setError(""); }} width={width} color="cyan" inputKey={`${stage}-${meaningIndex}`} />}
-      {(stage === "vocabulary" || stage === "meaning") && paletteActive ? (
-        <>
-          <Text>{padLine("", width)}</Text>
-          {LANGUAGE_PRESETS.map((preset, index) => (
-            <Text key={preset.code} color={index === paletteIndex ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>
-              {padLine(`${index === paletteIndex ? ">" : " "} ${preset.label} (${preset.code})`, width)}
-            </Text>
-          ))}
-        </>
-      ) : null}
-      <Text>{padLine("", width)}</Text>
-      <Text color={AUXILIARY_TEXT_COLOR}>{padLine(error || "Enter advances. Esc cancels. Use /menu to return.", width)}</Text>
-    </Box>
-  );
 }
 
 function WorkbookDeleteConfirmScreen({
