@@ -161,6 +161,26 @@ test("answers are exact after trimming surrounding whitespace", async () => {
   assert.equal(s.state.practice.score, 1);
 });
 
+for (const round of ["initial", "retry"] as const) {
+  test(`correct ${round} answer stays visible until Enter advances`, async () => {
+    const s = session(1);
+    await s.start();
+    if (round === "retry") {
+      await s.answer("wrong");
+      await s.continue();
+    }
+    const answer = "  word1  ";
+    await s.answer(answer);
+    assert.equal(s.state.practice.feedback, "Correct!");
+    assert.equal(s.state.commandBuffer, answer);
+    await s.dispatch({ type: "practiceAnswerChanged", answer: "edited" });
+    assert.equal(s.state.commandBuffer, answer);
+    await s.continue();
+    assert.equal(s.state.commandBuffer, "");
+    assert.equal(s.state.practice.phase, "done");
+  });
+}
+
 test("empty candidates stay empty and ignore answer/advance intents", async () => {
   const s = session(0);
   await s.start();

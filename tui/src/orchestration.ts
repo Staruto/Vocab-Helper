@@ -215,7 +215,7 @@ export function update(state: OrchestrationState, intent: Intent): Transition {
     const pending = p.pendingAnswer;
     if (!pending || intent.requestId !== pending.requestId || intent.entry.id !== pending.entryId ||
         intent.isCorrect !== pending.isCorrect || intent.initialRound !== (pending.sourcePhase === "initial")) return { state, effects: [] };
-    return { state: { ...state, commandBuffer: "", practice: {
+    return { state: { ...state, commandBuffer: pending.isCorrect ? state.commandBuffer : "", practice: {
       ...p, pendingAnswer: null, currentEntry: intent.entry,
       phase: pending.isCorrect ? pending.sourcePhase : "detail",
       detailSourcePhase: pending.sourcePhase, feedback: pending.isCorrect ? "Correct!" : null,
