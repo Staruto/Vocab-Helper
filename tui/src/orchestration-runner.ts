@@ -7,7 +7,11 @@ export async function executeEffect(effect: Effect, state: OrchestrationState, c
     case "loadEntries":
       return { type: "entriesLoaded", entries: capabilities.reads.listEntries(effect.workbookId) };
     case "loadPracticeCandidates":
-      return { type: "practiceStarted", candidates: capabilities.practice.selectPracticeCandidates(effect.workbookId, effect.count) };
+      try {
+        return { type: "practiceStarted", requestId: effect.requestId, candidates: capabilities.practice.selectPracticeCandidates(effect.workbookId, effect.count) };
+      } catch (error) {
+        return { type: "practiceCandidatesFailed", requestId: effect.requestId, error: error instanceof Error ? error.message : "Could not load practice entries." };
+      }
     case "loadImportPreview": {
       try {
         const source = await capabilities.import.readLabeledTextFile(effect.path);
@@ -46,8 +50,12 @@ export async function executeEffect(effect: Effect, state: OrchestrationState, c
       capabilities.writes.deleteEntry(effect.entryId);
       return { type: "entriesLoaded", entries: state.entries.filter((entry) => entry.id !== effect.entryId), message: "Entry deleted." };
     case "recordPracticeResult": {
-      const entry = capabilities.practice.recordTestResult(effect.entryId, effect.isCorrect, effect.initialRound);
-      return { type: "practiceResultRecorded", entry, isCorrect: effect.isCorrect, initialRound: effect.initialRound };
+      try {
+        const entry = capabilities.practice.recordTestResult(effect.entryId, effect.isCorrect, effect.initialRound);
+        return { type: "practiceResultRecorded", requestId: effect.requestId, entry, isCorrect: effect.isCorrect, initialRound: effect.initialRound };
+      } catch (error) {
+        return { type: "practiceResultFailed", requestId: effect.requestId, error: error instanceof Error ? error.message : "Could not record practice result." };
+      }
     }
   }
 }

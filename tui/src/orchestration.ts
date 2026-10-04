@@ -16,8 +16,22 @@ export type UiMode =
   | { kind: "importSaveDefault"; path: string; save: boolean; resultMessage: string }
   | { kind: "importPreview"; path: string; pathBuffer: string; preview: ImportPreview; pageIndex: number; filter: ImportPreviewFilter; focus: ImportPreviewFocus; loading?: boolean; error?: string };
 
-export type PracticePhase = "empty" | "initial" | "retry" | "detail" | "done";
-export type PracticeState = { phase: PracticePhase; candidates: EntryRow[]; index: number; retryRound: EntryRow[]; nextRetryRound: EntryRow[]; retryNumber: number; currentEntry: EntryRow | null; detailSourcePhase: "initial" | "retry"; score: number; feedback: string | null };
+export type PracticePhase = "loading" | "empty" | "initial" | "retry" | "detail" | "done";
+export type PracticeState = {
+  phase: PracticePhase;
+  candidates: EntryRow[];
+  index: number;
+  retryRound: EntryRow[];
+  nextRetryRound: EntryRow[];
+  retryNumber: number;
+  currentEntry: EntryRow | null;
+  detailSourcePhase: "initial" | "retry";
+  score: number;
+  feedback: string | null;
+  requestId: number;
+  pendingAnswer: { requestId: number; entryId: number; isCorrect: boolean; sourcePhase: "initial" | "retry" } | null;
+  error: string | null;
+};
 
 export type OrchestrationState = {
   workbook: WorkbookRow;
@@ -68,22 +82,26 @@ export type Intent =
   | { type: "importCommitted"; result: ImportResult; resultMessage: string; path: string }
   | { type: "importPathSaved"; path: string | null }
   | { type: "practiceCandidatesRequested"; workbookId: number; count: number }
-  | { type: "practiceStarted"; candidates: EntryRow[] }
+  | { type: "practiceStarted"; candidates: EntryRow[]; requestId?: number }
+  | { type: "practiceCandidatesFailed"; requestId: number; error: string }
+  | { type: "practiceCancelled" }
+  | { type: "practiceAnswerChanged"; answer: string }
   | { type: "practiceAnswerSubmitted"; answer: string }
   | { type: "practiceRetryAdvanced" }
   | { type: "practiceDetailContinued" }
-  | { type: "practiceResultRecorded"; entry: EntryRow; isCorrect: boolean; initialRound: boolean };
+  | { type: "practiceResultRecorded"; requestId: number; entry: EntryRow; isCorrect: boolean; initialRound: boolean }
+  | { type: "practiceResultFailed"; requestId: number; error: string };
 
 export type Effect =
   | { type: "loadEntries"; workbookId: number }
-  | { type: "loadPracticeCandidates"; workbookId: number; count: number }
+  | { type: "loadPracticeCandidates"; workbookId: number; count: number; requestId: number }
   | { type: "loadImportPreview"; workbookId: number; path: string; requestId: number }
   | { type: "commitImport"; workbookId: number; path: string; entries: ImportEntryInput[] }
   | { type: "saveImportPath"; workbookId: number; path: string | null }
   | { type: "addEntry"; workbookId: number; vocabulary: string; meanings: string[]; attributes: Record<string, string>; tagIds: number[] }
   | { type: "updateEntry"; entryId: number; vocabulary: string; meanings: string[]; attributes: Record<string, string>; tagIds: number[] }
   | { type: "deleteEntry"; entryId: number }
-  | { type: "recordPracticeResult"; entryId: number; isCorrect: boolean; initialRound: boolean };
+  | { type: "recordPracticeResult"; requestId: number; entryId: number; isCorrect: boolean; initialRound: boolean };
 
 export type Transition = { state: OrchestrationState; effects: Effect[] };
 
@@ -94,7 +112,7 @@ const normalize = (raw: string): string[] => raw.trim().replace(/^\/+/, "").spli
 const entryLabel = (entry: EntryRow) => `#${entry.id} ${entry.vocabulary}`;
 
 export function createInitialState(workbook: WorkbookRow, entries: EntryRow[] = [], tagTypes: TagType[] = []): OrchestrationState {
-  return { workbook, entries, tagTypes, activeSearchQuery: "", pageIndex: 0, commandBuffer: "", inputFocus: "command", statusLines: status("Ready."), mode: { kind: "command" }, importRequestId: 0, practice: { phase: "empty", candidates: [], index: 0, retryRound: [], nextRetryRound: [], retryNumber: 1, currentEntry: null, detailSourcePhase: "initial", score: 0, feedback: null } };
+  return { workbook, entries, tagTypes, activeSearchQuery: "", pageIndex: 0, commandBuffer: "", inputFocus: "command", statusLines: status("Ready."), mode: { kind: "command" }, importRequestId: 0, practice: { phase: "empty", candidates: [], index: 0, retryRound: [], nextRetryRound: [], retryNumber: 1, currentEntry: null, detailSourcePhase: "initial", score: 0, feedback: null, requestId: 0, pendingAnswer: null, error: null } };
 }
 
 function formComplete(state: OrchestrationState, form: Extract<UiMode, { kind: "add" | "edit" }>): Transition {
@@ -108,7 +126,13 @@ export function update(state: OrchestrationState, intent: Intent): Transition {
   const effects: Effect[] = [];
   if (intent.type === "modeCancelled") return { state: { ...state, importRequestId: state.importRequestId + 1, mode: { kind: "command" }, commandBuffer: "", statusLines: status(intent.message ?? "Cancelled.") }, effects: [] };
   if (intent.type === "inputFocusChanged") return { state: { ...state, inputFocus: intent.focus }, effects: [] };
-  if (intent.type === "practiceCandidatesRequested") return { state: { ...state, practice: { ...state.practice, phase: "empty", candidates: [], currentEntry: null } }, effects: [{ type: "loadPracticeCandidates", workbookId: intent.workbookId, count: intent.count }] };
+  if (intent.type === "practiceCandidatesRequested") {
+    const requestId = state.practice.requestId + 1;
+    return {
+      state: { ...state, commandBuffer: "", practice: { ...createInitialState(state.workbook).practice, phase: "loading", requestId } },
+      effects: [{ type: "loadPracticeCandidates", workbookId: intent.workbookId, count: intent.count, requestId }],
+    };
+  }
   if (intent.type === "entriesLoaded") return { state: { ...state, entries: intent.entries, pageIndex: clampPage(state.pageIndex, intent.entries.length), statusLines: status(intent.message ?? `Loaded ${intent.entries.length} entr${intent.entries.length === 1 ? "y" : "ies"}.`) }, effects: [] };
   if (intent.type === "searchChanged") return { state: { ...state, commandBuffer: "", activeSearchQuery: intent.query.trim(), pageIndex: 0, statusLines: status(intent.query.trim() ? "Search updated." : "Search cleared.") }, effects: [] };
   if (intent.type === "pageChanged") return { state: { ...state, pageIndex: clampPage(state.pageIndex + intent.delta, state.entries.length) }, effects: [] };
@@ -144,10 +168,86 @@ export function update(state: OrchestrationState, intent: Intent): Transition {
   if (intent.type === "importCommitted") { const save = state.workbook.importFilePath !== intent.path; return { state: { ...state, mode: save ? { kind: "importSaveDefault", path: intent.path, save: false, resultMessage: intent.resultMessage } : { kind: "command" }, commandBuffer: "", statusLines: status(intent.resultMessage) }, effects: save ? [] : [{ type: "loadEntries", workbookId: state.workbook.id }] }; }
   if (intent.type === "importSavePathDecision") { const mode = state.mode; if (mode.kind !== "importSaveDefault") return { state, effects: [] }; return { state: { ...state, mode: { kind: "command" }, commandBuffer: "" }, effects: intent.save ? [{ type: "saveImportPath", workbookId: state.workbook.id, path: mode.path }, { type: "loadEntries", workbookId: state.workbook.id }] : [{ type: "loadEntries", workbookId: state.workbook.id }] }; }
   if (intent.type === "importPathSaved") return { state: { ...state, workbook: { ...state.workbook, importFilePath: intent.path }, statusLines: status("Import path saved.") }, effects: [] };
-  if (intent.type === "practiceStarted") { const phase: PracticePhase = intent.candidates.length ? "initial" : "empty"; return { state: { ...state, practice: { ...state.practice, phase, candidates: intent.candidates, index: 0, retryRound: [], nextRetryRound: [], retryNumber: 1, currentEntry: intent.candidates[0] ?? null, score: 0, feedback: null } }, effects: [] }; }
-  if (intent.type === "practiceAnswerSubmitted") { const p = state.practice; const current = p.phase === "initial" ? p.candidates[p.index] : p.phase === "retry" ? p.retryRound[p.index] : null; if (!current) return { state: { ...state, commandBuffer: "", practice: { ...p, phase: "done", currentEntry: null } }, effects: [] }; const isCorrect = intent.answer.trim() === current.vocabulary; return { state: { ...state, commandBuffer: "", practice: { ...p, feedback: isCorrect ? "Correct!" : null, currentEntry: current, phase: isCorrect ? p.phase : "detail", detailSourcePhase: p.phase === "retry" ? "retry" : "initial" } }, effects: [{ type: "recordPracticeResult", entryId: current.id, isCorrect, initialRound: p.phase === "initial" }] }; }
-  if (intent.type === "practiceResultRecorded") { const p = state.practice; const score = intent.initialRound && intent.isCorrect ? p.score + 1 : p.score; return { state: { ...state, practice: { ...p, score, currentEntry: intent.entry } }, effects: [] }; }
-  if (intent.type === "practiceDetailContinued" || intent.type === "practiceRetryAdvanced") { const p = state.practice; const source = p.detailSourcePhase; const queued = p.currentEntry ? [...p.nextRetryRound, p.currentEntry] : p.nextRetryRound; const round = source === "initial" ? p.candidates : p.retryRound; const nextIndex = p.index + 1; if (nextIndex < round.length) return { state: { ...state, practice: { ...p, phase: source, index: nextIndex, nextRetryRound: queued, currentEntry: round[nextIndex], feedback: null } }, effects: [] }; if (queued.length) return { state: { ...state, practice: { ...p, phase: "retry", retryRound: queued, nextRetryRound: [], index: 0, retryNumber: source === "retry" ? p.retryNumber + 1 : 1, currentEntry: queued[0], feedback: null } }, effects: [] }; return { state: { ...state, practice: { ...p, phase: "done", currentEntry: null, nextRetryRound: queued, feedback: null } }, effects: [] }; }
+  if (intent.type === "practiceStarted") {
+    const p = state.practice;
+    if (intent.requestId !== undefined && (intent.requestId !== p.requestId || p.phase !== "loading")) return { state, effects: [] };
+    return {
+      state: { ...state, commandBuffer: "", practice: {
+        ...createInitialState(state.workbook).practice,
+        requestId: intent.requestId ?? p.requestId + 1,
+        phase: intent.candidates.length ? "initial" : "empty",
+        candidates: intent.candidates,
+        currentEntry: intent.candidates[0] ?? null,
+      } },
+      effects: [],
+    };
+  }
+  if (intent.type === "practiceCandidatesFailed") {
+    const p = state.practice;
+    if (intent.requestId !== p.requestId || p.phase !== "loading") return { state, effects: [] };
+    return { state: { ...state, practice: { ...p, phase: "empty", error: intent.error } }, effects: [] };
+  }
+  if (intent.type === "practiceCancelled") {
+    return { state: { ...state, commandBuffer: "", practice: {
+      ...createInitialState(state.workbook).practice, requestId: state.practice.requestId + 1,
+    } }, effects: [] };
+  }
+  if (intent.type === "practiceAnswerChanged") {
+    const p = state.practice;
+    if ((p.phase !== "initial" && p.phase !== "retry") || p.pendingAnswer || p.feedback) return { state, effects: [] };
+    return { state: { ...state, commandBuffer: intent.answer, practice: { ...p, error: null } }, effects: [] };
+  }
+  if (intent.type === "practiceAnswerSubmitted") {
+    const p = state.practice;
+    if ((p.phase !== "initial" && p.phase !== "retry") || p.pendingAnswer || p.feedback || !p.currentEntry) return { state, effects: [] };
+    const requestId = p.requestId + 1;
+    const isCorrect = intent.answer.trim() === p.currentEntry.vocabulary;
+    return {
+      state: { ...state, commandBuffer: intent.answer, practice: {
+        ...p, requestId, error: null,
+        pendingAnswer: { requestId, entryId: p.currentEntry.id, isCorrect, sourcePhase: p.phase },
+      } },
+      effects: [{ type: "recordPracticeResult", requestId, entryId: p.currentEntry.id, isCorrect, initialRound: p.phase === "initial" }],
+    };
+  }
+  if (intent.type === "practiceResultRecorded") {
+    const p = state.practice;
+    const pending = p.pendingAnswer;
+    if (!pending || intent.requestId !== pending.requestId || intent.entry.id !== pending.entryId ||
+        intent.isCorrect !== pending.isCorrect || intent.initialRound !== (pending.sourcePhase === "initial")) return { state, effects: [] };
+    return { state: { ...state, commandBuffer: "", practice: {
+      ...p, pendingAnswer: null, currentEntry: intent.entry,
+      phase: pending.isCorrect ? pending.sourcePhase : "detail",
+      detailSourcePhase: pending.sourcePhase, feedback: pending.isCorrect ? "Correct!" : null,
+      score: p.score + (pending.sourcePhase === "initial" && pending.isCorrect ? 1 : 0),
+    } }, effects: [] };
+  }
+  if (intent.type === "practiceResultFailed") {
+    const p = state.practice;
+    if (!p.pendingAnswer || intent.requestId !== p.pendingAnswer.requestId) return { state, effects: [] };
+    return { state: { ...state, practice: { ...p, pendingAnswer: null, error: intent.error } }, effects: [] };
+  }
+  if (intent.type === "practiceDetailContinued" || intent.type === "practiceRetryAdvanced") {
+    const p = state.practice;
+    if (p.pendingAnswer || !p.currentEntry) return { state, effects: [] };
+    const incorrect = intent.type === "practiceDetailContinued";
+    if (incorrect ? p.phase !== "detail" : ((p.phase !== "initial" && p.phase !== "retry") || p.feedback !== "Correct!")) return { state, effects: [] };
+    const source = incorrect ? p.detailSourcePhase : p.phase === "retry" ? "retry" : "initial";
+    // Only the incorrect-answer detail screen adds an entry to the next round.
+    const queued = incorrect ? [...p.nextRetryRound, p.currentEntry] : p.nextRetryRound;
+    const round = source === "initial" ? p.candidates : p.retryRound;
+    const nextIndex = p.index + 1;
+    let practice: PracticeState;
+    if (nextIndex < round.length) {
+      practice = { ...p, phase: source, index: nextIndex, nextRetryRound: queued, currentEntry: round[nextIndex], feedback: null };
+    } else if (queued.length) {
+      practice = { ...p, phase: "retry", retryRound: queued, nextRetryRound: [], index: 0,
+        retryNumber: source === "retry" ? p.retryNumber + 1 : 1, currentEntry: queued[0], feedback: null };
+    } else {
+      practice = { ...p, phase: "done", currentEntry: null, retryRound: [], nextRetryRound: [], feedback: null };
+    }
+    return { state: { ...state, commandBuffer: "", practice }, effects: [] };
+  }
   return { state: next, effects };
 }
 

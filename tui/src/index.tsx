@@ -10,7 +10,7 @@ import { filterEntriesForSearch } from "./search.js";
 import { UiMode } from "./orchestration.js";
 import { createOrchestrationCapabilities } from "./orchestration-runner.js";
 import { createInitialState, update as updateOrchestration } from "./orchestration.js";
-import { runTransitionEffects } from "./ink-orchestration.js";
+import { createOrchestrationController, runTransitionEffects } from "./ink-orchestration.js";
 
 type ImportPreviewFocus = "path" | "filters" | "records";
 
@@ -1666,48 +1666,52 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
   const [orchestration, setOrchestration] = useState(() => createInitialState(workbook, [], orchestrationCapabilities.reads.listTagTypes(workbook.id)));
+  const controller = useRef<ReturnType<typeof createOrchestrationController> | null>(null);
   const practice = orchestration.practice;
   const tagTypes = orchestration.tagTypes;
   const current = practice.currentEntry;
   useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => { stdout.off("resize", f); }; }, [stdout]);
   useEffect(() => {
-    const transition = updateOrchestration(orchestration, { type: "practiceCandidatesRequested", workbookId: workbook.id, count });
-    setOrchestration(transition.state);
-    void runTransitionEffects(transition.effects, transition.state, orchestrationCapabilities).then((results) => {
-      for (const result of results) setOrchestration((latest) => updateOrchestration(latest, result).state);
-    });
+    const nextController = createOrchestrationController(
+      createInitialState(workbook, [], orchestrationCapabilities.reads.listTagTypes(workbook.id)),
+      orchestrationCapabilities, setOrchestration,
+    );
+    controller.current = nextController;
+    void nextController.dispatch({ type: "practiceCandidatesRequested", workbookId: workbook.id, count });
+    return () => { nextController.dispose(); };
   }, [workbook.id, count]);
 
   function dispatch(intent: import("./orchestration.js").Intent): void {
-    setOrchestration((currentState) => {
-      const transition = updateOrchestration(currentState, intent);
-      void runTransitionEffects(transition.effects, transition.state, orchestrationCapabilities).then((results) => {
-        for (const result of results) setOrchestration((latest) => updateOrchestration(latest, result).state);
-      });
-      return transition.state;
-    });
+    void controller.current?.dispatch(intent);
+  }
+
+  function leave(callback: () => void): void {
+    dispatch({ type: "practiceCancelled" });
+    controller.current?.dispose();
+    callback();
   }
 
   useInput((input, key) => {
-    if (key.ctrl && input === "c") return onQuit();
-    if (key.escape) return onCancel();
-    if (practice.phase === "empty") { if (key.return) onCancel(); return; }
-    if (practice.phase === "done") { if (key.return) onDone(practice.score, practice.candidates.length); return; }
-    if (practice.phase === "detail") { if (key.return) dispatch({ type: "practiceDetailContinued" }); return; }
-    if (practice.feedback !== null) { if (key.return) dispatch({ type: "practiceRetryAdvanced" }); return; }
-    if (key.return) dispatch({ type: "practiceAnswerSubmitted", answer: orchestration.commandBuffer });
+    if (key.ctrl && input === "c") return leave(onQuit);
+    if (key.escape) return leave(onCancel);
+    const latest = controller.current?.getState();
+    if (!latest) return;
+    const p = latest.practice;
+    if (p.phase === "loading" || p.pendingAnswer) return;
+    if (p.phase === "empty") { if (key.return) leave(onCancel); return; }
+    if (p.phase === "done") { if (key.return) leave(() => onDone(p.score, p.candidates.length)); return; }
+    if (p.phase === "detail") { if (key.return) dispatch({ type: "practiceDetailContinued" }); return; }
+    if (p.feedback !== null) { if (key.return) dispatch({ type: "practiceRetryAdvanced" }); return; }
+    if (key.return) dispatch({ type: "practiceAnswerSubmitted", answer: latest.commandBuffer });
   });
 
-  if (practice.phase === "empty") return <PracticeEmptyScreen workbook={workbook} onCancel={onCancel} onQuit={onQuit} />;
+  if (practice.phase === "loading") return <Box flexDirection="column"><Text color="cyan">Loading practice entries...</Text><Text color={AUXILIARY_TEXT_COLOR}>Esc cancels.</Text></Box>;
+  if (practice.phase === "empty") return <Box flexDirection="column"><Text color={practice.error ? "red" : "cyan"}>{practice.error ?? `No entries available in ${workbook.name}.`}</Text><Text color={AUXILIARY_TEXT_COLOR}>Press Enter or Esc to return.</Text></Box>;
   if (practice.phase === "done") return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice - ${workbook.name}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="green">{padLine(`Final initial-round score: ${practice.score}/${practice.candidates.length}`, width)}</Text><Text>{padLine("Press Enter to return.", width)}</Text></Box>;
   if (practice.phase === "detail" && current) return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Entry #${current.id}`, width)}</Text><Text color="red">{padLine(`Incorrect - expected: ${current.vocabulary}`, width)}</Text><Text>{padLine("", width)}</Text>{buildExplicitEntryLines(workbook, current).map((line, i) => <Text key={`${i}-${line}`} color={AUXILIARY_TEXT_COLOR}>{padLine(line, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Enter advances. Esc cancels.", width)}</Text></Box>;
   const roundLabel = practice.phase === "retry" ? `Retry round ${practice.retryNumber} - Question ${practice.index + 1}/${practice.retryRound.length}` : `Question ${practice.index + 1}/${practice.candidates.length}`;
   const visibleTagGroups = current ? visibleAssignedTagGroups(current, tagTypes) : [];
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice - ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(roundLabel, width)}</Text><Text>{padLine("", width)}</Text><Text>{padLine(`${workbook.meaningAttributes[0]?.label ?? "Primary Meaning"}: ${current?.meaning ?? ""}`, width)}</Text>{visibleTagGroups.map((group) => <PracticeTagLine key={group.typeId} typeName={group.typeName} tagNames={group.tagNames} width={width} />)}<Text>{padLine("", width)}</Text><CaretInputLine key={`${practice.phase}-${practice.index}-${practice.retryNumber}`} prefix="Answer: " value={orchestration.commandBuffer} onChange={(value) => setOrchestration((state) => ({ ...state, commandBuffer: value }))} width={width} color="cyan" focus={practice.feedback === null} inputKey={`${practice.phase}-${practice.index}-${practice.retryNumber}`} /><Text>{padLine("", width)}</Text><Text color="green">{padLine(practice.feedback ?? "Enter submits. Esc cancels.", width)}</Text></Box>;
-}
-function PracticeEmptyScreen({ workbook, onCancel, onQuit }: { workbook: WorkbookRow; onCancel: () => void; onQuit: () => void }): JSX.Element {
-  useInput((input, key) => { if (key.ctrl && input === "c") onQuit(); else if (key.escape || key.return) onCancel(); });
-  return <Box flexDirection="column"><Text color="cyan">{`No entries available in ${workbook.name}.`}</Text><Text color={AUXILIARY_TEXT_COLOR}>Press Enter or Esc to return.</Text></Box>;
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice - ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(roundLabel, width)}</Text><Text>{padLine("", width)}</Text><Text>{padLine(`${workbook.meaningAttributes[0]?.label ?? "Primary Meaning"}: ${current?.meaning ?? ""}`, width)}</Text>{visibleTagGroups.map((group) => <PracticeTagLine key={group.typeId} typeName={group.typeName} tagNames={group.tagNames} width={width} />)}<Text>{padLine("", width)}</Text><CaretInputLine key={`${practice.phase}-${practice.index}-${practice.retryNumber}`} prefix="Answer: " value={orchestration.commandBuffer} onChange={(answer) => dispatch({ type: "practiceAnswerChanged", answer })} width={width} color="cyan" focus={practice.feedback === null && !practice.pendingAnswer} inputKey={`${practice.phase}-${practice.index}-${practice.retryNumber}`} /><Text>{padLine("", width)}</Text><Text color={practice.error ? "red" : "green"}>{padLine(practice.error ?? (practice.pendingAnswer ? "Recording answer..." : practice.feedback ?? "Enter submits. Esc cancels."), width)}</Text></Box>;
 }
 
 function App(): JSX.Element {
