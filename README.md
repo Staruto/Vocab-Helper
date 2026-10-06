@@ -1,4 +1,4 @@
-# VocabHelper 3.4.0
+# VocabHelper 3.4.1
 
 A modern TypeScript TUI for vocabulary memorization.
 
@@ -48,6 +48,8 @@ Part of Speech: 名詞
 Japanese: 休暇
 English: vacation
 ```
+
+Updating an existing entry through `/edit` or `/import` resets its test count, error count, last-tested time, and next-test deadline, returning it to the gray, untested tier. Changes to vocabulary, meanings, optional fields, or assigned tags trigger the reset. Identical edits and imports preserve the test record.
 
 ## Database
 

@@ -295,16 +295,14 @@ export class VocabularyRepository {
           added++; touched.push(id); continue;
         }
         const current = this.getEntry(existingId)!;
-        const attrsEqual = JSON.stringify(current.attributes) === JSON.stringify(Object.fromEntries(Object.keys(current.attributes).map((k) => [k, entry.attributes[k] ?? ""])));
-        const meaningsEqual = JSON.stringify(current.meanings) === JSON.stringify(entry.meanings);
-        const tagsEqual = JSON.stringify(current.tags.map((tag) => tag.id).sort((a,b)=>a-b)) === JSON.stringify([...entry.tagIds].sort((a,b)=>a-b));
-        if (meaningsEqual && attrsEqual && tagsEqual) { unchanged++; touched.push(existingId); continue; }
+        if (this.entryContentMatches(current, entry)) { unchanged++; touched.push(existingId); continue; }
         this.db.prepare("DELETE FROM entry_field_values WHERE entry_id = ?").run(existingId);
         this.saveEntryValues(existingId, workbookId, entry.meanings, entry.attributes); this.saveEntryTags(existingId, workbookId, entry.tagIds);
         const currentTime = Date.parse(current.updatedAt);
         const candidateTime = Date.now();
         const updatedAt = new Date(Math.max(candidateTime, Number.isNaN(currentTime) ? candidateTime : currentTime + 1)).toISOString();
         this.db.prepare("UPDATE entries SET updated_at = ? WHERE id = ?").run(updatedAt, existingId);
+        this.resetEntryStats(existingId);
         updated++; touched.push(existingId);
       }
       return { added, updated, unchanged, entries: [...new Set(touched)].map((id) => this.getEntry(id)!) };
@@ -314,10 +312,13 @@ export class VocabularyRepository {
     const existing = this.requireEntry(entryId); const workbook = this.requireWorkbook(existing.workbookId);
     const values = this.normalizeEntryMeanings(workbook, meanings?.length ? meanings : [meaning]);
     this.validateEntryAssociations(existing.workbookId, attributes, tagIds);
+    const normalizedVocabulary = trimRequired(vocabulary, "Vocabulary");
+    if (this.entryContentMatches(existing, { vocabulary: normalizedVocabulary, meanings: values, attributes, tagIds })) return existing;
     transaction(this.db, () => {
-      this.db.prepare("UPDATE entries SET vocabulary = ?, updated_at = ? WHERE id = ?").run(trimRequired(vocabulary, "Vocabulary"), new Date().toISOString(), entryId);
+      this.db.prepare("UPDATE entries SET vocabulary = ?, updated_at = ? WHERE id = ?").run(normalizedVocabulary, new Date().toISOString(), entryId);
       this.db.prepare("DELETE FROM entry_field_values WHERE entry_id = ?").run(entryId);
       this.saveEntryValues(entryId, existing.workbookId, values, attributes); this.saveEntryTags(entryId, existing.workbookId, tagIds);
+      this.resetEntryStats(entryId);
     });
     return this.getEntry(entryId)!;
   }
@@ -662,6 +663,18 @@ export class VocabularyRepository {
       const typeId = Number(addType.run(workbookId, type.name, index + 1, type.visible ? 1 : 0).lastInsertRowid);
       for (const tag of type.tags) addTag.run(typeId, workbookId, tag.name);
     }
+  }
+  private entryContentMatches(current: EntryRow, input: ImportEntryInput): boolean {
+    const tagIds = new Set(input.tagIds);
+    return current.vocabulary === input.vocabulary
+      && current.meanings.length === input.meanings.length
+      && current.meanings.every((value, index) => value === input.meanings[index])
+      && Object.keys(current.attributes).every((key) => current.attributes[key] === (input.attributes[key] ?? ""))
+      && current.tags.length === tagIds.size
+      && current.tags.every((tag) => tagIds.has(tag.id));
+  }
+  private resetEntryStats(entryId: number): void {
+    this.db.prepare("UPDATE entry_stats SET test_count = 0, error_count = 0, last_tested = NULL, next_test_deadline = NULL WHERE entry_id = ?").run(entryId);
   }
   private normalizeEntryMeanings(workbook: WorkbookRow, input: string[]): string[] {
     const values = workbook.meaningAttributes.map((_, index) => trimOptional(input[index]) ?? "");
