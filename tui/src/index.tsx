@@ -1581,6 +1581,33 @@ function detailFieldLines(field: DetailField, width: number, keyWidth: number, v
   });
 }
 
+function EntryDetails({ workbook, entry, tagTypes, width }: { workbook: WorkbookRow; entry: EntryRow; tagTypes: TagType[]; width: number }): JSX.Element {
+  const sections = buildDetailSections(workbook, entry, tagTypes);
+  const fields = [...sections.meanings, ...sections.attributes];
+  const keyWidth = Math.min(Math.max(12, ...fields.map((field) => displayWidth(`${field.key}:`)), displayWidth("Last tested:")), Math.max(12, Math.floor(width * 0.4)));
+  const titleLines = wrapDetailText(entry.vocabulary, Math.max(1, width - 2));
+  const statusFields: DetailField[] = [
+    { key: "Tests", value: String(entry.testCount) },
+    { key: "Errors", value: String(entry.errorCount) },
+    { key: "Tier", value: `${entry.tier[0].toUpperCase()}${entry.tier.slice(1)}` },
+    { key: "Last tested", value: formatLastTested(entry.lastTested) },
+  ];
+  const renderFields = (items: DetailField[]) => items.flatMap((field) => detailFieldLines(field, width, keyWidth));
+  const renderStatusFields = statusFields.flatMap((field) => detailFieldLines(field, width, keyWidth, field.key === "Tier" ? tierColor(entry.tier) : "white"));
+  return <Box flexDirection="column">
+    {titleLines.map((line, index) => <Text key={`title-${index}`} color="cyan" bold>{centerLine(line, width)}</Text>)}
+    <Text>{padLine("", width)}</Text>
+    {sections.meanings.length ? <><Text color="cyan" bold>{padLine("Meanings", width)}</Text>{renderFields(sections.meanings)}</> : null}
+    {sections.attributes.length ? <><Text>{padLine("", width)}</Text><Text color="cyan" bold>{padLine("Attributes", width)}</Text>{renderFields(sections.attributes)}</> : null}
+    {sections.tags.length ? <><Text>{padLine("", width)}</Text><Text color="cyan" bold>{padLine("Tags", width)}</Text>{sections.tags.flatMap((group) => {
+      const names = group.tagNames.map((name) => `[${name}]`).join(" ");
+      return detailFieldLines({ key: group.typeName, value: names }, width, keyWidth, TAG_BADGE_COLOR);
+    })}</> : null}
+    <Text>{padLine("", width)}</Text><Text color="cyan" bold>{padLine("Review", width)}</Text>{renderStatusFields}
+    <Text>{padLine("", width)}</Text>
+  </Box>;
+}
+
 function EntryViewScreen({ workbook, entryId, onNavigate, onCancel, onQuit }: { workbook: WorkbookRow; entryId: number; onNavigate: (entryId: number) => void; onCancel: () => void; onQuit: () => void }): JSX.Element {
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
@@ -1607,32 +1634,11 @@ function EntryViewScreen({ workbook, entryId, onNavigate, onCancel, onQuit }: { 
   const previousEntry = currentIndex > 0 ? entries[currentIndex - 1] : null;
   const nextEntry = currentIndex >= 0 && currentIndex + 1 < entries.length ? entries[currentIndex + 1] : null;
   const navigationHalfWidth = Math.max(1, Math.floor(width / 2) - 2);
-  const previousLabel = previousEntry ? `< ${truncate(previousEntry.vocabulary, Math.max(1, navigationHalfWidth - 2))}` : detailNavigationLabel(null, "previous");
-  const nextLabel = nextEntry ? `${truncate(nextEntry.vocabulary, Math.max(1, navigationHalfWidth - 2))} -` : detailNavigationLabel(null, "next");
+  const previousLabel = previousEntry ? `← ${truncate(previousEntry.vocabulary, Math.max(1, navigationHalfWidth - 2))}` : detailNavigationLabel(null, "previous");
+  const nextLabel = nextEntry ? `${truncate(nextEntry.vocabulary, Math.max(1, navigationHalfWidth - 2))} →` : detailNavigationLabel(null, "next");
   const tagTypes = backend.listTagTypes(workbook.id);
-  const sections = buildDetailSections(workbook, entry, tagTypes);
-  const fields = [...sections.meanings, ...sections.attributes];
-  const keyWidth = Math.min(Math.max(12, ...fields.map((field) => displayWidth(`${field.key}:`)), displayWidth("Last tested:")), Math.max(12, Math.floor(width * 0.4)));
-  const titleLines = wrapDetailText(entry.vocabulary, Math.max(1, width - 2));
-  const statusFields: DetailField[] = [
-    { key: "Tests", value: String(entry.testCount) },
-    { key: "Errors", value: String(entry.errorCount) },
-    { key: "Tier", value: `${entry.tier[0].toUpperCase()}${entry.tier.slice(1)}` },
-    { key: "Last tested", value: formatLastTested(entry.lastTested) },
-  ];
-  const renderFields = (items: DetailField[]) => items.flatMap((field) => detailFieldLines(field, width, keyWidth));
-  const renderStatusFields = statusFields.flatMap((field) => detailFieldLines(field, width, keyWidth, field.key === "Tier" ? tierColor(entry.tier) : "white"));
   return <Box flexDirection="column">
-    {titleLines.map((line, index) => <Text key={`title-${index}`} color="cyan" bold>{centerLine(line, width)}</Text>)}
-    <Text>{padLine("", width)}</Text>
-    {sections.meanings.length ? <><Text color="cyan" bold>{padLine("Meanings", width)}</Text>{renderFields(sections.meanings)}</> : null}
-    {sections.attributes.length ? <><Text>{padLine("", width)}</Text><Text color="cyan" bold>{padLine("Attributes", width)}</Text>{renderFields(sections.attributes)}</> : null}
-    {sections.tags.length ? <><Text>{padLine("", width)}</Text><Text color="cyan" bold>{padLine("Tags", width)}</Text>{sections.tags.flatMap((group) => {
-      const names = group.tagNames.map((name) => `[${name}]`).join(" ");
-      return detailFieldLines({ key: group.typeName, value: names }, width, keyWidth, TAG_BADGE_COLOR);
-    })}</> : null}
-    <Text>{padLine("", width)}</Text><Text color="cyan" bold>{padLine("Review", width)}</Text>{renderStatusFields}
-    <Text>{padLine("", width)}</Text>
+    <EntryDetails workbook={workbook} entry={entry} tagTypes={tagTypes} width={width} />
     {boundaryMessage ? <Text color={AUXILIARY_TEXT_COLOR}>{padLine(boundaryMessage, width)}</Text> : null}
     <Text color={AUXILIARY_TEXT_COLOR}>{centerLine("Esc returns to the vocabulary list", width)}</Text>
     <Box width={width} justifyContent="space-between">
@@ -1640,20 +1646,6 @@ function EntryViewScreen({ workbook, entryId, onNavigate, onCancel, onQuit }: { 
       <Text>{nextLabel}</Text>
     </Box>
   </Box>;
-}
-
-function buildExplicitEntryLines(workbook: WorkbookRow, entry: EntryRow): string[] {
-  const assignedTagLines = backend.listTagTypes(workbook.id).flatMap((type) => {
-    const assigned = entry.tags.filter((tag) => tag.tagTypeId === type.id);
-    return assigned.length ? [`${type.name}: ${assigned.map((tag) => tag.name).join(", ")}`] : [];
-  });
-  return [
-    `ID: #${entry.id}`,
-    `${workbook.vocabularyLabel}: ${entry.vocabulary}`,
-    ...entry.meanings.map((meaning, index) => `${workbook.meaningAttributes[index]?.label ?? `Meaning ${index + 1}`}: ${meaning}`),
-    ...workbook.metadataAttributes.filter((attribute) => attribute.role === "optional").map((attribute) => `${attribute.label}: ${entry.attributes[attribute.key] ?? ""}`),
-    ...assignedTagLines,
-  ];
 }
 
 function PracticeTagLine({ typeName, tagNames, width }: { typeName: string; tagNames: string[]; width: number }): JSX.Element | null {
@@ -1694,14 +1686,17 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
 
   useInput((input, key) => {
     if (key.ctrl && input === "c") return leave(onQuit);
-    if (key.escape) return leave(onCancel);
     const latest = controller.current?.getState();
+    if (latest?.practice.phase === "detail") {
+      if (key.return || key.escape) dispatch({ type: "practiceDetailContinued" });
+      return;
+    }
+    if (key.escape) return leave(onCancel);
     if (!latest) return;
     const p = latest.practice;
     if (p.phase === "loading" || p.pendingAnswer) return;
     if (p.phase === "empty") { if (key.return) leave(onCancel); return; }
     if (p.phase === "done") { if (key.return) leave(() => onDone(p.score, p.candidates.length)); return; }
-    if (p.phase === "detail") { if (key.return) dispatch({ type: "practiceDetailContinued" }); return; }
     if (p.feedback !== null) { if (key.return) dispatch({ type: "practiceRetryAdvanced" }); return; }
     if (key.tab) { if (!key.shift) dispatch({ type: "practiceMeaningCycled" }); return; }
     if (key.return) dispatch({ type: "practiceAnswerSubmitted", answer: latest.commandBuffer });
@@ -1710,7 +1705,10 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
   if (practice.phase === "loading") return <Box flexDirection="column"><Text color="cyan">Loading practice entries...</Text><Text color={AUXILIARY_TEXT_COLOR}>Esc cancels.</Text></Box>;
   if (practice.phase === "empty") return <Box flexDirection="column"><Text color={practice.error ? "red" : "cyan"}>{practice.error ?? `No entries available in ${workbook.name}.`}</Text><Text color={AUXILIARY_TEXT_COLOR}>Press Enter or Esc to return.</Text></Box>;
   if (practice.phase === "done") return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice - ${workbook.name}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="green">{padLine(`Final initial-round score: ${practice.score}/${practice.candidates.length}`, width)}</Text><Text>{padLine("Press Enter to return.", width)}</Text></Box>;
-  if (practice.phase === "detail" && current) return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Entry #${current.id}`, width)}</Text><Text color="red">{padLine(`Incorrect - expected: ${current.vocabulary}`, width)}</Text><Text>{padLine("", width)}</Text>{buildExplicitEntryLines(workbook, current).map((line, i) => <Text key={`${i}-${line}`} color={AUXILIARY_TEXT_COLOR}>{padLine(line, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Enter advances. Esc cancels.", width)}</Text></Box>;
+  if (practice.phase === "detail" && current) return <Box flexDirection="column">
+    <EntryDetails workbook={workbook} entry={current} tagTypes={tagTypes} width={width} />
+    <Text color={AUXILIARY_TEXT_COLOR}>{centerLine("Enter or Esc returns to practice", width)}</Text>
+  </Box>;
   const roundLabel = practice.phase === "retry" ? `Retry round ${practice.retryNumber} - Question ${practice.index + 1}/${practice.retryRound.length}` : `Question ${practice.index + 1}/${practice.candidates.length}`;
   const visibleTagGroups = current ? visibleAssignedTagGroups(current, tagTypes) : [];
   return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice - ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(roundLabel, width)}</Text><Text>{padLine("", width)}</Text><Text>{padLine(`${workbook.meaningAttributes[practice.meaningIndex]?.label ?? "Primary Meaning"}: ${current?.meanings[practice.meaningIndex] || "-"}`, width)}</Text>{visibleTagGroups.map((group) => <PracticeTagLine key={group.typeId} typeName={group.typeName} tagNames={group.tagNames} width={width} />)}<Text>{padLine("", width)}</Text><CaretInputLine key={`${practice.phase}-${practice.index}-${practice.retryNumber}`} prefix="Answer: " value={orchestration.commandBuffer} onChange={(answer) => dispatch({ type: "practiceAnswerChanged", answer })} width={width} focus={practice.feedback === null && !practice.pendingAnswer} inputKey={`${practice.phase}-${practice.index}-${practice.retryNumber}`} /><Text>{padLine("", width)}</Text><Text color={practice.error ? "red" : "green"}>{padLine(practice.error ?? practice.feedback ?? "", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Tab cycle meanings | Enter submits | Esc cancels", width)}</Text></Box>;
