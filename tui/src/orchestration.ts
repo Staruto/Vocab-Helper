@@ -86,7 +86,7 @@ export type Intent =
   | { type: "practiceStarted"; candidates: EntryRow[]; requestId?: number }
   | { type: "practiceCandidatesFailed"; requestId: number; error: string }
   | { type: "practiceCancelled" }
-  | { type: "practiceMeaningCycled"; direction: 1 | -1 }
+  | { type: "practiceMeaningCycled" }
   | { type: "practiceAnswerChanged"; answer: string }
   | { type: "practiceAnswerSubmitted"; answer: string }
   | { type: "practiceRetryAdvanced" }
@@ -198,7 +198,7 @@ export function update(state: OrchestrationState, intent: Intent): Transition {
     const p = state.practice;
     const meaningCount = state.workbook.meaningAttributes.length;
     if ((p.phase !== "initial" && p.phase !== "retry") || p.pendingAnswer || p.feedback !== null || !p.currentEntry || meaningCount < 2) return { state, effects: [] };
-    return { state: { ...state, practice: { ...p, meaningIndex: (p.meaningIndex + intent.direction + meaningCount) % meaningCount } }, effects: [] };
+    return { state: { ...state, practice: { ...p, meaningIndex: (p.meaningIndex + 1) % meaningCount } }, effects: [] };
   }
   if (intent.type === "practiceAnswerChanged") {
     const p = state.practice;

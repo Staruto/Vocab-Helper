@@ -53,7 +53,7 @@ Updating an existing entry through `/edit` or `/import` resets its test count, e
 
 ## Practice
 
-Run `/test` to begin a practice session. For workbooks with multiple meanings, press Tab to show the next meaning or Shift+Tab to show the previous one, wrapping through the workbook's meaning order. Empty meanings display as `-`. Switching preserves your typed answer. Every new question starts on the primary meaning, including retry questions.
+Run `/test` to begin a practice session. For workbooks with multiple meanings, press Tab to show the next meaning, wrapping through the workbook's meaning order. Empty meanings display as `-`. Switching preserves your typed answer. Every new question starts on the primary meaning, including retry questions.
 
 ## Database
 

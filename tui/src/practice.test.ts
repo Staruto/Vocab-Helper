@@ -356,9 +356,9 @@ test("meaning cycling wraps in workbook order, includes blanks, and preserves th
   const candidate = { ...entry(1), meanings: ["first", "", "third"] };
   let state = update(createInitialState(multipleMeaningsWorkbook), { type: "practiceStarted", candidates: [candidate] }).state;
   state = update(state, { type: "practiceAnswerChanged", answer: "partial answer" }).state;
-  for (const [direction, expected] of [[1, 1], [1, 2], [1, 0], [-1, 2], [-1, 1], [-1, 0]] as const) {
+  for (const expected of [1, 2, 0, 1, 2, 0]) {
     const previous = state;
-    const transition = update(state, { type: "practiceMeaningCycled", direction });
+    const transition = update(state, { type: "practiceMeaningCycled" });
     state = transition.state;
     assert.deepEqual(transition.effects, []);
     assert.deepEqual(state, { ...previous, practice: { ...previous.practice, meaningIndex: expected } });
@@ -376,11 +376,9 @@ test("meaning cycling is ignored with one meaning or outside an unanswered quest
     { ...initial, practice: { ...initial.practice, feedback: "Correct!" } },
     { ...initial, practice: { ...initial.practice, currentEntry: null } },
   ]) {
-    for (const direction of [1, -1] as const) {
-      const transition = update(state, { type: "practiceMeaningCycled", direction });
-      assert.equal(transition.state, state);
-      assert.deepEqual(transition.effects, []);
-    }
+    const transition = update(state, { type: "practiceMeaningCycled" });
+    assert.equal(transition.state, state);
+    assert.deepEqual(transition.effects, []);
   }
 });
 
@@ -388,8 +386,8 @@ test("new questions and sessions reset the meaning, including correct, incorrect
   const s = session(3, multipleMeaningsWorkbook);
   await s.start();
   const cycle = async () => {
-    await s.dispatch({ type: "practiceMeaningCycled", direction: -1 });
-    assert.equal(s.state.practice.meaningIndex, 2);
+    await s.dispatch({ type: "practiceMeaningCycled" });
+    assert.equal(s.state.practice.meaningIndex, 1);
   };
   await cycle();
   await s.answer("word1");
