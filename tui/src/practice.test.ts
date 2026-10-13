@@ -4,6 +4,7 @@ import type { EntryRow, WorkbookRow } from "./db.js";
 import { createOrchestrationController, runTransitionEffects } from "./ink-orchestration.js";
 import { createInitialState, update } from "./orchestration.js";
 import type { Intent, OrchestrationCapabilities } from "./orchestration.js";
+import { textActionFromRawInput } from "./text-input.js";
 
 const workbook: WorkbookRow = {
   id: 1, name: "Practice", wordCount: 0, createdAt: "",
@@ -22,7 +23,7 @@ function entry(id: number): EntryRow {
 }
 const unexpected = (): never => { throw new Error("Unexpected capability call"); };
 
-function session(count: number) {
+function session(count: number, sessionWorkbook = workbook) {
   const entries = Array.from({ length: count }, (_, i) => entry(i + 1));
   const records: Array<{ id: number; correct: boolean; decreaseError: boolean }> = [];
   const capabilities: OrchestrationCapabilities = {
@@ -46,7 +47,7 @@ function session(count: number) {
       },
     },
   };
-  let state = createInitialState(workbook);
+  let state = createInitialState(sessionWorkbook);
   async function dispatch(intent: Intent) {
     const transition = update(state, intent);
     state = transition.state;
@@ -343,5 +344,91 @@ test("bounded sessions terminate after every combination of initial and first-re
       assert.equal(s.state.practice.score, 3 - initialMistakes.length);
       assert.equal(s.records.length, 3 + initialMistakes.length + remaining.length);
     }
+  }
+});
+
+const multipleMeaningsWorkbook: WorkbookRow = {
+  ...workbook,
+  meaningAttributes: ["English", "Japanese", "Chinese"].map((label, index) => ({ position: index + 1, label, languageCode: null })),
+};
+
+test("meaning cycling wraps in workbook order, includes blanks, and preserves the answer without effects", () => {
+  const candidate = { ...entry(1), meanings: ["first", "", "third"] };
+  let state = update(createInitialState(multipleMeaningsWorkbook), { type: "practiceStarted", candidates: [candidate] }).state;
+  state = update(state, { type: "practiceAnswerChanged", answer: "partial answer" }).state;
+  for (const [direction, expected] of [[1, 1], [1, 2], [1, 0], [-1, 2], [-1, 1], [-1, 0]] as const) {
+    const previous = state;
+    const transition = update(state, { type: "practiceMeaningCycled", direction });
+    state = transition.state;
+    assert.deepEqual(transition.effects, []);
+    assert.deepEqual(state, { ...previous, practice: { ...previous.practice, meaningIndex: expected } });
+    assert.equal(state.commandBuffer, "partial answer");
+    assert.equal(state.workbook.meaningAttributes[expected].label, ["English", "Japanese", "Chinese"][expected]);
+    assert.equal(state.practice.currentEntry?.meanings[expected], candidate.meanings[expected]);
+  }
+});
+
+test("meaning cycling is ignored with one meaning or outside an unanswered question", () => {
+  const single = update(createInitialState(workbook), { type: "practiceStarted", candidates: [entry(1)] }).state;
+  const initial = update(createInitialState(multipleMeaningsWorkbook), { type: "practiceStarted", candidates: [entry(1)] }).state;
+  const pending = update(initial, { type: "practiceAnswerSubmitted", answer: "word1" }).state;
+  for (const state of [single, pending, ...(["loading", "empty", "detail", "done"] as const).map((phase) => ({ ...initial, practice: { ...initial.practice, phase } })),
+    { ...initial, practice: { ...initial.practice, feedback: "Correct!" } },
+    { ...initial, practice: { ...initial.practice, currentEntry: null } },
+  ]) {
+    for (const direction of [1, -1] as const) {
+      const transition = update(state, { type: "practiceMeaningCycled", direction });
+      assert.equal(transition.state, state);
+      assert.deepEqual(transition.effects, []);
+    }
+  }
+});
+
+test("new questions and sessions reset the meaning, including correct, incorrect, and retry transitions", async () => {
+  const s = session(3, multipleMeaningsWorkbook);
+  await s.start();
+  const cycle = async () => {
+    await s.dispatch({ type: "practiceMeaningCycled", direction: -1 });
+    assert.equal(s.state.practice.meaningIndex, 2);
+  };
+  await cycle();
+  await s.answer("word1");
+  await s.continue();
+  assert.equal(s.state.practice.meaningIndex, 0);
+  await cycle();
+  await s.answer("wrong");
+  await s.continue();
+  assert.equal(s.state.practice.meaningIndex, 0);
+  await cycle();
+  await s.answer("wrong");
+  await s.continue();
+  assert.equal(s.state.practice.phase, "retry");
+  assert.equal(s.state.practice.meaningIndex, 0);
+  await cycle();
+  await s.answer("wrong");
+  await s.continue();
+  assert.equal(s.state.practice.meaningIndex, 0);
+  await cycle();
+  await s.answer("word3");
+  await s.continue();
+  assert.equal(s.state.practice.retryNumber, 2);
+  assert.equal(s.state.practice.meaningIndex, 0);
+  await cycle();
+  await s.answer("word2");
+  await s.continue();
+  assert.equal(s.state.practice.phase, "done");
+  assert.equal(s.state.practice.score, 1);
+  assert.equal(s.records.length, 6);
+  await s.start();
+  await cycle();
+  await s.dispatch({ type: "practiceCancelled" });
+  assert.equal(s.state.practice.meaningIndex, 0);
+  await s.start();
+  assert.equal(s.state.practice.meaningIndex, 0);
+});
+
+test("Tab and Shift+Tab never edit the practice answer or caret", () => {
+  for (const input of ["\t", "\x1b[Z"]) {
+    assert.equal(textActionFromRawInput(input), null);
   }
 });

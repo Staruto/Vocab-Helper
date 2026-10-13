@@ -51,6 +51,10 @@ English: vacation
 
 Updating an existing entry through `/edit` or `/import` resets its test count, error count, last-tested time, and next-test deadline, returning it to the gray, untested tier. Changes to vocabulary, meanings, optional fields, or assigned tags trigger the reset. Identical edits and imports preserve the test record.
 
+## Practice
+
+Run `/test` to begin a practice session. For workbooks with multiple meanings, press Tab to show the next meaning or Shift+Tab to show the previous one, wrapping through the workbook's meaning order. Empty meanings display as `-`. Switching preserves your typed answer. Every new question starts on the primary meaning, including retry questions.
+
 ## Database
 
 - Default database path: repo-root `vocab.db`

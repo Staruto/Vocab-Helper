@@ -25,6 +25,7 @@ export type PracticeState = {
   nextRetryRound: EntryRow[];
   retryNumber: number;
   currentEntry: EntryRow | null;
+  meaningIndex: number;
   detailSourcePhase: "initial" | "retry";
   score: number;
   feedback: string | null;
@@ -85,6 +86,7 @@ export type Intent =
   | { type: "practiceStarted"; candidates: EntryRow[]; requestId?: number }
   | { type: "practiceCandidatesFailed"; requestId: number; error: string }
   | { type: "practiceCancelled" }
+  | { type: "practiceMeaningCycled"; direction: 1 | -1 }
   | { type: "practiceAnswerChanged"; answer: string }
   | { type: "practiceAnswerSubmitted"; answer: string }
   | { type: "practiceRetryAdvanced" }
@@ -112,7 +114,7 @@ const normalize = (raw: string): string[] => raw.trim().replace(/^\/+/, "").spli
 const entryLabel = (entry: EntryRow) => `#${entry.id} ${entry.vocabulary}`;
 
 export function createInitialState(workbook: WorkbookRow, entries: EntryRow[] = [], tagTypes: TagType[] = []): OrchestrationState {
-  return { workbook, entries, tagTypes, activeSearchQuery: "", pageIndex: 0, commandBuffer: "", inputFocus: "command", statusLines: status("Ready."), mode: { kind: "command" }, importRequestId: 0, practice: { phase: "empty", candidates: [], index: 0, retryRound: [], nextRetryRound: [], retryNumber: 1, currentEntry: null, detailSourcePhase: "initial", score: 0, feedback: null, requestId: 0, pendingAnswer: null, error: null } };
+  return { workbook, entries, tagTypes, activeSearchQuery: "", pageIndex: 0, commandBuffer: "", inputFocus: "command", statusLines: status("Ready."), mode: { kind: "command" }, importRequestId: 0, practice: { phase: "empty", candidates: [], index: 0, retryRound: [], nextRetryRound: [], retryNumber: 1, currentEntry: null, meaningIndex: 0, detailSourcePhase: "initial", score: 0, feedback: null, requestId: 0, pendingAnswer: null, error: null } };
 }
 
 function formComplete(state: OrchestrationState, form: Extract<UiMode, { kind: "add" | "edit" }>): Transition {
@@ -192,6 +194,12 @@ export function update(state: OrchestrationState, intent: Intent): Transition {
       ...createInitialState(state.workbook).practice, requestId: state.practice.requestId + 1,
     } }, effects: [] };
   }
+  if (intent.type === "practiceMeaningCycled") {
+    const p = state.practice;
+    const meaningCount = state.workbook.meaningAttributes.length;
+    if ((p.phase !== "initial" && p.phase !== "retry") || p.pendingAnswer || p.feedback !== null || !p.currentEntry || meaningCount < 2) return { state, effects: [] };
+    return { state: { ...state, practice: { ...p, meaningIndex: (p.meaningIndex + intent.direction + meaningCount) % meaningCount } }, effects: [] };
+  }
   if (intent.type === "practiceAnswerChanged") {
     const p = state.practice;
     if ((p.phase !== "initial" && p.phase !== "retry") || p.pendingAnswer || p.feedback) return { state, effects: [] };
@@ -246,7 +254,7 @@ export function update(state: OrchestrationState, intent: Intent): Transition {
     } else {
       practice = { ...p, phase: "done", currentEntry: null, retryRound: [], nextRetryRound: [], feedback: null };
     }
-    return { state: { ...state, commandBuffer: "", practice }, effects: [] };
+    return { state: { ...state, commandBuffer: "", practice: { ...practice, meaningIndex: 0 } }, effects: [] };
   }
   return { state: next, effects };
 }
