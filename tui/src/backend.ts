@@ -1,4 +1,4 @@
-import { CreateWorkbookInput, defaultDbPath, EntryRow, ImportEntryInput, ImportResult, MeaningAttribute, MeaningPromotionImpact, MetadataAttribute, TagType, TagUpdateImpact, WorkbookAttributesDraft, WorkbookConfigurationInput, WorkbookRow, WorkbookTagsDraft, WorkbookUpdateImpact, VocabularyRepository } from "./db.js";
+import { PracticeSessionResult, CreateWorkbookInput, defaultDbPath, EntryRow, ImportEntryInput, ImportResult, MeaningAttribute, MeaningPromotionImpact, MetadataAttribute, TagType, TagUpdateImpact, WorkbookAttributesDraft, WorkbookConfigurationInput, WorkbookRow, WorkbookTagsDraft, WorkbookUpdateImpact, VocabularyRepository } from "./db.js";
 
 export class VocabularyBackend {
   private readonly repository: VocabularyRepository;
@@ -68,7 +68,7 @@ export class VocabularyBackend {
   setTierColorsEnabled(enabled: boolean): boolean { return this.repository.setTierColorsEnabled(enabled); }
   setWorkbookImportFilePath(workbookId: number, path: string | null): WorkbookRow { return this.repository.setWorkbookImportFilePath(workbookId, path); }
   getEntryStats(entryId: number) { return this.repository.getEntryStats(entryId); }
-  recordTestResult(entryId: number, isCorrect: boolean, decreaseError = true): EntryRow { return this.repository.recordTestResult(entryId, isCorrect, decreaseError); }
+  completePracticeSession(workbookId: number, results: PracticeSessionResult[], completedDay: string): EntryRow[] { return this.repository.completePracticeSession(workbookId, results, completedDay); }
   selectPracticeCandidates(workbookId: number, count: number): EntryRow[] { return this.repository.selectPracticeCandidates(workbookId, count); }
   increasePriority(entryId: number): EntryRow { return this.repository.increasePriority(entryId); }
   decreasePriority(entryId: number): EntryRow { return this.repository.decreasePriority(entryId); }

@@ -59,8 +59,8 @@ test("practice initial scoring and empty candidates are explicit", () => {
   assert.equal(state.practice.phase, "empty");
   state = update(state, { type: "practiceStarted", candidates: [entry(1, "answer")] }).state;
   let transition = update(state, { type: "practiceAnswerSubmitted", answer: "answer" });
-  assert.equal(transition.effects[0]?.type, "recordPracticeResult");
-  state = update(transition.state, { type: "practiceResultRecorded", requestId: transition.state.practice.requestId, entry: entry(1, "answer"), isCorrect: true, initialRound: true }).state;
+  assert.deepEqual(transition.effects, []);
+  state = transition.state;
   assert.equal(state.practice.score, 1);
 });
 

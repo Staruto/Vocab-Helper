@@ -1,4 +1,4 @@
-import type { EntryRow, WorkbookRow } from "./db.js";
+import type { PracticeSessionResult, EntryRow, WorkbookRow } from "./db.js";
 import { loadLabeledTextFile, parseLabeledTextImport } from "./import.js";
 import type { Effect, Intent, OrchestrationCapabilities, OrchestrationState } from "./orchestration.js";
 
@@ -49,12 +49,12 @@ export async function executeEffect(effect: Effect, state: OrchestrationState, c
     case "deleteEntry":
       capabilities.writes.deleteEntry(effect.entryId);
       return { type: "entriesLoaded", entries: state.entries.filter((entry) => entry.id !== effect.entryId), message: "Entry deleted." };
-    case "recordPracticeResult": {
+    case "completePracticeSession": {
       try {
-        const entry = capabilities.practice.recordTestResult(effect.entryId, effect.isCorrect, effect.initialRound);
-        return { type: "practiceResultRecorded", requestId: effect.requestId, entry, isCorrect: effect.isCorrect, initialRound: effect.initialRound };
+        const entries = capabilities.practice.completePracticeSession(effect.workbookId, effect.results, effect.completedDay);
+        return { type: "practiceSessionSaved", requestId: effect.requestId, entries };
       } catch (error) {
-        return { type: "practiceResultFailed", requestId: effect.requestId, error: error instanceof Error ? error.message : "Could not record practice result." };
+        return { type: "practiceSaveFailed", requestId: effect.requestId, error: error instanceof Error ? error.message : "Could not save practice results." };
       }
     }
   }
@@ -63,7 +63,7 @@ export async function executeEffect(effect: Effect, state: OrchestrationState, c
 export function createOrchestrationCapabilities(backend: {
   listEntries(workbookId: number): EntryRow[]; getEntry(entryId: number): EntryRow | null; listTagTypes(workbookId: number): import("./db.js").TagType[]; getWorkbook(workbookId: number): WorkbookRow | null;
   addEntry(workbookId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, tagIds?: number[]): EntryRow; updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, tagIds?: number[]): EntryRow; deleteEntry(entryId: number): void;
-  importEntries(workbookId: number, entries: import("./db.js").ImportEntryInput[]): import("./db.js").ImportResult; setWorkbookImportFilePath(workbookId: number, path: string | null): WorkbookRow; selectPracticeCandidates(workbookId: number, count: number): EntryRow[]; recordTestResult(entryId: number, isCorrect: boolean, decreaseError?: boolean): EntryRow;
+  importEntries(workbookId: number, entries: import("./db.js").ImportEntryInput[]): import("./db.js").ImportResult; setWorkbookImportFilePath(workbookId: number, path: string | null): WorkbookRow; selectPracticeCandidates(workbookId: number, count: number): EntryRow[]; completePracticeSession(workbookId: number, results: PracticeSessionResult[], completedDay: string): EntryRow[];
 }): OrchestrationCapabilities {
-  return { reads: { listEntries: (id) => backend.listEntries(id), getEntry: (id) => backend.getEntry(id), listTagTypes: (id) => backend.listTagTypes(id), getWorkbook: (id) => backend.getWorkbook(id) }, writes: { addEntry: (...args) => backend.addEntry(...args), updateEntry: (...args) => backend.updateEntry(...args), deleteEntry: (id) => backend.deleteEntry(id) }, import: { readLabeledTextFile: loadLabeledTextFile, importEntries: (id, entries) => backend.importEntries(id, entries), readWorkbookImportPath: (id) => backend.getWorkbook(id)?.importFilePath ?? null, saveWorkbookImportPath: (id, path) => backend.setWorkbookImportFilePath(id, path) }, practice: { selectPracticeCandidates: (id, count) => backend.selectPracticeCandidates(id, count), recordTestResult: (id, correct, decreaseError) => backend.recordTestResult(id, correct, decreaseError) } };
+  return { reads: { listEntries: (id) => backend.listEntries(id), getEntry: (id) => backend.getEntry(id), listTagTypes: (id) => backend.listTagTypes(id), getWorkbook: (id) => backend.getWorkbook(id) }, writes: { addEntry: (...args) => backend.addEntry(...args), updateEntry: (...args) => backend.updateEntry(...args), deleteEntry: (id) => backend.deleteEntry(id) }, import: { readLabeledTextFile: loadLabeledTextFile, importEntries: (id, entries) => backend.importEntries(id, entries), readWorkbookImportPath: (id) => backend.getWorkbook(id)?.importFilePath ?? null, saveWorkbookImportPath: (id, path) => backend.setWorkbookImportFilePath(id, path) }, practice: { selectPracticeCandidates: (id, count) => backend.selectPracticeCandidates(id, count), completePracticeSession: (id, results, day) => backend.completePracticeSession(id, results, day) } };
 }

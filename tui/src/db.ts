@@ -1,6 +1,7 @@
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import { addCalendarDays, localCalendarDay } from "./calendar.js";
 import { runSchemaMigrations } from "./schema.js";
 
 export type VocabularyKind = "preset_language" | "other_language" | "non_language";
@@ -39,6 +40,8 @@ export type EntryRow = {
   createdAt: string; updatedAt: string; testCount: number; errorCount: number;
   tier: "gray" | "green" | "yellow" | "red"; lastTested: string | null; nextTestDeadline: string | null;
 };
+export type PracticeSessionResult = { entryId: number; answers: boolean[] };
+
 export type ImportEntryInput = { vocabulary: string; meanings: string[]; attributes: Record<string, string>; tagIds: number[] };
 export type ImportResult = { added: number; updated: number; unchanged: number; entries: EntryRow[] };
 export type LanguagePresetDefinition = { optionalAttributes: Array<{ key: string; label: string; languageCode: string | null }>; partOfSpeechTags: string[] };
@@ -451,26 +454,42 @@ export class VocabularyRepository {
     const entry = this.requireEntry(entryId);
     return { testCount: entry.testCount, errorCount: entry.errorCount, tier: entry.tier, lastTested: entry.lastTested, nextTestDeadline: entry.nextTestDeadline };
   }
-  recordTestResult(entryId: number, isCorrect: boolean, decreaseError = true): EntryRow {
-    this.requireEntry(entryId);
-    transaction(this.db, () => {
-      const errors = Number((this.db.prepare("SELECT error_count FROM entry_stats WHERE entry_id = ?").get(entryId) as { error_count: number }).error_count);
-      const now = new Date().toISOString();
-      if (isCorrect && decreaseError) {
-        const deadline = new Date(Date.now() + [15, 7, 4, 1][errors] * 86400000).toISOString();
-        this.db.prepare("UPDATE entry_stats SET test_count = test_count + 1, error_count = MAX(error_count - 1, 0), last_tested = ?, next_test_deadline = ? WHERE entry_id = ?").run(now, deadline, entryId);
-      } else if (isCorrect) this.db.prepare("UPDATE entry_stats SET test_count = test_count + 1, last_tested = ? WHERE entry_id = ?").run(now, entryId);
-      else this.db.prepare("UPDATE entry_stats SET test_count = test_count + 1, error_count = MIN(error_count + 1, 3), last_tested = ? WHERE entry_id = ?").run(now, entryId);
+  completePracticeSession(workbookId: number, results: PracticeSessionResult[], completedDay: string): EntryRow[] {
+    this.requireWorkbook(workbookId);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(completedDay) ||
+        Number.isNaN(Date.parse(completedDay)) || addCalendarDays(completedDay, 0) !== completedDay) {
+      throw new ValidationError("A valid completion day is required.");
+    }
+    return transaction(this.db, () => {
+      const seen = new Set<number>();
+      for (const result of results) {
+        const entry = this.requireEntry(result.entryId);
+        if (entry.workbookId !== workbookId || seen.has(entry.id)) throw new ValidationError("Session entries must be unique and belong to this workbook.");
+        if (!result.answers.length || result.answers.some((answer) => typeof answer !== "boolean") ||
+            result.answers.at(-1) !== true || result.answers.slice(0, -1).some(Boolean)) {
+          throw new ValidationError("Every session entry must finish with its first correct answer.");
+        }
+        seen.add(entry.id);
+        let errors = entry.errorCount;
+        for (const [index, correct] of result.answers.entries()) {
+          errors = correct ? Math.max(0, errors - (index === 0 ? 1 : 0)) : Math.min(3, errors + 1);
+        }
+        const deadline = addCalendarDays(completedDay, [15, 7, 4, 1][errors]);
+        this.db.prepare("UPDATE entry_stats SET test_count = test_count + ?, error_count = ?, last_tested = ?, next_test_deadline = ? WHERE entry_id = ?")
+          .run(result.answers.length, errors, completedDay, deadline, entry.id);
+      }
+      return results.map((result) => this.requireEntry(result.entryId));
     });
-    return this.requireEntry(entryId);
   }
   increasePriority(entryId: number): EntryRow { return this.adjustPriority(entryId, true); }
   decreasePriority(entryId: number): EntryRow { return this.adjustPriority(entryId, false); }
   selectPracticeCandidates(workbookId: number, count: number): EntryRow[] {
     this.requireWorkbook(workbookId);
     const rows = this.db.prepare(`SELECT e.id FROM entries e JOIN entry_stats s ON s.entry_id = e.id WHERE e.workbook_id = ?
-      ORDER BY CASE WHEN s.test_count = 0 THEN 0 WHEN s.next_test_deadline IS NOT NULL AND datetime(s.next_test_deadline) <= datetime('now') THEN 1 ELSE 2 END,
-      s.error_count DESC, RANDOM() LIMIT ?`).all(workbookId, Math.max(0, Math.floor(count))) as Array<{ id: number }>;
+      ORDER BY CASE WHEN s.last_tested IS NULL THEN 0
+        WHEN (CASE WHEN length(s.next_test_deadline) = 10 THEN s.next_test_deadline
+          ELSE date(s.next_test_deadline, 'localtime') END) <= ? THEN 1 ELSE 2 END,
+      s.error_count DESC, RANDOM() LIMIT ?`).all(workbookId, localCalendarDay(), Math.max(0, Math.floor(count))) as Array<{ id: number }>;
     return rows.map((row) => this.getEntry(Number(row.id))!);
   }
 

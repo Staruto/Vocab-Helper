@@ -1,4 +1,5 @@
-import type { EntryRow, ImportEntryInput, ImportResult, TagType, WorkbookRow } from "./db.js";
+import { localCalendarDay } from "./calendar.js";
+import type { PracticeSessionResult, EntryRow, ImportEntryInput, ImportResult, TagType, WorkbookRow } from "./db.js";
 import type { ImportPreview, ImportPreviewFilter, ImportDiagnostic } from "./import.js";
 
 export type { ImportPreview, ImportPreviewFilter, ImportDiagnostic };
@@ -16,7 +17,7 @@ export type UiMode =
   | { kind: "importSaveDefault"; path: string; save: boolean; resultMessage: string }
   | { kind: "importPreview"; path: string; pathBuffer: string; preview: ImportPreview; pageIndex: number; filter: ImportPreviewFilter; focus: ImportPreviewFocus; loading?: boolean; error?: string };
 
-export type PracticePhase = "loading" | "empty" | "initial" | "retry" | "detail" | "done";
+export type PracticePhase = "loading" | "empty" | "initial" | "retry" | "detail" | "saving" | "saveFailed" | "done";
 export type PracticeState = {
   phase: PracticePhase;
   candidates: EntryRow[];
@@ -30,7 +31,8 @@ export type PracticeState = {
   score: number;
   feedback: string | null;
   requestId: number;
-  pendingAnswer: { requestId: number; entryId: number; isCorrect: boolean; sourcePhase: "initial" | "retry" } | null;
+  results: PracticeSessionResult[];
+  completedDay: string | null;
   error: string | null;
 };
 
@@ -53,7 +55,7 @@ export type OrchestrationCapabilities = {
   reads: { listEntries(workbookId: number): EntryRow[]; getEntry(entryId: number): EntryRow | null; listTagTypes(workbookId: number): TagType[]; getWorkbook(workbookId: number): WorkbookRow | null };
   writes: { addEntry(workbookId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, tagIds?: number[]): EntryRow; updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, tagIds?: number[]): EntryRow; deleteEntry(entryId: number): void };
   import: { readLabeledTextFile(path: string): Promise<{ path: string; text: string }>; importEntries(workbookId: number, entries: ImportEntryInput[]): ImportResult; readWorkbookImportPath(workbookId: number): string | null; saveWorkbookImportPath(workbookId: number, path: string | null): WorkbookRow };
-  practice: { selectPracticeCandidates(workbookId: number, count: number): EntryRow[]; recordTestResult(entryId: number, isCorrect: boolean, decreaseError?: boolean): EntryRow };
+  practice: { selectPracticeCandidates(workbookId: number, count: number): EntryRow[]; completePracticeSession(workbookId: number, results: PracticeSessionResult[], completedDay: string): EntryRow[] };
 };
 
 export type Intent =
@@ -91,8 +93,9 @@ export type Intent =
   | { type: "practiceAnswerSubmitted"; answer: string }
   | { type: "practiceRetryAdvanced" }
   | { type: "practiceDetailContinued" }
-  | { type: "practiceResultRecorded"; requestId: number; entry: EntryRow; isCorrect: boolean; initialRound: boolean }
-  | { type: "practiceResultFailed"; requestId: number; error: string };
+  | { type: "practiceSaveRetried" }
+  | { type: "practiceSessionSaved"; requestId: number; entries: EntryRow[] }
+  | { type: "practiceSaveFailed"; requestId: number; error: string };
 
 export type Effect =
   | { type: "loadEntries"; workbookId: number }
@@ -103,7 +106,7 @@ export type Effect =
   | { type: "addEntry"; workbookId: number; vocabulary: string; meanings: string[]; attributes: Record<string, string>; tagIds: number[] }
   | { type: "updateEntry"; entryId: number; vocabulary: string; meanings: string[]; attributes: Record<string, string>; tagIds: number[] }
   | { type: "deleteEntry"; entryId: number }
-  | { type: "recordPracticeResult"; requestId: number; entryId: number; isCorrect: boolean; initialRound: boolean };
+  | { type: "completePracticeSession"; requestId: number; workbookId: number; results: PracticeSessionResult[]; completedDay: string };
 
 export type Transition = { state: OrchestrationState; effects: Effect[] };
 
@@ -114,13 +117,23 @@ const normalize = (raw: string): string[] => raw.trim().replace(/^\/+/, "").spli
 const entryLabel = (entry: EntryRow) => `#${entry.id} ${entry.vocabulary}`;
 
 export function createInitialState(workbook: WorkbookRow, entries: EntryRow[] = [], tagTypes: TagType[] = []): OrchestrationState {
-  return { workbook, entries, tagTypes, activeSearchQuery: "", pageIndex: 0, commandBuffer: "", inputFocus: "command", statusLines: status("Ready."), mode: { kind: "command" }, importRequestId: 0, practice: { phase: "empty", candidates: [], index: 0, retryRound: [], nextRetryRound: [], retryNumber: 1, currentEntry: null, meaningIndex: 0, detailSourcePhase: "initial", score: 0, feedback: null, requestId: 0, pendingAnswer: null, error: null } };
+  return { workbook, entries, tagTypes, activeSearchQuery: "", pageIndex: 0, commandBuffer: "", inputFocus: "command", statusLines: status("Ready."), mode: { kind: "command" }, importRequestId: 0, practice: { phase: "empty", candidates: [], index: 0, retryRound: [], nextRetryRound: [], retryNumber: 1, currentEntry: null, meaningIndex: 0, detailSourcePhase: "initial", score: 0, feedback: null, requestId: 0, results: [], completedDay: null, error: null } };
 }
 
 function formComplete(state: OrchestrationState, form: Extract<UiMode, { kind: "add" | "edit" }>): Transition {
   const tags = state.workbook.metadataAttributes.length ? form.selectedTagIds : form.selectedTagIds;
   const effect: Effect = form.kind === "add" ? { type: "addEntry", workbookId: state.workbook.id, vocabulary: form.vocabulary, meanings: form.meanings, attributes: form.metadata, tagIds: tags } : { type: "updateEntry", entryId: form.entryId, vocabulary: form.vocabulary, meanings: form.meanings, attributes: form.metadata, tagIds: tags };
   return { state: { ...state, mode: { kind: "command" }, commandBuffer: "", statusLines: status(form.kind === "add" ? "Saving entry..." : "Updating entry...") }, effects: [effect] };
+}
+
+function savePracticeSession(state: OrchestrationState): Transition {
+  const p = state.practice;
+  const completedDay = p.completedDay ?? localCalendarDay();
+  const requestId = p.requestId + 1;
+  return {
+    state: { ...state, commandBuffer: "", practice: { ...p, phase: "saving", requestId, completedDay, currentEntry: null, meaningIndex: 0, feedback: null, error: null } },
+    effects: [{ type: "completePracticeSession", requestId, workbookId: state.workbook.id, results: p.results, completedDay }],
+  };
 }
 
 export function update(state: OrchestrationState, intent: Intent): Transition {
@@ -197,47 +210,39 @@ export function update(state: OrchestrationState, intent: Intent): Transition {
   if (intent.type === "practiceMeaningCycled") {
     const p = state.practice;
     const meaningCount = state.workbook.meaningAttributes.length;
-    if ((p.phase !== "initial" && p.phase !== "retry") || p.pendingAnswer || p.feedback !== null || !p.currentEntry || meaningCount < 2) return { state, effects: [] };
+    if ((p.phase !== "initial" && p.phase !== "retry") || p.feedback !== null || !p.currentEntry || meaningCount < 2) return { state, effects: [] };
     return { state: { ...state, practice: { ...p, meaningIndex: (p.meaningIndex + 1) % meaningCount } }, effects: [] };
   }
   if (intent.type === "practiceAnswerChanged") {
     const p = state.practice;
-    if ((p.phase !== "initial" && p.phase !== "retry") || p.pendingAnswer || p.feedback) return { state, effects: [] };
+    if ((p.phase !== "initial" && p.phase !== "retry") || p.feedback) return { state, effects: [] };
     return { state: { ...state, commandBuffer: intent.answer, practice: { ...p, error: null } }, effects: [] };
   }
   if (intent.type === "practiceAnswerSubmitted") {
     const p = state.practice;
-    if ((p.phase !== "initial" && p.phase !== "retry") || p.pendingAnswer || p.feedback || !p.currentEntry) return { state, effects: [] };
-    const requestId = p.requestId + 1;
+    if ((p.phase !== "initial" && p.phase !== "retry") || p.feedback || !p.currentEntry) return { state, effects: [] };
     const isCorrect = intent.answer.trim() === p.currentEntry.vocabulary;
-    return {
-      state: { ...state, commandBuffer: intent.answer, practice: {
-        ...p, requestId, error: null,
-        pendingAnswer: { requestId, entryId: p.currentEntry.id, isCorrect, sourcePhase: p.phase },
-      } },
-      effects: [{ type: "recordPracticeResult", requestId, entryId: p.currentEntry.id, isCorrect, initialRound: p.phase === "initial" }],
-    };
-  }
-  if (intent.type === "practiceResultRecorded") {
-    const p = state.practice;
-    const pending = p.pendingAnswer;
-    if (!pending || intent.requestId !== pending.requestId || intent.entry.id !== pending.entryId ||
-        intent.isCorrect !== pending.isCorrect || intent.initialRound !== (pending.sourcePhase === "initial")) return { state, effects: [] };
-    return { state: { ...state, commandBuffer: pending.isCorrect ? state.commandBuffer : "", practice: {
-      ...p, pendingAnswer: null, currentEntry: intent.entry,
-      phase: pending.isCorrect ? pending.sourcePhase : "detail",
-      detailSourcePhase: pending.sourcePhase, feedback: pending.isCorrect ? "Correct!" : null,
-      score: p.score + (pending.sourcePhase === "initial" && pending.isCorrect ? 1 : 0),
+    const existing = p.results.find((result) => result.entryId === p.currentEntry!.id);
+    const result = { entryId: p.currentEntry.id, answers: [...(existing?.answers ?? []), isCorrect] };
+    const results = existing ? p.results.map((item) => item.entryId === result.entryId ? result : item) : [...p.results, result];
+    return { state: { ...state, commandBuffer: isCorrect ? intent.answer : "", practice: {
+      ...p, results, phase: isCorrect ? p.phase : "detail", detailSourcePhase: p.phase,
+      feedback: isCorrect ? "Correct!" : null,
+      score: p.score + (p.phase === "initial" && isCorrect ? 1 : 0),
     } }, effects: [] };
   }
-  if (intent.type === "practiceResultFailed") {
+  if (intent.type === "practiceSaveRetried") {
+    return state.practice.phase === "saveFailed" ? savePracticeSession(state) : { state, effects: [] };
+  }
+  if (intent.type === "practiceSessionSaved" || intent.type === "practiceSaveFailed") {
     const p = state.practice;
-    if (!p.pendingAnswer || intent.requestId !== p.pendingAnswer.requestId) return { state, effects: [] };
-    return { state: { ...state, practice: { ...p, pendingAnswer: null, error: intent.error } }, effects: [] };
+    if (p.phase !== "saving" || intent.requestId !== p.requestId) return { state, effects: [] };
+    if (intent.type === "practiceSaveFailed") return { state: { ...state, practice: { ...p, phase: "saveFailed", error: intent.error } }, effects: [] };
+    return { state: { ...state, practice: { ...p, phase: "done", candidates: intent.entries, results: [], retryRound: [], nextRetryRound: [] } }, effects: [] };
   }
   if (intent.type === "practiceDetailContinued" || intent.type === "practiceRetryAdvanced") {
     const p = state.practice;
-    if (p.pendingAnswer || !p.currentEntry) return { state, effects: [] };
+    if (!p.currentEntry) return { state, effects: [] };
     const incorrect = intent.type === "practiceDetailContinued";
     if (incorrect ? p.phase !== "detail" : ((p.phase !== "initial" && p.phase !== "retry") || p.feedback !== "Correct!")) return { state, effects: [] };
     const source = incorrect ? p.detailSourcePhase : p.phase === "retry" ? "retry" : "initial";
@@ -252,7 +257,7 @@ export function update(state: OrchestrationState, intent: Intent): Transition {
       practice = { ...p, phase: "retry", retryRound: queued, nextRetryRound: [], index: 0,
         retryNumber: source === "retry" ? p.retryNumber + 1 : 1, currentEntry: queued[0], feedback: null };
     } else {
-      practice = { ...p, phase: "done", currentEntry: null, retryRound: [], nextRetryRound: [], feedback: null };
+      return savePracticeSession(state);
     }
     return { state: { ...state, commandBuffer: "", practice: { ...practice, meaningIndex: 0 } }, effects: [] };
   }

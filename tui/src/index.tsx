@@ -3,7 +3,7 @@ import { Box, Text, render, useApp, useInput, useStdout } from "ink";
 import { CreateWorkbookInput, EntryRow, LANGUAGE_PRESET_DEFINITIONS, MeaningAttribute, MetadataAttribute, TagDataLossError, TagType, TagTypeDraft, VocabularyKind, WorkbookAttributesDraft, WorkbookConfigurationInput, WorkbookDataLossError, WorkbookRow, WorkbookTagsDraft } from "./db.js";
 import { VocabularyBackend } from "./backend.js";
 import { fitTagBadges, visibleAssignedTagGroups } from "./tag-display.js";
-import { adjacentEntryId, buildDetailSections, detailNavigationLabel, DetailField } from "./detail-display.js";
+import { adjacentEntryId, buildDetailSections, buildReviewFields, detailNavigationLabel, DetailField } from "./detail-display.js";
 import { formatImportPreviewFilter, formatImportPreviewRecord, importPreviewPageSize, ImportPreview, ImportPreviewFilter, loadLabeledTextFile, paginateImportPreview } from "./import.js";
 import { CaretInputLine } from "./text-input.js";
 import { filterEntriesForSearch } from "./search.js";
@@ -263,12 +263,6 @@ function buildHelpText(): string {
 
 function tierColor(tier: EntryRow["tier"]): string {
   return tier === "gray" ? GRAY_TIER_COLOR : tier === "green" ? "green" : tier === "yellow" ? YELLOW_TIER_COLOR : "red";
-}
-
-function formatLastTested(value: string | null): string {
-  if (!value) return "Never";
-  const date = new Date(value.replace(" ", "T") + (value.includes("Z") ? "" : "Z"));
-  return Number.isNaN(date.getTime()) ? value.slice(0, 10) : date.toLocaleDateString();
 }
 
 function buildStatusLines(message: string, lineCount = 5): string[] {
@@ -1583,15 +1577,11 @@ function detailFieldLines(field: DetailField, width: number, keyWidth: number, v
 
 function EntryDetails({ workbook, entry, tagTypes, width }: { workbook: WorkbookRow; entry: EntryRow; tagTypes: TagType[]; width: number }): JSX.Element {
   const sections = buildDetailSections(workbook, entry, tagTypes);
-  const fields = [...sections.meanings, ...sections.attributes];
-  const keyWidth = Math.min(Math.max(12, ...fields.map((field) => displayWidth(`${field.key}:`)), displayWidth("Last tested:")), Math.max(12, Math.floor(width * 0.4)));
+  const statusFields = buildReviewFields(entry);
+  const fields = [...sections.meanings, ...sections.attributes, ...statusFields];
+  const reviewKeyWidth = Math.max(...statusFields.map((field) => displayWidth(`${field.key}:`)));
+  const keyWidth = Math.min(Math.max(12, ...fields.map((field) => displayWidth(`${field.key}:`))), Math.max(reviewKeyWidth, Math.floor(width * 0.4)));
   const titleLines = wrapDetailText(entry.vocabulary, Math.max(1, width - 2));
-  const statusFields: DetailField[] = [
-    { key: "Tests", value: String(entry.testCount) },
-    { key: "Errors", value: String(entry.errorCount) },
-    { key: "Tier", value: `${entry.tier[0].toUpperCase()}${entry.tier.slice(1)}` },
-    { key: "Last tested", value: formatLastTested(entry.lastTested) },
-  ];
   const renderFields = (items: DetailField[]) => items.flatMap((field) => detailFieldLines(field, width, keyWidth));
   const renderStatusFields = statusFields.flatMap((field) => detailFieldLines(field, width, keyWidth, field.key === "Tier" ? tierColor(entry.tier) : "white"));
   return <Box flexDirection="column">
@@ -1685,16 +1675,18 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
   }
 
   useInput((input, key) => {
-    if (key.ctrl && input === "c") return leave(onQuit);
     const latest = controller.current?.getState();
+    if (latest?.practice.phase === "saving") return;
+    if (key.ctrl && input === "c") return leave(onQuit);
+    if (key.escape) return leave(onCancel);
     if (latest?.practice.phase === "detail") {
-      if (key.return || key.escape) dispatch({ type: "practiceDetailContinued" });
+      if (key.return) dispatch({ type: "practiceDetailContinued" });
       return;
     }
-    if (key.escape) return leave(onCancel);
     if (!latest) return;
     const p = latest.practice;
-    if (p.phase === "loading" || p.pendingAnswer) return;
+    if (p.phase === "loading") return;
+    if (p.phase === "saveFailed") { if (key.return) dispatch({ type: "practiceSaveRetried" }); return; }
     if (p.phase === "empty") { if (key.return) leave(onCancel); return; }
     if (p.phase === "done") { if (key.return) leave(() => onDone(p.score, p.candidates.length)); return; }
     if (p.feedback !== null) { if (key.return) dispatch({ type: "practiceRetryAdvanced" }); return; }
@@ -1702,16 +1694,18 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
     if (key.return) dispatch({ type: "practiceAnswerSubmitted", answer: latest.commandBuffer });
   });
 
+  if (practice.phase === "saving") return <Box flexDirection="column"><Text>Saving practice results...</Text></Box>;
+  if (practice.phase === "saveFailed") return <Box flexDirection="column"><Text color="red">{practice.error}</Text><Text>Enter retries saving | Esc discards results</Text></Box>;
   if (practice.phase === "loading") return <Box flexDirection="column"><Text>Loading practice entries...</Text><Text color={AUXILIARY_TEXT_COLOR}>Esc cancels.</Text></Box>;
   if (practice.phase === "empty") return <Box flexDirection="column"><Text>{practice.error ?? `No entries available in ${workbook.name}.`}</Text><Text color={AUXILIARY_TEXT_COLOR}>Press Enter or Esc to return.</Text></Box>;
   if (practice.phase === "done") return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice - ${workbook.name}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="green">{padLine(`Final initial-round score: ${practice.score}/${practice.candidates.length}`, width)}</Text><Text>{padLine("Press Enter to return.", width)}</Text></Box>;
   if (practice.phase === "detail" && current) return <Box flexDirection="column">
     <EntryDetails workbook={workbook} entry={current} tagTypes={tagTypes} width={width} />
-    <Text color={AUXILIARY_TEXT_COLOR}>{centerLine("Enter or Esc returns to practice", width)}</Text>
+    <Text color={AUXILIARY_TEXT_COLOR}>{centerLine("Enter returns to practice | Esc cancels", width)}</Text>
   </Box>;
   const roundLabel = practice.phase === "retry" ? `Retry round ${practice.retryNumber} - Question ${practice.index + 1}/${practice.retryRound.length}` : `Question ${practice.index + 1}/${practice.candidates.length}`;
   const visibleTagGroups = current ? visibleAssignedTagGroups(current, tagTypes) : [];
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice - ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(roundLabel, width)}</Text><Text>{padLine("", width)}</Text><Text>{padLine(`${workbook.meaningAttributes[practice.meaningIndex]?.label ?? "Primary Meaning"}: ${current?.meanings[practice.meaningIndex] || "-"}`, width)}</Text>{visibleTagGroups.map((group) => <PracticeTagLine key={group.typeId} typeName={group.typeName} tagNames={group.tagNames} width={width} />)}<Text>{padLine("", width)}</Text><CaretInputLine key={`${practice.phase}-${practice.index}-${practice.retryNumber}`} prefix="Answer: " value={orchestration.commandBuffer} onChange={(answer) => dispatch({ type: "practiceAnswerChanged", answer })} width={width} focus={practice.feedback === null && !practice.pendingAnswer} inputKey={`${practice.phase}-${practice.index}-${practice.retryNumber}`} /><Text>{padLine("", width)}</Text><Text color={practice.error ? "red" : "green"}>{padLine(practice.error ?? practice.feedback ?? "", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Tab cycle meanings | Enter submits | Esc cancels", width)}</Text></Box>;
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice - ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(roundLabel, width)}</Text><Text>{padLine("", width)}</Text><Text>{padLine(`${workbook.meaningAttributes[practice.meaningIndex]?.label ?? "Primary Meaning"}: ${current?.meanings[practice.meaningIndex] || "-"}`, width)}</Text>{visibleTagGroups.map((group) => <PracticeTagLine key={group.typeId} typeName={group.typeName} tagNames={group.tagNames} width={width} />)}<Text>{padLine("", width)}</Text><CaretInputLine key={`${practice.phase}-${practice.index}-${practice.retryNumber}`} prefix="Answer: " value={orchestration.commandBuffer} onChange={(answer) => dispatch({ type: "practiceAnswerChanged", answer })} width={width} focus={practice.feedback === null} inputKey={`${practice.phase}-${practice.index}-${practice.retryNumber}`} /><Text>{padLine("", width)}</Text><Text color={practice.error ? "red" : "green"}>{padLine(practice.error ?? practice.feedback ?? "", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Tab cycle meanings | Enter submits | Esc cancels", width)}</Text></Box>;
 }
 
 function App(): JSX.Element {

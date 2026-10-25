@@ -1,7 +1,18 @@
 import { EntryRow, TagType, WorkbookRow } from "./db.js";
+import { calendarDay } from "./calendar.js";
 import { visibleAssignedTagGroups, VisibleTagGroup } from "./tag-display.js";
 
 export type DetailField = { key: string; value: string };
+
+export function buildReviewFields(entry: EntryRow): DetailField[] {
+  return [
+    { key: "Tests", value: String(entry.testCount) },
+    { key: "Errors", value: String(entry.errorCount) },
+    { key: "Tier", value: `${entry.tier[0].toUpperCase()}${entry.tier.slice(1)}` },
+    { key: "Last tested", value: entry.lastTested ? calendarDay(entry.lastTested) : "Never" },
+    { key: "Next deadline", value: entry.nextTestDeadline ? calendarDay(entry.nextTestDeadline) : "—" },
+  ];
+}
 
 export type DetailSections = {
   meanings: DetailField[];

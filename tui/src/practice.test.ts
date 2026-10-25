@@ -25,6 +25,7 @@ const unexpected = (): never => { throw new Error("Unexpected capability call");
 
 function session(count: number, sessionWorkbook = workbook) {
   const entries = Array.from({ length: count }, (_, i) => entry(i + 1));
+  let saves = 0;
   const records: Array<{ id: number; correct: boolean; decreaseError: boolean }> = [];
   const capabilities: OrchestrationCapabilities = {
     reads: { listEntries: unexpected, getEntry: unexpected, listTagTypes: unexpected, getWorkbook: unexpected },
@@ -35,15 +36,20 @@ function session(count: number, sessionWorkbook = workbook) {
         assert.equal(workbookId, workbook.id);
         return entries.slice(0, requested);
       },
-      recordTestResult: (id, correct, decreaseError = true) => {
-        records.push({ id, correct, decreaseError });
-        const index = entries.findIndex((item) => item.id === id);
-        const previous = entries[index];
-        const errorCount = correct
-          ? Math.max(0, previous.errorCount - (decreaseError ? 1 : 0))
-          : Math.min(3, previous.errorCount + 1);
-        entries[index] = { ...previous, testCount: previous.testCount + 1, errorCount };
-        return entries[index];
+      completePracticeSession: (_workbookId, results, completedDay) => {
+        saves++;
+        return results.map(({ entryId: id, answers }) => {
+          const index = entries.findIndex((item) => item.id === id);
+          let current = entries[index];
+          for (const [attempt, correct] of answers.entries()) {
+            const decreaseError = attempt === 0;
+            records.push({ id, correct, decreaseError });
+            current = { ...current, testCount: current.testCount + 1,
+              errorCount: correct ? Math.max(0, current.errorCount - (decreaseError ? 1 : 0)) : Math.min(3, current.errorCount + 1) };
+          }
+          entries[index] = { ...current, lastTested: completedDay };
+          return entries[index];
+        });
       },
     },
   };
@@ -57,6 +63,7 @@ function session(count: number, sessionWorkbook = workbook) {
   return {
     get state() { return state; },
     records, entries, capabilities, dispatch,
+    get saves() { return saves; },
     async start() { await dispatch({ type: "practiceCandidatesRequested", workbookId: 1, count }); },
     async answer(value: string) {
       await dispatch({ type: "practiceAnswerSubmitted", answer: value });
@@ -98,7 +105,8 @@ test("mixed initial answers retry only mistakes in their original order", async 
   assert.equal(s.state.practice.score, 1);
   assert.equal(s.state.practice.phase, "retry");
   assert.deepEqual(s.state.practice.retryRound.map((item) => item.id), [1, 3]);
-  assert.equal(s.state.practice.currentEntry?.testCount, 1);
+  assert.equal(s.state.practice.currentEntry?.testCount, 0);
+  assert.equal(s.records.length, 0);
   for (const id of [1, 3]) {
     assert.equal(s.state.practice.currentEntry?.id, id);
     await s.answer(`word${id}`);
@@ -108,9 +116,9 @@ test("mixed initial answers retry only mistakes in their original order", async 
   assert.equal(s.state.practice.score, 1);
   assert.deepEqual(s.records, [
     { id: 1, correct: false, decreaseError: true },
+    { id: 1, correct: true, decreaseError: false },
     { id: 2, correct: true, decreaseError: true },
     { id: 3, correct: false, decreaseError: true },
-    { id: 1, correct: true, decreaseError: false },
     { id: 3, correct: true, decreaseError: false },
   ]);
   assert.deepEqual(s.entries.map((item) => item.errorCount), [3, 1, 3]);
@@ -191,53 +199,62 @@ test("empty candidates stay empty and ignore answer/advance intents", async () =
   assert.equal(s.records.length, 0);
 });
 
-test("pending answers block submissions, edits, and both advancement intents", () => {
-  const initial = update(createInitialState(workbook), { type: "practiceStarted", candidates: [entry(1)] }).state;
-  const pending = update(initial, { type: "practiceAnswerSubmitted", answer: "word1" }).state;
-  assert.notEqual(pending.practice.pendingAnswer, null);
-  assert.equal(pending.practice.score, 0);
-  assert.equal(pending.practice.feedback, null);
+test("answers stay staged and saved Review data stays unchanged until completion", async () => {
+  const s = session(1);
+  await s.start();
+  await s.answer("wrong");
+  assert.equal(s.state.practice.currentEntry?.errorCount, 2);
+  assert.equal(s.entries[0].testCount, 0);
+  assert.equal(s.saves, 0);
+  await s.continue();
+  await s.answer("word1");
+  assert.equal(s.saves, 0);
+  assert.deepEqual(s.state.practice.results, [{ entryId: 1, answers: [false, true] }]);
+  await s.continue();
+  assert.equal(s.saves, 1);
+  assert.equal(s.entries[0].testCount, 2);
+  assert.equal(s.entries[0].errorCount, 3);
+});
+
+test("cancellation discards staged answers and restarting starts fresh", async () => {
+  const s = session(1);
+  await s.start();
+  await s.answer("wrong");
+  await s.continue();
+  await s.answer("word1");
+  await s.dispatch({ type: "practiceCancelled" });
+  assert.deepEqual(s.state.practice.results, []);
+  assert.equal(s.records.length, 0);
+  assert.equal(s.entries[0].testCount, 0);
+  await s.start();
+  await s.answer("word1");
+  await s.continue();
+  assert.equal(s.entries[0].testCount, 1);
+  assert.equal(s.entries[0].errorCount, 1);
+});
+
+test("saving blocks duplicate submissions and advancement; stale and duplicate completions are ignored", async () => {
+  const s = session(1);
+  let state = update(createInitialState(workbook), { type: "practiceStarted", candidates: s.entries }).state;
+  state = update(state, { type: "practiceAnswerSubmitted", answer: "word1" }).state;
+  const saving = update(state, { type: "practiceRetryAdvanced" });
+  assert.equal(saving.state.practice.phase, "saving");
   for (const intent of [
     { type: "practiceAnswerSubmitted", answer: "wrong" },
     { type: "practiceAnswerChanged", answer: "changed" },
-    { type: "practiceRetryAdvanced" },
-    { type: "practiceDetailContinued" },
+    { type: "practiceRetryAdvanced" }, { type: "practiceDetailContinued" }, { type: "practiceSaveRetried" },
   ] satisfies Intent[]) {
-    const transition = update(pending, intent);
-    assert.equal(transition.state, pending);
-    assert.deepEqual(transition.effects, []);
+    assert.equal(update(saving.state, intent).state, saving.state);
   }
-});
-
-test("duplicate and stale recording results cannot score twice or replace another question", async () => {
-  const s = session(2);
-  const initial = update(createInitialState(workbook), { type: "practiceStarted", candidates: s.entries }).state;
-  const submitted = update(initial, { type: "practiceAnswerSubmitted", answer: "word1" });
-  const [result] = await runTransitionEffects(submitted.effects, submitted.state, s.capabilities);
-  const recorded = update(submitted.state, result).state;
-  assert.equal(recorded.practice.score, 1);
-  assert.equal(update(recorded, result).state, recorded);
-  assert.equal(update(recorded, { type: "practiceDetailContinued" }).state, recorded);
-  const next = update(recorded, { type: "practiceRetryAdvanced" }).state;
-  assert.equal(next.practice.currentEntry?.id, 2);
-  assert.equal(update(next, { type: "practiceRetryAdvanced" }).state, next);
-  const nextPending = update(next, { type: "practiceAnswerSubmitted", answer: "word2" }).state;
-  assert.equal(update(nextPending, result).state, nextPending);
-  assert.equal(s.records.length, 1);
-});
-
-test("cancellation and replacement invalidate in-flight results and failures", async () => {
-  const s = session(1);
-  const initial = update(createInitialState(workbook), { type: "practiceStarted", candidates: s.entries }).state;
-  const submitted = update(initial, { type: "practiceAnswerSubmitted", answer: "word1" });
-  const [result] = await runTransitionEffects(submitted.effects, submitted.state, s.capabilities);
-  const cancelled = update(submitted.state, { type: "practiceCancelled" }).state;
+  const [result] = await runTransitionEffects(saving.effects, saving.state, s.capabilities);
+  const completed = update(saving.state, result).state;
+  assert.equal(completed.practice.phase, "done");
+  assert.equal(update(completed, result).state, completed);
+  const cancelled = update(saving.state, { type: "practiceCancelled" }).state;
   assert.equal(update(cancelled, result).state, cancelled);
-  const restarted = update(cancelled, { type: "practiceStarted", candidates: [entry(1)] }).state;
-  const newPending = update(restarted, { type: "practiceAnswerSubmitted", answer: "word1" }).state;
-  assert.equal(update(newPending, result).state, newPending);
-  assert.equal(update(newPending, { type: "practiceResultFailed", requestId: submitted.state.practice.requestId, error: "old error" }).state, newPending);
-  assert.equal(newPending.practice.score, 0);
+  const restarted = update(cancelled, { type: "practiceStarted", candidates: s.entries }).state;
+  assert.equal(update(restarted, result).state, restarted);
+  assert.equal(update(restarted, { type: "practiceSaveFailed", requestId: saving.state.practice.requestId, error: "old" }).state, restarted);
 });
 
 test("candidate loading ignores older results, including after cancellation", () => {
@@ -251,25 +268,30 @@ test("candidate loading ignores older results, including after cancellation", ()
   assert.equal(update(cancelled, result).state, cancelled);
 });
 
-test("a recording failure retains the answer and question and allows resubmission", async () => {
+test("a save failure preserves results and completion day for retry after midnight", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date(2026, 9, 25, 23, 59) });
   const s = session(1);
+  const save = s.capabilities.practice.completePracticeSession;
+  s.capabilities.practice.completePracticeSession = () => { throw new Error("Database unavailable"); };
   await s.start();
-  const record = s.capabilities.practice.recordTestResult;
-  s.capabilities.practice.recordTestResult = () => { throw new Error("Database unavailable"); };
   await s.answer("word1");
+  await s.continue();
+  assert.equal(s.state.practice.phase, "saveFailed");
   assert.equal(s.state.practice.error, "Database unavailable");
-  assert.equal(s.state.practice.pendingAnswer, null);
-  assert.equal(s.state.practice.phase, "initial");
-  assert.equal(s.state.practice.score, 0);
-  assert.equal(s.state.commandBuffer, "word1");
-  await s.continue();
-  assert.equal(s.state.practice.currentEntry?.id, 1);
-  s.capabilities.practice.recordTestResult = record;
-  await s.answer("word1");
-  await s.continue();
+  assert.equal(s.entries[0].testCount, 0);
+  const completedDay = s.state.practice.completedDay;
+  const results = s.state.practice.results;
+  assert.equal(completedDay, "2026-10-25");
+  t.mock.timers.tick(120_000);
+  s.capabilities.practice.completePracticeSession = (id, savedResults, day) => {
+    assert.equal(day, completedDay);
+    assert.equal(savedResults, results);
+    return save(id, savedResults, day);
+  };
+  await s.dispatch({ type: "practiceSaveRetried" });
   assert.equal(s.state.practice.phase, "done");
-  assert.equal(s.state.practice.score, 1);
-  assert.equal(s.records.length, 1);
+  assert.equal(s.saves, 1);
+  assert.equal(s.entries[0].testCount, 1);
 });
 
 test("candidate failures become typed visible error state", async () => {
@@ -281,21 +303,20 @@ test("candidate failures become typed visible error state", async () => {
   assert.equal(s.records.length, 0);
 });
 
-test("the screen controller records once for rapid repeated input", async () => {
+test("the screen controller saves once for rapid repeated input", async () => {
   const s = session(1);
   const controller = createOrchestrationController(createInitialState(workbook), s.capabilities, () => {});
-  await controller.dispatch({ type: "practiceCandidatesRequested", workbookId: 1, count: 1 });
-  await controller.dispatch({ type: "practiceAnswerChanged", answer: "word1" });
-  const recording = controller.dispatch({ type: "practiceAnswerSubmitted", answer: controller.getState().commandBuffer });
-  assert.notEqual(controller.getState().practice.pendingAnswer, null);
+  await controller.dispatch({ type: "practiceStarted", candidates: s.entries });
   await controller.dispatch({ type: "practiceAnswerSubmitted", answer: "word1" });
-  await recording;
-  assert.equal(s.records.length, 1);
+  await controller.dispatch({ type: "practiceAnswerSubmitted", answer: "wrong" });
   assert.equal(controller.getState().practice.score, 1);
+  assert.equal(s.saves, 0);
+  const saving = controller.dispatch({ type: "practiceRetryAdvanced" });
+  assert.equal(controller.getState().practice.phase, "saving");
   await controller.dispatch({ type: "practiceRetryAdvanced" });
+  await saving;
   assert.equal(controller.getState().practice.phase, "done");
-  await controller.dispatch({ type: "practiceAnswerSubmitted", answer: "word1" });
-  assert.equal(s.records.length, 1);
+  assert.equal(s.saves, 1);
   controller.dispose();
 });
 
@@ -304,13 +325,14 @@ test("disposed controllers suppress late state notifications and further effects
   let notifications = 0;
   const controller = createOrchestrationController(createInitialState(workbook), s.capabilities, () => { notifications++; });
   await controller.dispatch({ type: "practiceStarted", candidates: s.entries });
-  const recording = controller.dispatch({ type: "practiceAnswerSubmitted", answer: "word1" });
+  await controller.dispatch({ type: "practiceAnswerSubmitted", answer: "word1" });
+  const saving = controller.dispatch({ type: "practiceRetryAdvanced" });
   controller.dispose();
   const before = notifications;
-  await recording;
-  await controller.dispatch({ type: "practiceAnswerSubmitted", answer: "word1" });
+  await saving;
+  await controller.dispatch({ type: "practiceSaveRetried" });
   assert.equal(notifications, before);
-  assert.equal(s.records.length, 1);
+  assert.equal(s.saves, 1);
 });
 
 test("bounded sessions terminate after every combination of initial and first-retry mistakes", async () => {
@@ -371,8 +393,8 @@ test("meaning cycling wraps in workbook order, includes blanks, and preserves th
 test("meaning cycling is ignored with one meaning or outside an unanswered question", () => {
   const single = update(createInitialState(workbook), { type: "practiceStarted", candidates: [entry(1)] }).state;
   const initial = update(createInitialState(multipleMeaningsWorkbook), { type: "practiceStarted", candidates: [entry(1)] }).state;
-  const pending = update(initial, { type: "practiceAnswerSubmitted", answer: "word1" }).state;
-  for (const state of [single, pending, ...(["loading", "empty", "detail", "done"] as const).map((phase) => ({ ...initial, practice: { ...initial.practice, phase } })),
+  const feedback = update(initial, { type: "practiceAnswerSubmitted", answer: "word1" }).state;
+  for (const state of [single, feedback, ...(["loading", "empty", "detail", "saving", "saveFailed", "done"] as const).map((phase) => ({ ...initial, practice: { ...initial.practice, phase } })),
     { ...initial, practice: { ...initial.practice, feedback: "Correct!" } },
     { ...initial, practice: { ...initial.practice, currentEntry: null } },
   ]) {

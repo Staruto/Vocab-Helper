@@ -115,8 +115,8 @@ test("entry stats, priority, ownership, and cascades are enforced", () => {
     assert.throws(() => repository.addEntry(first.id, "猫", "cat", ["cat"], {}, [secondTag.id]), /does not belong/);
     const entry = repository.addEntry(first.id, "猫", "cat", ["cat"], { kana: "ねこ" }, [firstTag.id]);
     assert.equal(entry.tier, "gray"); assert.equal(entry.testCount, 0); assert.equal(entry.errorCount, 0);
-    assert.equal(repository.recordTestResult(entry.id, false).errorCount, 1);
-    assert.equal(repository.recordTestResult(entry.id, true).errorCount, 0);
+    assert.equal(repository.completePracticeSession(first.id, [{ entryId: entry.id, answers: [false, true] }], "2026-10-25")[0].errorCount, 1);
+    assert.equal(repository.completePracticeSession(first.id, [{ entryId: entry.id, answers: [true] }], "2026-10-25")[0].errorCount, 0);
     repository.deleteEntry(entry.id); repository.close();
     const db = new DatabaseSync(temp.path);
     assert.equal((db.prepare("SELECT COUNT(*) AS count FROM entry_stats").get() as { count: number }).count, 0);
@@ -190,8 +190,8 @@ test("bulk imports write complete entries atomically and synchronize duplicates"
 });
 
 function seedTestRecord(repository: VocabularyRepository, entryId: number): EntryRow {
-  repository.recordTestResult(entryId, true);
-  const tested = repository.recordTestResult(entryId, false);
+  const workbookId = repository.getEntry(entryId)!.workbookId;
+  const [tested] = repository.completePracticeSession(workbookId, [{ entryId, answers: [false, true] }], "2026-10-25");
   assert.equal(tested.testCount, 2);
   assert.equal(tested.errorCount, 1);
   assert.ok(tested.lastTested);
@@ -478,7 +478,7 @@ test("never-tested entries rank before tested entries", () => {
   const temp = temporaryDatabase();
   try {
     const repository = new VocabularyRepository(temp.path); const workbook = repository.createConfiguredWorkbook(basicWorkbook());
-    const tested = repository.addEntry(workbook.id, "犬", "dog"); repository.recordTestResult(tested.id, true);
+    const tested = repository.addEntry(workbook.id, "犬", "dog"); repository.completePracticeSession(workbook.id, [{ entryId: tested.id, answers: [true] }], "2026-10-25");
     const fresh = repository.addEntry(workbook.id, "猫", "cat");
     assert.equal(repository.selectPracticeCandidates(workbook.id, 1)[0].id, fresh.id);
     repository.close();

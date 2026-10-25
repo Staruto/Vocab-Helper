@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { adjacentEntryId, buildDetailSections, detailNavigationLabel } from "./detail-display.js";
+import { adjacentEntryId, buildDetailSections, buildReviewFields, detailNavigationLabel } from "./detail-display.js";
 import { EntryRow, WorkbookRow } from "./db.js";
 
 const workbook = {
@@ -14,6 +14,19 @@ const entry = {
   attributes: { note: "" }, tags: [{ id: 10, tagTypeId: 1, name: "verb" }], createdAt: "2026-01-01", updatedAt: "2026-01-01",
   testCount: 0, errorCount: 0, tier: "gray", lastTested: null, nextTestDeadline: null,
 } satisfies EntryRow;
+
+test("Review shows date-only deadlines and missing learning dates", () => {
+  assert.deepEqual(buildReviewFields(entry).slice(-2), [
+    { key: "Last tested", value: "Never" },
+    { key: "Next deadline", value: "—" },
+  ]);
+  assert.deepEqual(buildReviewFields({ ...entry, lastTested: "2026-10-25", nextTestDeadline: "2026-11-09" }).slice(-2), [
+    { key: "Last tested", value: "2026-10-25" },
+    { key: "Next deadline", value: "2026-11-09" },
+  ]);
+  const legacyDate = new Date(2026, 9, 25, 23, 30).toISOString();
+  assert.equal(buildReviewFields({ ...entry, nextTestDeadline: legacyDate }).at(-1)?.value, "2026-10-25");
+});
 
 test("detail sections preserve fields, use an em dash for empty optionals, and filter tags by visibility", () => {
   const sections = buildDetailSections(workbook, entry, [

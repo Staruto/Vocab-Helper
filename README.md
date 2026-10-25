@@ -55,6 +55,10 @@ Updating an existing entry through `/edit` or `/import` resets its test count, e
 
 Run `/test` to begin a practice session. For workbooks with multiple meanings, press Tab to show the next meaning, wrapping through the workbook's meaning order. Empty meanings display as `-`. Switching preserves your typed answer. Every new question starts on the primary meaning, including retry questions.
 
+Learning results are saved together when you advance past the final correct answer, after all retries finish. Test Count includes every answer; correct initial answers lower Error Count, wrong answers raise it (up to 3), and correct retries leave it unchanged. Esc or Ctrl+C before completion discards the unfinished session. If saving fails, Enter retries saving and Esc discards the results.
+
+Last tested is the local calendar day of completion. The next deadline is that day plus 15, 7, 4, or 1 days for final Error Counts of 0, 1, 2, or 3. New entries come first, followed by entries due today or earlier, then future entries to fill the session; higher Error Count takes priority within due and future groups, with random ties. `/test` defaults to 15 entries; `/test [count]` changes the session size. Entry details show Last tested and Next deadline in Review.
+
 ## Database
 
 - Default database path: repo-root `vocab.db`
