@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
+import { reviewDeadline } from "./calendar.js";
 
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 
 export type SchemaMigration = {
   version: number;
@@ -193,6 +194,22 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
         ALTER TABLE workbooks
         ADD COLUMN import_file_path TEXT NULL;
       `);
+    },
+  },
+  {
+    version: 5,
+    apply(db) {
+      const entries = db.prepare(`SELECT entry_id, last_tested, error_count FROM entry_stats
+        WHERE last_tested IS NOT NULL AND next_test_deadline IS NULL ORDER BY entry_id`).all() as Array<{
+          entry_id: number; last_tested: string; error_count: number;
+        }>;
+      const update = db.prepare("UPDATE entry_stats SET next_test_deadline = ? WHERE entry_id = ?");
+      for (const entry of entries) {
+        let deadline: string;
+        try { deadline = reviewDeadline(entry.last_tested, entry.error_count); }
+        catch { throw new Error(`Cannot repair deadline for entry #${entry.entry_id}: invalid last-tested date.`); }
+        update.run(deadline, entry.entry_id);
+      }
     },
   },
 ];

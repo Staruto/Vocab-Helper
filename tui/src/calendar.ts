@@ -14,3 +14,11 @@ export function addCalendarDays(day: string, days: number): string {
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
 }
+
+export function reviewDeadline(lastTested: string, errorCount: number): string {
+  const day = calendarDay(lastTested);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || Number.isNaN(Date.parse(lastTested)) || addCalendarDays(day, 0) !== day) {
+    throw new Error("Invalid last-tested date.");
+  }
+  return addCalendarDays(day, [15, 7, 4, 1][errorCount]);
+}

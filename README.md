@@ -1,4 +1,4 @@
-# VocabHelper 3.4.1
+# VocabHelper 3.4.2
 
 A modern TypeScript TUI for vocabulary memorization.
 
@@ -65,5 +65,6 @@ Last tested is the local calendar day of completion. The next deadline is that d
 - Override with `VOCAB_HELPER_DB_PATH`
 - Numeric IDs are stable and are intentionally not recycled after deletion. Gaps are normal.
 - Normalized databases created by VocabHelper 3.0.0 or newer are upgraded automatically.
+- On first launch of v3.4.2, tested entries with missing deadlines are repaired automatically using the local calendar date of Last tested and the current Error Count. Existing deadlines and other learning data are preserved; never-tested entries remain unscheduled. Historical deadlines may already be overdue.
 - Legacy Python and hybrid database formats are no longer supported.
 

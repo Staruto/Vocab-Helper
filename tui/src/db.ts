@@ -1,7 +1,7 @@
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
-import { addCalendarDays, localCalendarDay } from "./calendar.js";
+import { addCalendarDays, localCalendarDay, reviewDeadline } from "./calendar.js";
 import { runSchemaMigrations } from "./schema.js";
 
 export type VocabularyKind = "preset_language" | "other_language" | "non_language";
@@ -474,7 +474,7 @@ export class VocabularyRepository {
         for (const [index, correct] of result.answers.entries()) {
           errors = correct ? Math.max(0, errors - (index === 0 ? 1 : 0)) : Math.min(3, errors + 1);
         }
-        const deadline = addCalendarDays(completedDay, [15, 7, 4, 1][errors]);
+        const deadline = reviewDeadline(completedDay, errors);
         this.db.prepare("UPDATE entry_stats SET test_count = test_count + ?, error_count = ?, last_tested = ?, next_test_deadline = ? WHERE entry_id = ?")
           .run(result.answers.length, errors, completedDay, deadline, entry.id);
       }
