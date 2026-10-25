@@ -837,7 +837,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
               key={`suggestion-${index}-${line.commandText}-${line.hintText}`}
               color={index + commandSuggestionScrollOffset === commandSuggestionIndex ? SELECTED_TEXT_COLOR : undefined}
             >
-              <Text color={index + commandSuggestionScrollOffset === commandSuggestionIndex ? SELECTED_TEXT_COLOR : "white"}>{padLine("", 2)}{line.commandText}</Text>
+              <Text color={index + commandSuggestionScrollOffset === commandSuggestionIndex ? SELECTED_TEXT_COLOR : "white"}>{index + commandSuggestionScrollOffset === commandSuggestionIndex ? "> " : "  "}{line.commandText}</Text>
               <Text color={index + commandSuggestionScrollOffset === commandSuggestionIndex ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}> {line.hintText}</Text>
             </Text>
           ))
@@ -1702,8 +1702,8 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
     if (key.return) dispatch({ type: "practiceAnswerSubmitted", answer: latest.commandBuffer });
   });
 
-  if (practice.phase === "loading") return <Box flexDirection="column"><Text color="cyan">Loading practice entries...</Text><Text color={AUXILIARY_TEXT_COLOR}>Esc cancels.</Text></Box>;
-  if (practice.phase === "empty") return <Box flexDirection="column"><Text color={practice.error ? "red" : "cyan"}>{practice.error ?? `No entries available in ${workbook.name}.`}</Text><Text color={AUXILIARY_TEXT_COLOR}>Press Enter or Esc to return.</Text></Box>;
+  if (practice.phase === "loading") return <Box flexDirection="column"><Text>Loading practice entries...</Text><Text color={AUXILIARY_TEXT_COLOR}>Esc cancels.</Text></Box>;
+  if (practice.phase === "empty") return <Box flexDirection="column"><Text>{practice.error ?? `No entries available in ${workbook.name}.`}</Text><Text color={AUXILIARY_TEXT_COLOR}>Press Enter or Esc to return.</Text></Box>;
   if (practice.phase === "done") return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice - ${workbook.name}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="green">{padLine(`Final initial-round score: ${practice.score}/${practice.candidates.length}`, width)}</Text><Text>{padLine("Press Enter to return.", width)}</Text></Box>;
   if (practice.phase === "detail" && current) return <Box flexDirection="column">
     <EntryDetails workbook={workbook} entry={current} tagTypes={tagTypes} width={width} />
