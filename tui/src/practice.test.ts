@@ -320,6 +320,31 @@ test("the screen controller saves once for rapid repeated input", async () => {
   controller.dispose();
 });
 
+test("practice loading and saving stay internal while results and failures remain visible", async () => {
+  const s = session(1);
+  const visible: string[] = [];
+  const controller = createOrchestrationController(createInitialState(workbook), s.capabilities, (state) => {
+    visible.push(state.practice.phase);
+  });
+  const loading = controller.dispatch({ type: "practiceCandidatesRequested", workbookId: 1, count: 1 });
+  assert.equal(controller.getState().practice.phase, "loading");
+  assert.equal(visible.length, 0);
+  await loading;
+  assert.deepEqual(visible, ["initial"]);
+  await controller.dispatch({ type: "practiceAnswerSubmitted", answer: "word1" });
+  s.capabilities.practice.completePracticeSession = () => { throw new Error("Save failed"); };
+  const saving = controller.dispatch({ type: "practiceRetryAdvanced" });
+  assert.equal(controller.getState().practice.phase, "saving");
+  assert.equal(visible.at(-1), "initial");
+  await saving;
+  assert.equal(visible.at(-1), "saveFailed");
+  s.capabilities.practice.completePracticeSession = () => s.entries;
+  await controller.dispatch({ type: "practiceSaveRetried" });
+  assert.equal(visible.at(-1), "done");
+  assert.ok(!visible.includes("loading") && !visible.includes("saving"));
+  controller.dispose();
+});
+
 test("disposed controllers suppress late state notifications and further effects", async () => {
   const s = session(1);
   let notifications = 0;

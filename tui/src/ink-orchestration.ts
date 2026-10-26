@@ -23,7 +23,9 @@ export function createOrchestrationController(
     if (disposed) return;
     const transition = update(state, intent);
     state = transition.state;
-    onState(state);
+    // Keep the current screen while synchronous practice reads/writes finish.
+    // Pending state still blocks duplicate input through getState().
+    if (state.practice.phase !== "loading" && state.practice.phase !== "saving") onState(state);
     const results = await runTransitionEffects(transition.effects, state, capabilities);
     for (const result of results) {
       if (disposed) return;

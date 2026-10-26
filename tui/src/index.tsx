@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, render, useApp, useInput, useStdout } from "ink";
 import { CreateWorkbookInput, EntryRow, LANGUAGE_PRESET_DEFINITIONS, MeaningAttribute, MetadataAttribute, TagDataLossError, TagType, TagTypeDraft, VocabularyKind, WorkbookAttributesDraft, WorkbookConfigurationInput, WorkbookDataLossError, WorkbookRow, WorkbookTagsDraft } from "./db.js";
 import { VocabularyBackend } from "./backend.js";
@@ -1654,7 +1654,7 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
   const tagTypes = orchestration.tagTypes;
   const current = practice.currentEntry;
   useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => { stdout.off("resize", f); }; }, [stdout]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const nextController = createOrchestrationController(
       createInitialState(workbook, [], orchestrationCapabilities.reads.listTagTypes(workbook.id)),
       orchestrationCapabilities, setOrchestration,
@@ -1694,9 +1694,7 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
     if (key.return) dispatch({ type: "practiceAnswerSubmitted", answer: latest.commandBuffer });
   });
 
-  if (practice.phase === "saving") return <Box flexDirection="column"><Text>Saving practice results...</Text></Box>;
   if (practice.phase === "saveFailed") return <Box flexDirection="column"><Text color="red">{practice.error}</Text><Text>Enter retries saving | Esc discards results</Text></Box>;
-  if (practice.phase === "loading") return <Box flexDirection="column"><Text>Loading practice entries...</Text><Text color={AUXILIARY_TEXT_COLOR}>Esc cancels.</Text></Box>;
   if (practice.phase === "empty") return <Box flexDirection="column"><Text>{practice.error ?? `No entries available in ${workbook.name}.`}</Text><Text color={AUXILIARY_TEXT_COLOR}>Press Enter or Esc to return.</Text></Box>;
   if (practice.phase === "done") return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice - ${workbook.name}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="green">{padLine(`Final initial-round score: ${practice.score}/${practice.candidates.length}`, width)}</Text><Text>{padLine("Press Enter to return.", width)}</Text></Box>;
   if (practice.phase === "detail" && current) return <Box flexDirection="column">
