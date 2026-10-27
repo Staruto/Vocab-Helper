@@ -32,6 +32,7 @@ export type WorkbookRow = {
   vocabularyLabel: string; vocabularyLanguageCode: string | null;
   presetEnabled: boolean; vocabularyKind: VocabularyKind;
   importFilePath: string | null;
+  dailyGoal: number | null; todayPracticeCount: number;
   meaningAttributes: MeaningAttribute[]; metadataAttributes: MetadataAttribute[];
 };
 export type EntryRow = {
@@ -122,11 +123,17 @@ export class VocabularyRepository {
   initialize(): void { runSchemaMigrations(this.db); }
 
   listWorkbooks(): WorkbookRow[] {
-    const rows = this.db.prepare("SELECT w.*, COUNT(e.id) AS word_count FROM workbooks w LEFT JOIN entries e ON e.workbook_id = w.id GROUP BY w.id ORDER BY w.id").all() as Record<string, unknown>[];
+    const rows = this.db.prepare(`SELECT w.*, COUNT(e.id) AS word_count, COALESCE(p.practice_count, 0) AS today_practice_count
+      FROM workbooks w LEFT JOIN entries e ON e.workbook_id = w.id
+      LEFT JOIN workbook_daily_practice p ON p.workbook_id = w.id AND p.practice_day = ?
+      GROUP BY w.id ORDER BY w.id`).all(localCalendarDay()) as Record<string, unknown>[];
     return rows.map((row) => this.hydrateWorkbook(row));
   }
   getWorkbook(workbookId: number): WorkbookRow | null {
-    const row = this.db.prepare("SELECT w.*, COUNT(e.id) AS word_count FROM workbooks w LEFT JOIN entries e ON e.workbook_id = w.id WHERE w.id = ? GROUP BY w.id").get(workbookId) as Record<string, unknown> | undefined;
+    const row = this.db.prepare(`SELECT w.*, COUNT(e.id) AS word_count, COALESCE(p.practice_count, 0) AS today_practice_count
+      FROM workbooks w LEFT JOIN entries e ON e.workbook_id = w.id
+      LEFT JOIN workbook_daily_practice p ON p.workbook_id = w.id AND p.practice_day = ?
+      WHERE w.id = ? GROUP BY w.id`).get(localCalendarDay(), workbookId) as Record<string, unknown> | undefined;
     return row ? this.hydrateWorkbook(row) : null;
   }
   listMeaningAttributes(workbookId: number): MeaningAttribute[] { return this.requireWorkbook(workbookId).meaningAttributes; }
@@ -236,6 +243,16 @@ export class VocabularyRepository {
     const trimmed = trimOptional(path);
     const normalized = trimmed ? resolve(trimmed) : null;
     this.db.prepare("UPDATE workbooks SET import_file_path = ?, updated_at = ? WHERE id = ?").run(normalized, new Date().toISOString(), workbookId);
+    return this.requireWorkbook(workbookId);
+  }
+
+  setWorkbookDailyGoal(workbookId: number, goal: number | null): WorkbookRow {
+    this.requireWorkbook(workbookId);
+    if (goal !== null && (!Number.isSafeInteger(goal) || goal <= 0)) {
+      throw new ValidationError("Daily goal must be a positive whole number, or empty for no goal.");
+    }
+    this.db.prepare("UPDATE workbooks SET daily_goal = ?, updated_at = ? WHERE id = ?")
+      .run(goal, new Date().toISOString(), workbookId);
     return this.requireWorkbook(workbookId);
   }
 
@@ -478,6 +495,11 @@ export class VocabularyRepository {
         this.db.prepare("UPDATE entry_stats SET test_count = test_count + ?, error_count = ?, last_tested = ?, next_test_deadline = ? WHERE entry_id = ?")
           .run(result.answers.length, errors, completedDay, deadline, entry.id);
       }
+      if (results.length > 0) {
+        this.db.prepare(`INSERT INTO workbook_daily_practice (workbook_id, practice_day, practice_count) VALUES (?, ?, ?)
+          ON CONFLICT (workbook_id, practice_day) DO UPDATE SET practice_count = practice_count + excluded.practice_count`)
+          .run(workbookId, completedDay, results.length);
+      }
       return results.map((result) => this.requireEntry(result.entryId));
     });
   }
@@ -517,6 +539,7 @@ export class VocabularyRepository {
       id, name: String(row.name), wordCount: Number(row.word_count ?? 0), createdAt: String(row.created_at), vocabularyLabel, vocabularyLanguageCode,
       presetEnabled: Number(row.preset_enabled) === 1, vocabularyKind: String(row.vocabulary_kind) as VocabularyKind,
       importFilePath: row.import_file_path == null ? null : String(row.import_file_path),
+      dailyGoal: row.daily_goal == null ? null : Number(row.daily_goal), todayPracticeCount: Number(row.today_practice_count ?? 0),
       meaningAttributes: meanings, metadataAttributes: metadata,
     };
   }

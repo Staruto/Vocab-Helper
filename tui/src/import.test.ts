@@ -9,7 +9,7 @@ import { buildImportPreviewLines, formatImportPreviewFilter, importFilePathsEqua
 const workbook: WorkbookRow = {
   id: 1, name: "Japanese", wordCount: 0, createdAt: "2026-01-01",
   vocabularyLabel: "Japanese", vocabularyLanguageCode: "JP", presetEnabled: true, vocabularyKind: "preset_language",
-  importFilePath: null,
+  importFilePath: null, dailyGoal: null, todayPracticeCount: 0,
   meaningAttributes: [
     { id: 1, key: "meaning_1", position: 1, label: "English", languageCode: "EN" },
     { id: 2, key: "meaning_2", position: 2, label: "Chinese", languageCode: "ZH" },

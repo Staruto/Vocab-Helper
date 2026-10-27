@@ -53,6 +53,12 @@ Updating an existing entry through `/edit` or `/import` resets its test count, e
 
 ## Practice
 
+The home workbook list shows **Today / Goal** for each workbook. Set or clear a workbook's daily goal through `/setting` → **Daily Goal**. Goals are optional positive whole numbers; an empty value means no goal. Tracking works even without a goal, and totals can exceed the goal.
+
+Daily practice counts each word once per completed session, excluding retries. Practicing the same word in another completed session counts again. Cancelled or failed sessions add nothing; a successful save retry counts the session once. Sessions count on their local completion day, including sessions that cross midnight. The home page refreshes when you return and checks for a new day every 30 seconds while open.
+
+Daily totals persist across restarts and entry edits, imports, and deletions. Tracking starts with this feature; past totals cannot be reconstructed from existing learning statistics. New and existing workbooks start with no goal.
+
 Run `/test` to begin a practice session. For workbooks with multiple meanings, press Tab to show the next meaning, wrapping through the workbook's meaning order. Empty meanings display as `-`. Switching preserves your typed answer. Every new question starts on the primary meaning, including retry questions.
 
 Learning results are saved together when you advance past the final correct answer, after all retries finish. Test Count includes every answer; correct initial answers lower Error Count, wrong answers raise it (up to 3), and correct retries leave it unchanged. Esc or Ctrl+C before completion discards the unfinished session. If saving fails, Enter retries saving and Esc discards the results.

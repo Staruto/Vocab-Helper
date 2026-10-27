@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { reviewDeadline } from "./calendar.js";
 
-export const CURRENT_SCHEMA_VERSION = 5;
+export const CURRENT_SCHEMA_VERSION = 6;
 
 export type SchemaMigration = {
   version: number;
@@ -210,6 +210,22 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
         catch { throw new Error(`Cannot repair deadline for entry #${entry.entry_id}: invalid last-tested date.`); }
         update.run(deadline, entry.entry_id);
       }
+    },
+  },
+  {
+    version: 6,
+    apply(db) {
+      db.exec(`
+      ALTER TABLE workbooks ADD COLUMN daily_goal INTEGER NULL
+        CHECK (daily_goal IS NULL OR (typeof(daily_goal) = 'integer' AND daily_goal > 0 AND daily_goal <= 9007199254740991));
+      CREATE TABLE workbook_daily_practice (
+        workbook_id INTEGER NOT NULL,
+        practice_day TEXT NOT NULL,
+        practice_count INTEGER NOT NULL CHECK (practice_count >= 0),
+        PRIMARY KEY (workbook_id, practice_day),
+        FOREIGN KEY (workbook_id) REFERENCES workbooks(id) ON DELETE CASCADE
+      );
+      `);
     },
   },
 ];

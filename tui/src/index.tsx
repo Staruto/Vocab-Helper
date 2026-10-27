@@ -7,6 +7,8 @@ import { adjacentEntryId, buildDetailSections, buildReviewFields, detailNavigati
 import { formatImportPreviewFilter, formatImportPreviewRecord, importPreviewPageSize, ImportPreview, ImportPreviewFilter, loadLabeledTextFile, paginateImportPreview } from "./import.js";
 import { CaretInputLine } from "./text-input.js";
 import { filterEntriesForSearch } from "./search.js";
+import { localCalendarDay } from "./calendar.js";
+import { buildWorkbookMenuLines, parseDailyGoalInput } from "./workbook-display.js";
 import { UiMode } from "./orchestration.js";
 import { createOrchestrationCapabilities } from "./orchestration-runner.js";
 import { createInitialState, update as updateOrchestration } from "./orchestration.js";
@@ -22,6 +24,7 @@ type AppScreen =
   | { kind: "settings"; workbook: WorkbookRow }
   | { kind: "settings-attributes"; workbook: WorkbookRow }
   | { kind: "settings-import"; workbook: WorkbookRow }
+  | { kind: "settings-goal"; workbook: WorkbookRow }
   | { kind: "settings-appearance"; workbook: WorkbookRow }
   | { kind: "tags"; workbook: WorkbookRow; returnTo?: "vocab" | "settings" }
   | { kind: "view"; workbook: WorkbookRow; entryId: number }
@@ -325,31 +328,6 @@ function buildSuggestionLines(suggestions: CommandSpec[], selectedIndex: number,
   }
   return rows;
 }
-
-function buildWorkbookMenuLines(
-  workbooks: WorkbookRow[],
-  width: number,
-  selectedIndex: number,
-): { border: string; header: string; rows: Array<{ line: string; selected: boolean }> } {
-  const totalWidth = Math.max(width, 56);
-  const selectWidth = 3;
-  const countWidth = 8;
-  const nameWidth = Math.max(24, totalWidth - selectWidth - countWidth - 4);
-  const border = `+${"-".repeat(selectWidth)}+${"-".repeat(nameWidth)}+${"-".repeat(countWidth)}+`;
-  const header = `|${padLine("", selectWidth)}|${padLine("Name", nameWidth)}|${padLine("Words", countWidth)}|`;
-
-  const rows = workbooks.map((workbook, index) => ({
-    selected: index === selectedIndex,
-    line: `|${padLine(index === selectedIndex ? ">" : " ", selectWidth)}|${padLine(workbook.name, nameWidth)}|${padLine(String(workbook.wordCount), countWidth)}|`,
-  }));
-
-  rows.push({
-    selected: selectedIndex === workbooks.length,
-    line: `|${padLine(selectedIndex === workbooks.length ? ">" : " ", selectWidth)}|${padLine("+ Create new workbook", nameWidth)}|${padLine("", countWidth)}|`,
-  });
-  return { border, header, rows };
-}
-
 function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOpenTags, onViewEntry, onStartPractice }: VocabularyScreenProps): JSX.Element {
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
@@ -885,7 +863,7 @@ function WorkbookMenuScreen({
     };
   }, [stdout]);
 
-  const displayRows = useMemo(() => buildWorkbookMenuLines(workbooks, width, selectedIndex), [workbooks, selectedIndex, width]);
+  const displayRows = useMemo(() => buildWorkbookMenuLines(workbooks, width, selectedIndex, padLine), [workbooks, selectedIndex, width]);
 
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
@@ -1220,12 +1198,42 @@ function WorkbookDeleteConfirmScreen({
   );
 }
 
-function SettingsHomeScreen({ workbook, onAttributes, onTags, onImport, onAppearance, onCancel, onQuit }: { workbook: WorkbookRow; onAttributes: () => void; onTags: () => void; onImport: () => void; onAppearance: () => void; onCancel: () => void; onQuit: () => void }): JSX.Element {
+function SettingsHomeScreen({ workbook, onAttributes, onTags, onImport, onAppearance, onDailyGoal, onCancel, onQuit }: { workbook: WorkbookRow; onAttributes: () => void; onTags: () => void; onImport: () => void; onAppearance: () => void; onDailyGoal: () => void; onCancel: () => void; onQuit: () => void }): JSX.Element {
   const { stdout } = useStdout(); const [width, setWidth] = useState(() => stdout?.columns ?? 80); const [selected, setSelected] = useState(0);
-  const sections = ["Attributes", "Tags", "Import", "Appearance"];
+  const sections = ["Attributes", "Tags", "Import", "Appearance", "Daily Goal"];
   useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => { stdout.off("resize", f); }; }, [stdout]);
-  useInput((input, key) => { if (key.ctrl && input === "c") onQuit(); else if (key.escape) onCancel(); else if (key.upArrow) setSelected((v) => v <= 0 ? sections.length - 1 : v - 1); else if (key.downArrow) setSelected((v) => (v + 1) % sections.length); else if (key.return) [onAttributes, onTags, onImport, onAppearance][selected](); });
+  useInput((input, key) => { if (key.ctrl && input === "c") onQuit(); else if (key.escape) onCancel(); else if (key.upArrow) setSelected((v) => v <= 0 ? sections.length - 1 : v - 1); else if (key.downArrow) setSelected((v) => (v + 1) % sections.length); else if (key.return) [onAttributes, onTags, onImport, onAppearance, onDailyGoal][selected](); });
   return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Settings - ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Choose a settings section.", width)}</Text><Text>{padLine("", width)}</Text>{sections.map((section, index) => <Text key={section} color={index === selected ? SELECTED_TEXT_COLOR : "white"}>{padLine(`${index === selected ? ">" : " "} ${section}`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("↑↓ select | Enter open | Esc back", width)}</Text></Box>;
+}
+
+function DailyGoalSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook: WorkbookRow; onSave: (workbook: WorkbookRow) => void; onCancel: () => void; onQuit: () => void }): JSX.Element {
+  const { stdout } = useStdout();
+  const [width, setWidth] = useState(() => stdout?.columns ?? 80);
+  const [buffer, setBuffer] = useState(workbook.dailyGoal?.toString() ?? "");
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!stdout) return;
+    const resize = () => setWidth(stdout.columns ?? 80);
+    stdout.on("resize", resize);
+    return () => { stdout.off("resize", resize); };
+  }, [stdout]);
+  useInput((input, key) => {
+    if (key.ctrl && input === "c") { onQuit(); return; }
+    if (key.escape) { onCancel(); return; }
+    if (key.ctrl && input === "u") { setBuffer(""); setError(""); return; }
+    if (key.return) {
+      try { onSave(backend.setWorkbookDailyGoal(workbook.id, parseDailyGoalInput(buffer))); }
+      catch (caught) { setError(caught instanceof Error ? caught.message : "Could not save daily goal."); }
+    }
+  });
+  return <Box flexDirection="column">
+    <Text color="cyan" bold>{centerLine(`Daily Goal - ${workbook.name}`, width)}</Text>
+    <Text color={AUXILIARY_TEXT_COLOR}>{padLine("Words per day. Enter a positive whole number; empty means no goal.", width)}</Text>
+    <Text>{padLine("", width)}</Text>
+    <CaretInputLine prefix="Daily goal: " value={buffer} onChange={(value) => { setBuffer(value); setError(""); }} width={width} inputKey="daily-goal" />
+    <Text color="red">{padLine(error, width)}</Text>
+    <Text color={AUXILIARY_TEXT_COLOR}>{padLine("Enter saves | Ctrl+U clears | Esc cancels", width)}</Text>
+  </Box>;
 }
 
 function ImportSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook: WorkbookRow; onSave: (workbook: WorkbookRow) => void; onCancel: () => void; onQuit: () => void }): JSX.Element {
@@ -1729,6 +1737,19 @@ function App(): JSX.Element {
     };
   }, []);
 
+  useEffect(() => {
+    if (screen.kind !== "menu") return;
+    let displayedDay = localCalendarDay();
+    const timer = setInterval(() => {
+      const today = localCalendarDay();
+      if (today !== displayedDay) {
+        setWorkbooks(backend.listWorkbooks());
+        displayedDay = today;
+      }
+    }, 30_000);
+    return () => clearInterval(timer);
+  }, [screen.kind]);
+
   function openWorkbook(workbook: WorkbookRow): void {
     backend.setCurrentWorkbookId(workbook.id);
     setScreen({ kind: "vocab", workbook });
@@ -1803,8 +1824,9 @@ function App(): JSX.Element {
 
   if (screen.kind === "practice") return <PracticeScreen workbook={screen.workbook} count={screen.count} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} onDone={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} />;
 
-  if (screen.kind === "settings") return <SettingsHomeScreen workbook={screen.workbook} onAttributes={() => setScreen({ kind: "settings-attributes", workbook: refreshWorkbook(screen.workbook.id) })} onTags={() => setScreen({ kind: "tags", workbook: refreshWorkbook(screen.workbook.id), returnTo: "settings" })} onImport={() => setScreen({ kind: "settings-import", workbook: refreshWorkbook(screen.workbook.id) })} onAppearance={() => setScreen({ kind: "settings-appearance", workbook: refreshWorkbook(screen.workbook.id) })} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
+  if (screen.kind === "settings") return <SettingsHomeScreen workbook={screen.workbook} onAttributes={() => setScreen({ kind: "settings-attributes", workbook: refreshWorkbook(screen.workbook.id) })} onTags={() => setScreen({ kind: "tags", workbook: refreshWorkbook(screen.workbook.id), returnTo: "settings" })} onImport={() => setScreen({ kind: "settings-import", workbook: refreshWorkbook(screen.workbook.id) })} onAppearance={() => setScreen({ kind: "settings-appearance", workbook: refreshWorkbook(screen.workbook.id) })} onDailyGoal={() => setScreen({ kind: "settings-goal", workbook: refreshWorkbook(screen.workbook.id) })} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
   if (screen.kind === "settings-attributes") return <MetadataSettingsScreen workbook={screen.workbook} onSave={(draft, confirmDataLoss) => { backend.updateWorkbookAttributes(screen.workbook.id, draft, confirmDataLoss); setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) }); }} onCancel={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
+  if (screen.kind === "settings-goal") return <DailyGoalSettingsScreen workbook={screen.workbook} onSave={(updated) => setScreen({ kind: "settings", workbook: updated })} onCancel={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
   if (screen.kind === "settings-import") return <ImportSettingsScreen workbook={screen.workbook} onSave={(updated) => setScreen({ kind: "settings", workbook: updated })} onCancel={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
   if (screen.kind === "settings-appearance") return <AppearanceSettingsScreen onCancel={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
   if (screen.kind === "tags") return <TagSettingsScreen workbook={screen.workbook} onSave={(draft, confirmDataLoss) => { backend.updateWorkbookTags(screen.workbook.id, draft, confirmDataLoss); setScreen(screen.returnTo === "settings" ? { kind: "settings", workbook: refreshWorkbook(screen.workbook.id) } : { kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) }); }} onCancel={() => setScreen(screen.returnTo === "settings" ? { kind: "settings", workbook: refreshWorkbook(screen.workbook.id) } : { kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
