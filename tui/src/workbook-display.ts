@@ -39,7 +39,7 @@ export function buildWorkbookMenuLines(
   const border = `+${"─".repeat(selectWidth)}+${"─".repeat(nameWidth)}+${"─".repeat(progressWidth)}+${"─".repeat(countWidth)}+`;
   const rows = workbooks.map((workbook, index) => {
     const filled = workbook.dailyGoal === null ? 0 : Math.floor(Math.min(workbook.todayPracticeCount / workbook.dailyGoal, 1) * 10);
-    const bar = workbook.dailyGoal === null ? " ".repeat(10) : "█".repeat(filled) + "░".repeat(10 - filled);
+    const bar = workbook.dailyGoal === null ? " ".repeat(10) : "■".repeat(filled) + "□".repeat(10 - filled);
     return row(
       index === selectedIndex,
       workbook.name,

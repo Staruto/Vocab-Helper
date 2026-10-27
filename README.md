@@ -1,4 +1,4 @@
-# VocabHelper 3.4.2
+# VocabHelper 3.5.0
 
 A modern TypeScript TUI for vocabulary memorization.
 
