@@ -1,5 +1,14 @@
 import type { WorkbookRow } from "./db.js";
 
+type WorkbookMenuRow = {
+  line: string;
+  selected: boolean;
+  beforeProgress: string;
+  progress: string;
+  afterProgress: string;
+  progressColor: "#777777" | "#e5c65f" | "green" | undefined;
+};
+
 export function parseDailyGoalInput(input: string): number | null {
   const value = input.trim();
   if (!value) return null;
@@ -15,19 +24,28 @@ export function buildWorkbookMenuLines(
   width: number,
   selectedIndex: number,
   pad: (text: string, width: number) => string,
-): { border: string; header: string; rows: Array<{ line: string; selected: boolean }> } {
-  const progress = workbooks.map((workbook) => `${workbook.todayPracticeCount} / ${workbook.dailyGoal ?? "No goal"}`);
-  const progressWidth = Math.max("Today / Goal".length, ...progress.map((value) => value.length));
+): { border: string; header: string; rows: WorkbookMenuRow[] } {
+  const todayWidth = Math.max(6, ...workbooks.map((workbook) => String(workbook.todayPracticeCount).length));
+  const goalWidth = Math.max(7, ...workbooks.map((workbook) => String(workbook.dailyGoal ?? "No goal").length));
+  const progressWidth = todayWidth + goalWidth + 5;
   const selectWidth = 3;
   const countWidth = 8;
   const nameWidth = Math.max(1, Math.max(width, 56) - selectWidth - countWidth - progressWidth - 5);
-  const line = (marker: string, name: string, words: string, today: string) =>
-    `|${pad(marker, selectWidth)}|${pad(name, nameWidth)}|${pad(words, countWidth)}|${pad(today, progressWidth)}|`;
-  const border = `+${"-".repeat(selectWidth)}+${"-".repeat(nameWidth)}+${"-".repeat(countWidth)}+${"-".repeat(progressWidth)}+`;
-  const rows = workbooks.map((workbook, index) => ({
-    selected: index === selectedIndex,
-    line: line(index === selectedIndex ? ">" : " ", workbook.name, String(workbook.wordCount), progress[index]),
-  }));
-  rows.push({ selected: selectedIndex === workbooks.length, line: line(selectedIndex === workbooks.length ? ">" : " ", "+ Create new workbook", "", "") });
-  return { border, header: line("", "Name", "Words", "Today / Goal"), rows };
+  const row = (selected: boolean, name: string, words: string, progress: string, progressColor: WorkbookMenuRow["progressColor"]): WorkbookMenuRow => {
+    const beforeProgress = `|${pad(selected ? ">" : " ", selectWidth)}|${pad(name, nameWidth)}|`;
+    const afterProgress = `|${pad(words, countWidth)}|`;
+    return { selected, beforeProgress, progress, afterProgress, progressColor, line: beforeProgress + progress + afterProgress };
+  };
+  const border = `+${"-".repeat(selectWidth)}+${"-".repeat(nameWidth)}+${"-".repeat(progressWidth)}+${"-".repeat(countWidth)}+`;
+  const rows = workbooks.map((workbook, index) => row(
+    index === selectedIndex,
+    workbook.name,
+    String(workbook.wordCount),
+    ` ${String(workbook.todayPracticeCount).padStart(todayWidth)} / ${String(workbook.dailyGoal ?? "No goal").padStart(goalWidth)} `,
+    workbook.todayPracticeCount === 0 ? "#777777"
+      : workbook.dailyGoal !== null && workbook.todayPracticeCount < workbook.dailyGoal ? "#e5c65f" : "green",
+  ));
+  rows.push(row(selectedIndex === workbooks.length, "+ Create new workbook", "", " ".repeat(progressWidth), undefined));
+  const headerProgress = pad(`${" ".repeat(Math.floor((progressWidth - "Today / Goal".length) / 2))}Today / Goal`, progressWidth);
+  return { border, header: `|${pad("", selectWidth)}|${pad("Name", nameWidth)}|${headerProgress}|${pad("Words", countWidth)}|`, rows };
 }

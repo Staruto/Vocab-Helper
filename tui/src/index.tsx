@@ -923,9 +923,12 @@ function WorkbookMenuScreen({
       {displayRows.rows.map((row, index) => {
         const isLast = index === displayRows.rows.length - 1;
         const color = row.selected ? SELECTED_TEXT_COLOR : isLast ? AUXILIARY_TEXT_COLOR : "white";
+        const beforeProgress = sliceToWidth(row.beforeProgress, width);
+        const progress = sliceToWidth(row.progress, Math.max(0, width - displayWidth(beforeProgress)));
+        const afterProgress = sliceToWidth(row.afterProgress, Math.max(0, width - displayWidth(beforeProgress) - displayWidth(progress)));
         return (
           <Text key={`${index}-${row.line}`} color={color}>
-            {padLine(row.line, width)}
+            {beforeProgress}<Text color={row.progressColor}>{progress}</Text>{afterProgress}
           </Text>
         );
       })}

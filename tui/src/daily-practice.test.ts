@@ -172,17 +172,31 @@ test("home table keeps goals readable and the create row selectable at supported
       { ...workbook, todayPracticeCount: 8, dailyGoal: 15 },
       { ...workbook, todayPracticeCount: 15, dailyGoal: 15 },
       { ...workbook, todayPracticeCount: 20, dailyGoal: 15 },
+      { ...workbook, todayPracticeCount: 0, dailyGoal: null },
     ];
     const pad = (value: string, width: number) => value.slice(0, width).padEnd(width);
     for (const width of [56, 80, 120]) {
       const table = buildWorkbookMenuLines(workbooks, width, workbooks.length, pad);
       assert.match(table.header, /Today \/ Goal/);
+      assert.ok(table.header.indexOf("Today / Goal") < table.header.indexOf("Words"));
+      const colors = ["green", "#777777", "#e5c65f", "green", "green", "#777777"];
       for (const [index, progress] of ["8 / No goal", "0 / 15", "8 / 15", "15 / 15", "20 / 15"].entries()) {
-        assert.ok(table.rows[index].line.includes(progress));
+        const [today, goal] = progress.split(" / ");
+        assert.equal(table.rows[index].progress, ` ${today.padStart(6)} / ${goal.padStart(7)} `);
+        assert.equal(table.rows[index].progress.indexOf("/"), 8);
         assert.equal(table.rows[index].selected, false);
+      }
+      for (const [index, color] of colors.entries()) {
+        assert.equal(table.rows[index].progressColor, color);
+        const selected = buildWorkbookMenuLines(workbooks, width, index, pad).rows[index];
+        assert.equal(selected.selected, true);
+        assert.equal(selected.progressColor, color);
+        assert.equal(selected.progress, table.rows[index].progress);
       }
       assert.match(table.rows.at(-1)!.line, /\+ Create new workbook/);
       assert.equal(table.rows.at(-1)!.selected, true);
+      assert.equal(table.rows.at(-1)!.progress.trim(), "");
+      assert.equal(table.rows.at(-1)!.progressColor, undefined);
       for (const line of [table.border, table.header, ...table.rows.map((row) => row.line)]) assert.equal(line.length, width);
     }
     const empty = buildWorkbookMenuLines([], 80, 0, pad);
