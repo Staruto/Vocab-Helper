@@ -1748,11 +1748,9 @@ function PracticeProfileScreen({ workbook, onCancel, onQuit }: { workbook: Workb
     else if (key.escape) onCancel();
   });
   const notes = [
-    `${profile.startDay} to ${profile.endDay} (${profile.weekCount} newest weeks)`,
     `Current streak: ${profile.streaks.current} days | Longest streak: ${profile.streaks.longest} days`,
-    `Current daily goal: ${workbook.dailyGoal ?? "No goal"}. Changing the goal recolors history.`,
-    "Any practice counts. If today is unfinished, the streak may end yesterday.",
-    "History starts with daily tracking. Missing dates mean no recorded practice.",
+    `Current daily goal: ${workbook.dailyGoal ?? "No goal"}${workbook.dailyGoal != null ? " words" : ""}`,
+    `Any practice counts for the streak. Changing the goal recolors history.`,
   ];
   return <Box flexDirection="column">
     <Text color="cyan" bold>{centerLine(`Profile - ${workbook.name}`, width)}</Text>
@@ -1763,10 +1761,11 @@ function PracticeProfileScreen({ workbook, onCancel, onQuit }: { workbook: Workb
       {row.cells.map((cell, index) => <React.Fragment key={cell.day}>{index > 0 ? " " : ""}<Text color={cell.color}>{cell.symbol}</Text></React.Fragment>)}
     </Text>)}
     <Text>{padLine("", width)}</Text>
-    <Text><Text color={GRAY_TIER_COLOR}>· No practice</Text>{"  "}<Text color={YELLOW_TIER_COLOR}>█ Below goal</Text>{"  "}<Text color="green">█ Goal met / no goal</Text></Text>
-    {notes.map((note) => <Text key={note} color={AUXILIARY_TEXT_COLOR}>{note}</Text>)}
+    <Text><Text color={GRAY_TIER_COLOR}>· No practice</Text>{"  "}<Text color={YELLOW_TIER_COLOR}>█ Below goal</Text>{"  "}<Text color="green">█ Goal met</Text></Text>
     <Text>{padLine("", width)}</Text>
-    <Text color={AUXILIARY_TEXT_COLOR}>{padLine("Esc back | Ctrl+C exit", width)}</Text>
+    {notes.map((note, index) => <Text key={note} color={index === 2 ? AUXILIARY_TEXT_COLOR : undefined}>{note}</Text>)}
+    <Text>{padLine("", width)}</Text>
+    <Text color={AUXILIARY_TEXT_COLOR}>{centerLine("Esc back", width)}</Text>
   </Box>;
 }
 

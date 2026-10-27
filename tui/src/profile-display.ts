@@ -51,20 +51,27 @@ export function buildPracticeProfile(history: DailyPracticeRow[], goal: number |
     }),
   }));
   const monthChars = Array<string>(weekCount * 2 - 1).fill(" ");
+
+  // Collect the first week of each month in view.
+  const starts: { week: number; label: string }[] = [];
   let previousMonth = "";
-  let nextLabelPosition = 0;
   for (let week = 0; week < weekCount; week++) {
     const monday = addCalendarDays(startDay, week * 7);
     const month = monday.slice(0, 7);
     if (month !== previousMonth) {
-      const position = week * 2;
-      const label = MONTHS[Number(monday.slice(5, 7)) - 1];
-      if (position >= nextLabelPosition && position + label.length <= monthChars.length) {
-        [...label].forEach((char, index) => { monthChars[position + index] = char; });
-        nextLabelPosition = position + label.length + 1;
-      }
+      starts.push({ week, label: MONTHS[Number(monday.slice(5, 7)) - 1] });
       previousMonth = month;
     }
+  }
+
+  // A 3-char label plus a 1-char gap needs 2 week-columns. If the leading partial
+  // month is too close to the next one, drop it and keep the later (fuller) month.
+  if (starts.length > 1 && starts[1].week - starts[0].week < 2) starts.shift();
+
+  for (const { week, label } of starts) {
+    const position = week * 2;
+    if (position + label.length > monthChars.length) continue; // would overflow the right edge
+    [...label].forEach((char, i) => { monthChars[position + i] = char; });
   }
   return { startDay, endDay: today, weekCount, monthLabels: `    ${monthChars.join("")}`, rows, streaks: practiceStreaks(history, today) };
 }
