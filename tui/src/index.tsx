@@ -8,6 +8,7 @@ import { formatImportPreviewFilter, formatImportPreviewRecord, importPreviewPage
 import { CaretInputLine } from "./text-input.js";
 import { filterEntriesForSearch } from "./search.js";
 import { localCalendarDay } from "./calendar.js";
+import { buildPracticeProfile } from "./profile-display.js";
 import { buildWorkbookMenuLines, parseDailyGoalInput } from "./workbook-display.js";
 import { UiMode } from "./orchestration.js";
 import { createOrchestrationCapabilities } from "./orchestration-runner.js";
@@ -28,6 +29,7 @@ type AppScreen =
   | { kind: "settings-appearance"; workbook: WorkbookRow }
   | { kind: "tags"; workbook: WorkbookRow; returnTo?: "vocab" | "settings" }
   | { kind: "view"; workbook: WorkbookRow; entryId: number }
+  | { kind: "profile"; workbook: WorkbookRow }
   | { kind: "practice"; workbook: WorkbookRow; count: number }
   | { kind: "vocab"; workbook: WorkbookRow };
 
@@ -37,6 +39,7 @@ type VocabularyScreenProps = {
   onQuit: () => void;
   onOpenSettings: () => void;
   onOpenTags: () => void;
+  onOpenProfile: () => void;
   onViewEntry: (entryId: number) => void;
   onStartPractice: (count?: number) => void;
 };
@@ -86,6 +89,7 @@ const COMMANDS: CommandSpec[] = [
   { name: "setting", hint: "Configure workbook fields" },
   { name: "tag", hint: "Manage workbook tags" },
   { name: "view", hint: "View entry details and status" },
+  { name: "profile", hint: "Show practice calendar and streaks" },
   { name: "test", hint: "Practice vocabulary (15 questions)" },
   { name: "exit", hint: "Exit the app" },
 ];
@@ -328,7 +332,7 @@ function buildSuggestionLines(suggestions: CommandSpec[], selectedIndex: number,
   }
   return rows;
 }
-function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOpenTags, onViewEntry, onStartPractice }: VocabularyScreenProps): JSX.Element {
+function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOpenTags, onOpenProfile, onViewEntry, onStartPractice }: VocabularyScreenProps): JSX.Element {
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
   const [rows, setRows] = useState(() => stdout?.rows ?? 24);
@@ -479,6 +483,11 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
 
     if (lower === "setting" || lower === "settings") { onOpenSettings(); return; }
     if (lower === "tag" || lower === "tags") { onOpenTags(); return; }
+    if (lower === "profile") {
+      if (args.length > 0) { setStatusLines(buildStatusLines("Usage: /profile")); return; }
+      onOpenProfile();
+      return;
+    }
     if (lower === "help") {
       setStatusLines(buildStatusLines(buildHelpText()));
       return;
@@ -1722,6 +1731,45 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
   return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice - ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(roundLabel, width)}</Text><Text>{padLine("", width)}</Text><Text>{padLine(`${workbook.meaningAttributes[practice.meaningIndex]?.label ?? "Primary Meaning"}: ${current?.meanings[practice.meaningIndex] || "-"}`, width)}</Text>{visibleTagGroups.map((group) => <PracticeTagLine key={group.typeId} typeName={group.typeName} tagNames={group.tagNames} width={width} />)}<Text>{padLine("", width)}</Text><CaretInputLine key={`${practice.phase}-${practice.index}-${practice.retryNumber}`} prefix="Answer: " value={orchestration.commandBuffer} onChange={(answer) => dispatch({ type: "practiceAnswerChanged", answer })} width={width} focus={practice.feedback === null} inputKey={`${practice.phase}-${practice.index}-${practice.retryNumber}`} /><Text>{padLine("", width)}</Text><Text color={practice.error ? "red" : "green"}>{padLine(practice.error ?? practice.feedback ?? "", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Tab cycle meanings | Enter submits | Esc cancels", width)}</Text></Box>;
 }
 
+function PracticeProfileScreen({ workbook, onCancel, onQuit }: { workbook: WorkbookRow; onCancel: () => void; onQuit: () => void }): JSX.Element {
+  const { stdout } = useStdout();
+  const [width, setWidth] = useState(() => stdout?.columns ?? 80);
+  const [today, setToday] = useState(() => localCalendarDay());
+  const history = useMemo(() => backend.listDailyPractice(workbook.id), [workbook.id, today]);
+  const profile = useMemo(() => buildPracticeProfile(history, workbook.dailyGoal, width, today), [history, workbook.dailyGoal, width, today]);
+  useEffect(() => {
+    const resize = () => setWidth(stdout?.columns ?? 80);
+    stdout?.on("resize", resize);
+    const timer = setInterval(() => setToday(localCalendarDay()), 30_000);
+    return () => { stdout?.off("resize", resize); clearInterval(timer); };
+  }, [stdout]);
+  useInput((input, key) => {
+    if (key.ctrl && input === "c") onQuit();
+    else if (key.escape) onCancel();
+  });
+  const notes = [
+    `${profile.startDay} to ${profile.endDay} (${profile.weekCount} newest weeks)`,
+    `Current streak: ${profile.streaks.current} days | Longest streak: ${profile.streaks.longest} days`,
+    `Current daily goal: ${workbook.dailyGoal ?? "No goal"}. Changing the goal recolors history.`,
+    "Any practice counts. If today is unfinished, the streak may end yesterday.",
+    "History starts with daily tracking. Missing dates mean no recorded practice.",
+  ];
+  return <Box flexDirection="column">
+    <Text color="cyan" bold>{centerLine(`Profile - ${workbook.name}`, width)}</Text>
+    <Text>{padLine("", width)}</Text>
+    <Text color={AUXILIARY_TEXT_COLOR}>{padLine(profile.monthLabels, width)}</Text>
+    {profile.rows.map((row) => <Text key={row.label}>
+      <Text color={AUXILIARY_TEXT_COLOR}>{row.label}{" "}</Text>
+      {row.cells.map((cell, index) => <React.Fragment key={cell.day}>{index > 0 ? " " : ""}<Text color={cell.color}>{cell.symbol}</Text></React.Fragment>)}
+    </Text>)}
+    <Text>{padLine("", width)}</Text>
+    <Text><Text color={GRAY_TIER_COLOR}>· No practice</Text>{"  "}<Text color={YELLOW_TIER_COLOR}>█ Below goal</Text>{"  "}<Text color="green">█ Goal met / no goal</Text></Text>
+    {notes.map((note) => <Text key={note} color={AUXILIARY_TEXT_COLOR}>{note}</Text>)}
+    <Text>{padLine("", width)}</Text>
+    <Text color={AUXILIARY_TEXT_COLOR}>{padLine("Esc back | Ctrl+C exit", width)}</Text>
+  </Box>;
+}
+
 function App(): JSX.Element {
   const { exit } = useApp();
   const [screen, setScreen] = useState<AppScreen>(() => ({ kind: "menu" }));
@@ -1827,8 +1875,10 @@ function App(): JSX.Element {
   }
 
   if (screen.kind === "vocab") {
-    return <VocabularyScreen workbook={screen.workbook} onBackToMenu={backToMenu} onQuit={quit} onOpenSettings={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onOpenTags={() => setScreen({ kind: "tags", workbook: refreshWorkbook(screen.workbook.id) })} onViewEntry={(entryId) => setScreen({ kind: "view", workbook: screen.workbook, entryId })} onStartPractice={(count) => { const n = count ?? 15; setScreen({ kind: "practice", workbook: refreshWorkbook(screen.workbook.id), count: Math.min(n, backend.countEntries(screen.workbook.id)) }); }} />;
+    return <VocabularyScreen workbook={screen.workbook} onBackToMenu={backToMenu} onQuit={quit} onOpenSettings={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onOpenTags={() => setScreen({ kind: "tags", workbook: refreshWorkbook(screen.workbook.id) })} onOpenProfile={() => setScreen({ kind: "profile", workbook: refreshWorkbook(screen.workbook.id) })} onViewEntry={(entryId) => setScreen({ kind: "view", workbook: screen.workbook, entryId })} onStartPractice={(count) => { const n = count ?? 15; setScreen({ kind: "practice", workbook: refreshWorkbook(screen.workbook.id), count: Math.min(n, backend.countEntries(screen.workbook.id)) }); }} />;
   }
+
+  if (screen.kind === "profile") return <PracticeProfileScreen workbook={screen.workbook} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
 
   if (screen.kind === "practice") return <PracticeScreen workbook={screen.workbook} count={screen.count} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} onDone={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} />;
 

@@ -68,6 +68,7 @@ export class VocabularyBackend {
   setTierColorsEnabled(enabled: boolean): boolean { return this.repository.setTierColorsEnabled(enabled); }
   setWorkbookImportFilePath(workbookId: number, path: string | null): WorkbookRow { return this.repository.setWorkbookImportFilePath(workbookId, path); }
   setWorkbookDailyGoal(workbookId: number, goal: number | null): WorkbookRow { return this.repository.setWorkbookDailyGoal(workbookId, goal); }
+  listDailyPractice(workbookId: number): import("./db.js").DailyPracticeRow[] { return this.repository.listDailyPractice(workbookId); }
   getEntryStats(entryId: number) { return this.repository.getEntryStats(entryId); }
   completePracticeSession(workbookId: number, results: PracticeSessionResult[], completedDay: string): EntryRow[] { return this.repository.completePracticeSession(workbookId, results, completedDay); }
   selectPracticeCandidates(workbookId: number, count: number): EntryRow[] { return this.repository.selectPracticeCandidates(workbookId, count); }

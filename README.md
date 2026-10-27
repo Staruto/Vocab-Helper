@@ -65,6 +65,14 @@ Learning results are saved together when you advance past the final correct answ
 
 Last tested is the local calendar day of completion. The next deadline is that day plus 15, 7, 4, or 1 days for final Error Counts of 0, 1, 2, or 3. New entries come first, followed by entries due today or earlier, then future entries to fill the session; higher Error Count takes priority within due and future groups, with random ties. `/test` defaults to 15 entries; `/test [count]` changes the session size. Entry details show Last tested and Next deadline in Review.
 
+## Practice profile
+
+Run `/profile` inside a workbook to see its practice calendar and streaks. The Monday–Sunday grid covers up to 53 weeks ending this week; narrower terminals show only the newest weeks that fit, without scrolling. Month labels appear above the grid, with the visible date range and color legend underneath. Esc returns to the workbook.
+
+A grey `·` means no recorded practice, yellow `█` means positive practice below the current goal, and green `█` means the goal was reached or exceeded. Without a goal, any positive practice is green. All historical colors use the current daily goal, so changing it recolors history. Future days are blank. History exists only since daily tracking began; missing dates show no recorded practice.
+
+Current and longest streaks count consecutive local calendar days with any practice, regardless of goal completion. If today has no practice yet, the current streak may end yesterday. Longest streak uses all recorded history, including dates outside the visible grid.
+
 ## Database
 
 - Default database path: repo-root `vocab.db`

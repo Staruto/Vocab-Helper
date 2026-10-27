@@ -42,6 +42,7 @@ export type EntryRow = {
   tier: "gray" | "green" | "yellow" | "red"; lastTested: string | null; nextTestDeadline: string | null;
 };
 export type PracticeSessionResult = { entryId: number; answers: boolean[] };
+export type DailyPracticeRow = { day: string; practiceCount: number };
 
 export type ImportEntryInput = { vocabulary: string; meanings: string[]; attributes: Record<string, string>; tagIds: number[] };
 export type ImportResult = { added: number; updated: number; unchanged: number; entries: EntryRow[] };
@@ -254,6 +255,13 @@ export class VocabularyRepository {
     this.db.prepare("UPDATE workbooks SET daily_goal = ?, updated_at = ? WHERE id = ?")
       .run(goal, new Date().toISOString(), workbookId);
     return this.requireWorkbook(workbookId);
+  }
+
+  listDailyPractice(workbookId: number): DailyPracticeRow[] {
+    this.requireWorkbook(workbookId);
+    const rows = this.db.prepare("SELECT practice_day, practice_count FROM workbook_daily_practice WHERE workbook_id = ? ORDER BY practice_day")
+      .all(workbookId) as Array<{ practice_day: string; practice_count: number }>;
+    return rows.map((row) => ({ day: row.practice_day, practiceCount: Number(row.practice_count) }));
   }
 
   getEntry(entryId: number): EntryRow | null {
