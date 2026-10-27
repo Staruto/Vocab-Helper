@@ -25,9 +25,8 @@ export function buildWorkbookMenuLines(
   selectedIndex: number,
   pad: (text: string, width: number) => string,
 ): { border: string; header: string; rows: WorkbookMenuRow[] } {
-  const todayWidth = Math.max(6, ...workbooks.map((workbook) => String(workbook.todayPracticeCount).length));
-  const goalWidth = Math.max(7, ...workbooks.map((workbook) => String(workbook.dailyGoal ?? "No goal").length));
-  const progressWidth = todayWidth + goalWidth + 5;
+  const progressValues = workbooks.map((workbook) => `${workbook.todayPracticeCount} / ${workbook.dailyGoal ?? "No goal"}`);
+  const progressWidth = Math.max(18, ...progressValues.map((value) => value.length + 2));
   const selectWidth = 3;
   const countWidth = 8;
   const nameWidth = Math.max(1, Math.max(width, 56) - selectWidth - countWidth - progressWidth - 5);
@@ -41,7 +40,7 @@ export function buildWorkbookMenuLines(
     index === selectedIndex,
     workbook.name,
     String(workbook.wordCount),
-    ` ${String(workbook.todayPracticeCount).padStart(todayWidth)} / ${String(workbook.dailyGoal ?? "No goal").padStart(goalWidth)} `,
+    `${progressValues[index].padStart(progressWidth - 1)} `,
     workbook.todayPracticeCount === 0 ? "#777777"
       : workbook.dailyGoal !== null && workbook.todayPracticeCount < workbook.dailyGoal ? "#e5c65f" : "green",
   ));

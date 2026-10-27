@@ -181,9 +181,7 @@ test("home table keeps goals readable and the create row selectable at supported
       assert.ok(table.header.indexOf("Today / Goal") < table.header.indexOf("Words"));
       const colors = ["green", "#777777", "#e5c65f", "green", "green", "#777777"];
       for (const [index, progress] of ["8 / No goal", "0 / 15", "8 / 15", "15 / 15", "20 / 15"].entries()) {
-        const [today, goal] = progress.split(" / ");
-        assert.equal(table.rows[index].progress, ` ${today.padStart(6)} / ${goal.padStart(7)} `);
-        assert.equal(table.rows[index].progress.indexOf("/"), 8);
+        assert.equal(table.rows[index].progress, `${progress.padStart(17)} `);
         assert.equal(table.rows[index].selected, false);
       }
       for (const [index, color] of colors.entries()) {
