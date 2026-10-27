@@ -162,7 +162,7 @@ test("goal editor accepts decimal digits or blank and rejects invalid input", ()
   }
 });
 
-test("home table keeps goals readable and the create row selectable at supported widths", () => {
+test("home table keeps goals readable and excludes creation from workbook rows", () => {
   const repository = new VocabularyRepository(":memory:");
   try {
     const workbook = repository.createWorkbook("A very long workbook name that must be clipped");
@@ -191,15 +191,14 @@ test("home table keeps goals readable and the create row selectable at supported
         assert.equal(selected.progressColor, color);
         assert.equal(selected.progress, table.rows[index].progress);
       }
-      assert.match(table.rows.at(-1)!.line, /\+ Create new workbook/);
-      assert.equal(table.rows.at(-1)!.selected, true);
-      assert.equal(table.rows.at(-1)!.progress.trim(), "");
-      assert.equal(table.rows.at(-1)!.progressColor, undefined);
+      assert.equal(table.rows.length, workbooks.length);
+      assert.ok(table.rows.every((row) => !row.selected && !row.line.includes("+ Create new workbook")));
       for (const line of [table.border, table.header, ...table.rows.map((row) => row.line)]) assert.equal(line.length, width);
     }
     const empty = buildWorkbookMenuLines([], 80, 0, pad);
-    assert.equal(empty.rows.length, 1);
-    assert.equal(empty.rows[0].selected, true);
+    assert.equal(empty.rows.length, 0);
+    assert.equal(empty.border.length, 80);
+    assert.equal(empty.header.length, 80);
     const large = buildWorkbookMenuLines([{ ...workbook, dailyGoal: Number.MAX_SAFE_INTEGER, todayPracticeCount: Number.MAX_SAFE_INTEGER }], 56, 0, pad);
     assert.ok(large.rows[0].line.includes(`${Number.MAX_SAFE_INTEGER} / ${Number.MAX_SAFE_INTEGER}`));
     assert.equal(large.rows[0].line.length, 56);

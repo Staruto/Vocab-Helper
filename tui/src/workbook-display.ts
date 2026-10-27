@@ -35,7 +35,7 @@ export function buildWorkbookMenuLines(
     const afterProgress = `|${pad(words, countWidth)}|`;
     return { selected, beforeProgress, progress, afterProgress, progressColor, line: beforeProgress + progress + afterProgress };
   };
-  const border = `+${"-".repeat(selectWidth)}+${"-".repeat(nameWidth)}+${"-".repeat(progressWidth)}+${"-".repeat(countWidth)}+`;
+  const border = `+${"─".repeat(selectWidth)}+${"─".repeat(nameWidth)}+${"─".repeat(progressWidth)}+${"─".repeat(countWidth)}+`;
   const rows = workbooks.map((workbook, index) => row(
     index === selectedIndex,
     workbook.name,
@@ -44,7 +44,6 @@ export function buildWorkbookMenuLines(
     workbook.todayPracticeCount === 0 ? "#777777"
       : workbook.dailyGoal !== null && workbook.todayPracticeCount < workbook.dailyGoal ? "#e5c65f" : "green",
   ));
-  rows.push(row(selectedIndex === workbooks.length, "+ Create new workbook", "", " ".repeat(progressWidth), undefined));
   const headerProgress = pad(`${" ".repeat(Math.floor((progressWidth - "Today / Goal".length) / 2))}Today / Goal`, progressWidth);
   return { border, header: `|${pad("", selectWidth)}|${pad("Name", nameWidth)}|${headerProgress}|${pad("Words", countWidth)}|`, rows };
 }

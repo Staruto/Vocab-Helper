@@ -921,8 +921,7 @@ function WorkbookMenuScreen({
       <Text>{displayRows.header}</Text>
       <Text>{displayRows.border}</Text>
       {displayRows.rows.map((row, index) => {
-        const isLast = index === displayRows.rows.length - 1;
-        const color = row.selected ? SELECTED_TEXT_COLOR : isLast ? AUXILIARY_TEXT_COLOR : "white";
+        const color = row.selected ? SELECTED_TEXT_COLOR : "white";
         const beforeProgress = sliceToWidth(row.beforeProgress, width);
         const progress = sliceToWidth(row.progress, Math.max(0, width - displayWidth(beforeProgress)));
         const afterProgress = sliceToWidth(row.afterProgress, Math.max(0, width - displayWidth(beforeProgress) - displayWidth(progress)));
@@ -932,6 +931,12 @@ function WorkbookMenuScreen({
           </Text>
         );
       })}
+      <Text>{displayRows.border}</Text>
+      <Box width={width} borderStyle="single" borderColor={selectedIndex === workbooks.length ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} justifyContent="center">
+        <Text color={selectedIndex === workbooks.length ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>
+          {centerLine("+ Create new workbook", Math.max(0, width - 2))}
+        </Text>
+      </Box>
       <Text>{padLine("", width)}</Text>
       <Text color={AUXILIARY_TEXT_COLOR}>{rightLine(WORKBOOK_MENU_HINT, width)}</Text>
       <Text>{padLine("", width)}</Text>
