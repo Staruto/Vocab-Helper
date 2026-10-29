@@ -180,7 +180,7 @@ test("home table keeps goals readable and excludes creation from workbook rows",
       assert.match(table.header, /Today \/ Goal/);
       assert.ok(table.header.indexOf("Today / Goal") < table.header.indexOf("Words"));
       const colors = ["green", "#777777", "#e5c65f", "green", "green", "#777777"];
-      const bars = ["          ", "░░░░░░░░░░", "█████░░░░░", "██████████", "██████████"];
+      const bars = ["          ", "□□□□□□□□□□", "■■■■■□□□□□", "■■■■■■■■■■", "■■■■■■■■■■"];
       for (const [index, progress] of ["8 / No goal", "0 / 15", "8 / 15", "15 / 15", "20 / 15"].entries()) {
         assert.equal(table.rows[index].progress, ` ${bars[index]}  ${progress.padStart(16)} `);
         assert.equal(table.rows[index].selected, false);
@@ -201,13 +201,13 @@ test("home table keeps goals readable and excludes creation from workbook rows",
     assert.equal(empty.border.length, 80);
     assert.equal(empty.header.length, 80);
     const ratios = [
-      { today: 0, goal: 1, bar: "░░░░░░░░░░" },
-      { today: 1, goal: 3, bar: "███░░░░░░░" },
-      { today: 2, goal: 3, bar: "██████░░░░" },
-      { today: 9, goal: 10, bar: "█████████░" },
-      { today: 1, goal: 1, bar: "██████████" },
-      { today: 12, goal: 10, bar: "██████████" },
-      { today: 999, goal: 1000, bar: "█████████░" },
+      { today: 0, goal: 1, bar: "□□□□□□□□□□" },
+      { today: 1, goal: 3, bar: "■■■□□□□□□□" },
+      { today: 2, goal: 3, bar: "■■■■■■□□□□" },
+      { today: 9, goal: 10, bar: "■■■■■■■■■□" },
+      { today: 1, goal: 1, bar: "■■■■■■■■■■" },
+      { today: 12, goal: 10, bar: "■■■■■■■■■■" },
+      { today: 999, goal: 1000, bar: "■■■■■■■■■□" },
     ];
     const ratioTable = buildWorkbookMenuLines(ratios.map(({ today, goal }) => ({ ...workbook, todayPracticeCount: today, dailyGoal: goal })), 80, 0, pad);
     for (const [index, ratio] of ratios.entries()) {
