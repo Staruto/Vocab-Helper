@@ -1,8 +1,9 @@
 import { EntryRow, TagType, WorkbookRow } from "./db.js";
+import { isActiveAttribute } from "./attributes.js";
 import { visibleAssignedTagGroups } from "./tag-display.js";
 
 export function searchableEntryValues(entry: EntryRow, workbook: WorkbookRow, tagTypes: TagType[]): string[] {
-  const values = workbook.metadataAttributes.filter((attribute) => attribute.visible).map((attribute) => {
+  const values = workbook.metadataAttributes.filter((attribute) => attribute.visible && isActiveAttribute(attribute)).map((attribute) => {
     if (attribute.key === "vocab") return entry.vocabulary;
     if (attribute.key.startsWith("meaning_")) return entry.meanings[Number(attribute.key.slice(8)) - 1] ?? "";
     return entry.attributes[attribute.key] ?? "";

@@ -1,3 +1,4 @@
+import { entryAttributes, isActiveAttribute, createPresetAttributes, isPresetActivationInput } from "./attributes.js";
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, render, useApp, useInput, useStdout } from "ink";
 import { CreateWorkbookInput, EntryRow, LANGUAGE_PRESET_DEFINITIONS, MeaningAttribute, MetadataAttribute, TagDataLossError, TagType, TagTypeDraft, VocabularyKind, WorkbookAttributesDraft, WorkbookConfigurationInput, WorkbookDataLossError, WorkbookRow, WorkbookTagsDraft } from "./db.js";
@@ -234,7 +235,7 @@ type VocabularyTableLayout = { border: string; header: string; columns: Array<{ 
 function buildTableLayout(entries: EntryRow[], pageIndex: number, width: number, availableRows: number, vocabularyLabel: string, meaningLabel: string, attributes?: MetadataAttribute[]): VocabularyTableLayout {
   const totalWidth = Math.max(width, 40);
   const innerWidth = Math.max(20, totalWidth - 2);
-  const columns = (attributes?.filter((a) => a.visible) ?? [
+  const columns = (attributes?.filter((a) => a.visible && isActiveAttribute(a)) ?? [
     { key: "vocab", label: vocabularyLabel }, { key: "meaning_1", label: meaningLabel },
   ]).map((a) => ({ key: a.key, label: a.label }));
   const columnWidth = Math.max(12, Math.floor((innerWidth - columns.length + 1) / columns.length));
@@ -349,7 +350,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   const [statusLines, setStatusLines] = useState<string[]>(() => buildStatusLines("/ for commands, Esc to exit."));
   const [tierColorsEnabled, setTierColorsEnabled] = useState(() => backend.getTierColorsEnabled());
   const [savedImportFilePath, setSavedImportFilePath] = useState(workbook.importFilePath);
-  const activeMetadata = workbook.metadataAttributes.filter((attribute) => attribute.role === "optional");
+  const activeMetadata = entryAttributes(workbook.metadataAttributes);
   const tagTypes = orchestration.tagTypes;
   const visibleEntries = useMemo(() => filterEntriesForSearch(entries, workbook, tagTypes, activeSearchQuery), [entries, workbook, tagTypes, activeSearchQuery]);
   const selectableTags = tagTypes.flatMap((type) => type.tags);
@@ -972,7 +973,8 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
   const [name, setName] = useState(existingWorkbook?.name ?? "");
   const [typeIndex, setTypeIndex] = useState(initialTypeIndex);
   const [vocabularyLabel, setVocabularyLabel] = useState(existingWorkbook?.vocabularyLabel ?? "");
-  const [presetEnabled, setPresetEnabled] = useState(existingWorkbook?.presetEnabled ?? true);
+  const [presetAttributes, setPresetAttributes] = useState<MetadataAttribute[]>(() => existingWorkbook?.metadataAttributes.filter((field) => Boolean(field.presetKey)) ?? createPresetAttributes(VOCABULARY_TYPES[initialTypeIndex].code));
+  const [presetLanguage, setPresetLanguage] = useState(VOCABULARY_TYPES[initialTypeIndex].code);
   const existingTagTypes = useMemo(() => existingWorkbook ? backend.listTagTypes(existingWorkbook.id) : [], [existingWorkbook]);
   const [addPosType, setAddPosType] = useState(() => existingWorkbook ? existingTagTypes.some((type) => type.name.toLocaleLowerCase() === "part of speech") : true);
   const [tags, setTags] = useState<Array<{ id?: number; name: string }>>(() => existingTagTypes.find((type) => type.name.toLocaleLowerCase() === "part of speech")?.tags ?? []);
@@ -980,7 +982,7 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
   const [meanings, setMeanings] = useState<MeaningAttribute[]>(existingWorkbook?.meaningAttributes ?? [{ position: 1, label: "Primary Meaning", languageCode: null }]);
   const [meaningIndex, setMeaningIndex] = useState(0);
   const [meaningPalette, setMeaningPalette] = useState<number | null>(null);
-  const [attributes, setAttributes] = useState<MetadataAttribute[]>(() => existingWorkbook?.metadataAttributes.filter((item) => item.role === "optional") ?? []);
+  const [attributes, setAttributes] = useState<MetadataAttribute[]>(() => existingWorkbook?.metadataAttributes.filter((item) => item.role === "optional" && !item.presetKey) ?? []);
   const [selected, setSelected] = useState(0);
   const [editAction, setEditAction] = useState<"none" | "add" | "rename">("none");
   const [editBuffer, setEditBuffer] = useState("");
@@ -990,8 +992,7 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
   const [destructiveFields, setDestructiveFields] = useState<Array<{ label: string; valueCount: number }>>([]);
   const selectedType = VOCABULARY_TYPES[typeIndex];
   const presetDefinition = selectedType.code ? LANGUAGE_PRESET_DEFINITIONS[selectedType.code] : undefined;
-  const presetOptionalAttributes = (presetDefinition?.optionalAttributes ?? []).map((item) => ({ ...item, required: false, visible: false, displayOrder: 0 }));
-  const presetKeys = new Set(presetEnabled && selectedType.kind === "preset_language" ? presetOptionalAttributes.map((item) => item.key) : []);
+
   const activeTextValue = stage === "destructive-confirm"
     ? confirmBuffer
     : editAction !== "none"
@@ -1009,7 +1010,7 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
   function back(): void { const previous = history.at(-1); if (!previous) return; setHistory((items) => items.slice(0, -1)); setStage(previous); setError(""); setEditAction("none"); }
   function optionalKey(label: string): string {
     const base = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "field";
-    const used = new Set(attributes.map((item) => item.key)); let key = base; let suffix = 2;
+    const used = new Set([...presetAttributes, ...attributes].map((item) => item.key)); let key = base; let suffix = 2;
     while (used.has(key)) key = `${base}_${suffix++}`;
     return key;
   }
@@ -1020,13 +1021,14 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
       else setAttributes((items) => [...items, { key: optionalKey(label), label, languageCode: null, required: false, visible: false, displayOrder: items.length }]);
     } else if (editAction === "rename") {
       if (stage === "tags") setTags((items) => items.map((item, index) => index === selected ? { ...item, name: label } : item));
+      else if (stage === "preset") setPresetAttributes((items) => items.map((item, index) => index === selected ? { ...item, label } : item));
       else setAttributes((items) => items.map((item, index) => index === selected ? { ...item, label } : item));
     }
     setEditAction("none"); setEditBuffer(""); setError("");
   }
   function configuration(): WorkbookConfigurationInput {
     return { name: name.trim(), vocabularyKind: selectedType.kind, vocabularyLabel: vocabularyLabel.trim(), vocabularyLanguageCode: selectedType.code,
-      presetEnabled: selectedType.kind === "preset_language" && presetEnabled, meaningAttributes: meanings.slice(0, meaningCount),
+      presetAttributes, meaningAttributes: meanings.slice(0, meaningCount),
       optionalAttributes: attributes, tagTypes: existingWorkbook ? existingTagTypes : addPosType ? [{ name: "Part of Speech", visible: false, tags }] : [] };
   }
   function submit(config: WorkbookConfigurationInput, confirmed: boolean): void {
@@ -1043,7 +1045,8 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
       const typeChanged = !existingWorkbook || selectedType.kind !== existingWorkbook.vocabularyKind || selectedType.code !== existingWorkbook.vocabularyLanguageCode;
       if (typeChanged) {
         setVocabularyLabel(selectedType.kind === "preset_language" ? selectedType.label : "Vocabulary");
-        if (!existingWorkbook) { setAttributes([]); setTags([]); setPresetEnabled(selectedType.kind === "preset_language"); setAddPosType(selectedType.kind !== "non_language"); }
+        if (!existingWorkbook) { setAddPosType(selectedType.kind !== "non_language");
+          if (presetLanguage !== selectedType.code) { setPresetAttributes(createPresetAttributes(selectedType.code)); setPresetLanguage(selectedType.code); setTags([]); } }
       }
       if (selectedType.kind === "other_language") setAddPosType(true);
       if (selectedType.kind === "non_language") setAddPosType(false);
@@ -1054,8 +1057,6 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
       go(existingWorkbook ? "meaning-count" : selectedType.kind === "preset_language" ? "preset" : "meaning-count"); return;
     }
     if (stage === "preset") {
-      if (presetEnabled && selectedType.kind === "preset_language") setAttributes((current) => [...current, ...presetOptionalAttributes.filter((preset) => !current.some((field) => field.key === preset.key)).map((field) => ({ ...field, provenance: "preset" as const }))]);
-      else if (!existingWorkbook) setAttributes([]);
       go("pos"); return;
     }
     if (stage === "pos") {
@@ -1098,7 +1099,16 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
       return;
     }
     if (!existingWorkbook && stage === "type" && (key.upArrow || key.downArrow)) { setTypeIndex((value) => key.upArrow ? (value <= 0 ? VOCABULARY_TYPES.length - 1 : value - 1) : (value + 1) % VOCABULARY_TYPES.length); return; }
-    if ((stage === "preset" || stage === "pos") && (key.upArrow || key.downArrow || input === " ")) { stage === "preset" ? setPresetEnabled((value) => !value) : setAddPosType((value) => !value); return; }
+    if (stage === "preset") {
+      if (key.upArrow || key.downArrow) { setSelected((value) => Math.max(0, Math.min(presetAttributes.length - 1, value + (key.upArrow ? -1 : 1)))); return; }
+      if (isPresetActivationInput(input, key) || input === " ") {
+        const activation = isPresetActivationInput(input, key);
+        setPresetAttributes((items) => items.map((field, index) => index !== selected ? field : activation ? { ...field, active: !isActiveAttribute(field) } : { ...field, visible: !field.visible })); return;
+      }
+      if (key.ctrl && input.toLowerCase() === "r" && presetAttributes[selected]) { setEditAction("rename"); setEditBuffer(presetAttributes[selected].label); return; }
+      if ((key.ctrl && input.toLowerCase() === "a") || key.delete) { setError("Preset attributes are fixed. Ctrl+Space toggles activation."); return; }
+    }
+    if (stage === "pos" && (key.upArrow || key.downArrow || input === " ")) { setAddPosType((value) => !value); return; }
     if (stage === "meaning-count" && (key.upArrow || key.downArrow)) { setMeaningCount((value) => key.upArrow ? Math.min(5, value + 1) : Math.max(1, value - 1)); return; }
     if (stage === "meaning" && (key.upArrow || key.downArrow)) {
       const next = meaningPalette === null ? 0 : key.upArrow ? (meaningPalette <= 0 ? LANGUAGE_PRESETS.length - 1 : meaningPalette - 1) : (meaningPalette + 1) % LANGUAGE_PRESETS.length;
@@ -1117,26 +1127,26 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
 
   const question = ["name"].includes(stage) ? 1 : ["type", "label", "preset", "pos", "tags"].includes(stage) ? 2 : ["meaning-count", "meaning"].includes(stage) ? 3 : stage === "attributes" ? 4 : 4;
   const title = stage === "destructive-confirm" ? "Confirm data removal" : stage === "confirm" ? `Confirm ${existingWorkbook ? "changes" : "creation"}` : `Question ${question}/4`;
-  const listItems = stage === "tags" ? tags.map((item) => item.name) : attributes.map((item) => `${item.label}${presetKeys.has(item.key) ? " (preset)" : ""}`);
+  const listItems = stage === "tags" ? tags.map((item) => item.name) : attributes.map((item) => item.label);
   const tagSummary = existingWorkbook ? existingTagTypes.map((type) => `${type.name} (${type.tags.length} tags)`).join(", ") || "None" : addPosType ? `Part of Speech (${tags.length} tags)` : "None";
-  const summary = [`Name: ${name}`, `Vocabulary: ${vocabularyLabel} - ${selectedType.label}`, `Preset attributes: ${presetEnabled && selectedType.kind === "preset_language" ? "enabled" : "disabled"}`, `Tag types: ${tagSummary}`, `Meanings: ${meanings.map((item) => item.label).join(", ")}`, `Optional attributes: ${attributes.map((item) => item.label).join(", ") || "None"}`];
+  const summary = [`Name: ${name}`, `Vocabulary: ${vocabularyLabel} - ${selectedType.label}`, `Active preset attributes: ${presetAttributes.filter(isActiveAttribute).map((item) => item.label).join(", ") || "None"}`, `Tag types: ${tagSummary}`, `Meanings: ${meanings.map((item) => item.label).join(", ")}`, `Optional attributes: ${attributes.map((item) => item.label).join(", ") || "None"}`];
   let description = `Enter a name for the ${existingWorkbook ? "workbook" : "new workbook"}.`;
   let footer = "Enter next | Esc cancel";
   if (stage === "type") { description = existingWorkbook ? "The vocabulary type is fixed after workbook creation." : "Choose a vocabulary type with ↑↓. This selection is required."; footer = existingWorkbook ? "←/→ navigate questions | Esc cancel" : "↑↓ choose type | ←/→ navigate questions | Esc cancel"; }
   if (stage === "label") { description = "Choose the label users will see for vocabulary entries. You can edit the default."; footer = "←/→ to navigate questions | Enter next | Esc cancel"; }
-  if (stage === "preset") { description = "Choose whether to add the language preset fields now. After creation they become ordinary attributes managed in Settings."; footer = "↑↓/Space toggle | ←/→ navigate questions | Esc cancel"; }
+  if (stage === "preset") { description = "Select exclusive attributes to be active or inactive. You can change them later in Settings."; footer = "↑↓ select | Ctrl+Space active | Space show/hide | Ctrl+R rename | → next"; }
   if (stage === "pos") { description = "Choose whether to add the Part of Speech tag type and its preset tags. After creation, manage it in Settings."; footer = "↑↓/Space toggle | ←/→ to navigate questions | Esc cancel"; }
   if (stage === "tags") { description = "Review and customize the Part of Speech tags for this workbook."; footer = "↑↓ select | Ctrl+A add | Ctrl+R rename | Del delete | ←/→ navigate"; }
   if (stage === "meaning-count") { description = "Choose how many meaning fields each vocabulary entry will have."; footer = "↑↓ choose number | ←/→ to navigate questions | Esc cancel"; }
   if (stage === "meaning") { description = "Name each meaning field. Use a language preset or type your own label."; footer = "↑↓ choose preset | ←/→ to navigate questions | Esc cancel"; }
-  if (stage === "attributes") { description = "Add any other fields you want to store, such as examples or notes. Preset fields are marked."; footer = "↑↓ select | Ctrl+A add | Ctrl+R rename | Del delete | ←/→ navigate"; }
+  if (stage === "attributes") { description = "Add any custom fields you want to store. Language preset fields are managed separately."; footer = "↑↓ select | Ctrl+A add | Ctrl+R rename | Del delete | ←/→ navigate"; }
   if (stage === "confirm") { description = `Review the workbook configuration before ${existingWorkbook ? "saving" : "creating"} it.`; footer = `← back | Enter ${existingWorkbook ? "save" : "create"} | Esc cancel`; }
   if (stage === "destructive-confirm") { description = "This change will permanently remove stored field values."; footer = "Type yes and press Enter | Esc cancel"; }
   return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(title, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(description, width)}</Text><Text>{padLine("", width)}</Text>
     {stage === "name" ? <CaretInputLine key="workbook-name" prefix="Workbook name: " value={name} onChange={(value) => { setName(value); setError(""); }} width={width} inputKey="workbook-name" /> : null}
     {stage === "type" ? existingWorkbook ? <Text color={SELECTED_TEXT_COLOR}>{padLine(selectedType.label, width)}</Text> : VOCABULARY_TYPES.map((item, index) => <Text key={item.label} color={index === typeIndex ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${index === typeIndex ? ">" : " "} ${item.label}`, width)}</Text>) : null}
     {stage === "label" ? <CaretInputLine key="vocabulary-label" prefix="Vocabulary label: " value={vocabularyLabel} onChange={(value) => { setVocabularyLabel(value); setError(""); }} width={width} inputKey="vocabulary-label" /> : null}
-    {stage === "preset" ? <><Text color={presetEnabled ? "green" : AUXILIARY_TEXT_COLOR}>{padLine(`Exclusive attributes: ${presetEnabled ? "Enabled" : "Disabled"}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(presetOptionalAttributes.length ? `Available: ${presetOptionalAttributes.map((item) => item.label).join(", ")}` : "No exclusive attributes are currently defined for this language.", width)}</Text></> : null}
+    {stage === "preset" ? <>{presetAttributes.map((field, index) => <Text key={field.key} color={isActiveAttribute(field) ? "white" : AUXILIARY_TEXT_COLOR}>{padLine(`${index === selected ? ">" : " "} ${field.label} [${isActiveAttribute(field) ? "active" : "inactive"}] [${field.visible ? "shown" : "hidden"}]`, width)}</Text>)}{editAction === "rename" ? <CaretInputLine prefix="Rename: " value={editBuffer} onChange={setEditBuffer} width={width} inputKey={`preset-rename-${selected}`} /> : null}</> : null}
     {stage === "pos" ? <><Text color={addPosType ? "green" : AUXILIARY_TEXT_COLOR}>{padLine(`Add Part of Speech: ${addPosType ? "Yes" : "No"}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine((presetDefinition?.partOfSpeechTags ?? []).length ? `Preset tags: ${(presetDefinition?.partOfSpeechTags ?? []).join(", ")}` : "No preset tags are currently defined for this language.", width)}</Text></> : null}
     {stage === "meaning-count" ? <Text>{padLine(`Meaning attributes: ${meaningCount}`, width)}</Text> : null}
     {stage === "meaning" ? <><CaretInputLine key={`meaning-${meaningIndex}`} prefix={`Meaning ${meaningIndex + 1}/${meaningCount}: `} value={meanings[meaningIndex]?.label ?? ""} onChange={(value) => { setMeaningPalette(null); setMeanings((items) => items.map((item, index) => index === meaningIndex ? { ...item, label: value, languageCode: null } : item)); setError(""); }} width={width} inputKey={`meaning-${meaningIndex}`} />{meaningPalette !== null ? LANGUAGE_PRESETS.map((item, index) => <Text key={item.code} color={index === meaningPalette ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${index === meaningPalette ? ">" : " "} ${item.label} (${item.code})`, width)}</Text>) : null}</> : null}
@@ -1302,16 +1312,17 @@ function AppearanceSettingsScreen({ onCancel, onQuit }: { onCancel: () => void; 
   return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Appearance", width)}</Text><Text>{padLine("", width)}</Text><Text color={enabled ? "green" : AUXILIARY_TEXT_COLOR}>{padLine(`[${enabled ? "x" : " "}] Tier colors`, width)}</Text><Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Space toggles | Esc back", width)}</Text></Box>;
 }
 
-type AttributeSection = "vocabulary" | "meaning" | "optional";
+type AttributeSection = "vocabulary" | "meaning" | "preset" | "optional";
 type AttributeSelection = { section: AttributeSection; fieldIndex: number | null };
 
 function attributeDraftSignature(vocabularyLabel: string, fields: MetadataAttribute[]): string {
-  return JSON.stringify({ vocabularyLabel, fields: fields.map((field) => ({ id: field.id, key: field.key, role: field.role, label: field.label, languageCode: field.languageCode, visible: field.visible })) });
+  return JSON.stringify({ vocabularyLabel, fields: fields.map((field) => ({ id: field.id, key: field.key, role: field.role, label: field.label, languageCode: field.languageCode, visible: field.visible, active: field.active, presetKey: field.presetKey })) });
 }
 
 function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook: WorkbookRow; onSave: (draft: WorkbookAttributesDraft, confirmDataLoss: boolean) => void; onCancel: () => void; onQuit: () => void }): JSX.Element {
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
+  const [height, setHeight] = useState(() => stdout?.rows ?? 24);
   const initialFields = useMemo(() => workbook.metadataAttributes.filter((field) => field.role !== "vocabulary").map((field) => ({ ...field })), [workbook]);
   const [vocabularyLabel, setVocabularyLabel] = useState(workbook.vocabularyLabel);
   const [fields, setFields] = useState<MetadataAttribute[]>(initialFields);
@@ -1324,10 +1335,11 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
   const [destructiveFields, setDestructiveFields] = useState<Array<{ label: string; valueCount: number }>>([]);
   const [message, setMessage] = useState("");
   const meanings = fields.filter((field) => field.role === "meaning");
-  const optional = fields.filter((field) => field.role === "optional");
+  const presets = fields.filter((field) => Boolean(field.presetKey));
+  const optional = fields.filter((field) => field.role === "optional" && !field.presetKey);
   const selections: AttributeSelection[] = [
     { section: "vocabulary", fieldIndex: null },
-    ...fields.map((field, fieldIndex) => ({ section: field.role as "meaning" | "optional", fieldIndex })),
+    ...fields.map((field, fieldIndex) => ({ section: field.presetKey ? "preset" as const : field.role as "meaning" | "optional", fieldIndex })),
     ...(optional.length === 0 ? [{ section: "optional" as const, fieldIndex: null }] : []),
   ];
   const safeSelectedIndex = Math.min(selectedIndex, Math.max(0, selections.length - 1));
@@ -1336,7 +1348,7 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
   const originalSignature = useMemo(() => attributeDraftSignature(workbook.vocabularyLabel, initialFields), [workbook.vocabularyLabel, initialFields]);
   const dirty = attributeDraftSignature(vocabularyLabel, fields) !== originalSignature;
 
-  useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => { stdout.off("resize", f); }; }, [stdout]);
+  useEffect(() => { if (!stdout) return; const f = () => { setWidth(stdout.columns ?? 80); setHeight(stdout.rows ?? 24); }; stdout.on("resize", f); return () => { stdout.off("resize", f); }; }, [stdout]);
   useEffect(() => { if (selectedIndex !== safeSelectedIndex) setSelectedIndex(safeSelectedIndex); }, [selectedIndex, safeSelectedIndex]);
 
   function nextKey(section: "meaning" | "optional", label: string): string {
@@ -1351,10 +1363,16 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
     while (used.has(key) || key === "vocab") key = `${raw}_${++suffix}`;
     return key;
   }
-  function labelsAreUnique(section: "meaning" | "optional", label: string, ignoredField?: MetadataAttribute): boolean {
-    return !fields.some((field) => field !== ignoredField && field.role === section && field.label.trim().toLocaleLowerCase() === label.trim().toLocaleLowerCase());
+  function labelsAreUnique(section: AttributeSection, label: string, ignoredField?: MetadataAttribute): boolean {
+    return !fields.some((field) => field !== ignoredField && (section === "meaning" ? field.role === "meaning" : field.role === "optional") && field.label.trim().toLocaleLowerCase() === label.trim().toLocaleLowerCase());
+  }
+  function togglePreset(): void {
+    if (selected.section !== "preset" || !selectedField) return;
+    setFields((current) => current.map((field) => field === selectedField ? { ...field, active: !isActiveAttribute(field) } : field));
+    setMessage("");
   }
   function beginAdd(): void {
+    if (selected.section === "preset") { setMessage("Preset attributes are fixed. Ctrl+Space toggles activation."); return; }
     if (selected.section === "vocabulary") { setMessage("Vocabulary cannot be added or removed."); return; }
     if (selected.section === "meaning" && meanings.length >= 5) { setMessage("A workbook can have at most five meaning attributes."); return; }
     setEditAction("add"); setBuffer(""); setMessage(`Enter a new ${selected.section === "meaning" ? "meaning" : "optional"} attribute name.`);
@@ -1390,7 +1408,7 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
     if (editAction === "rename") {
       if (selected.section === "vocabulary") setVocabularyLabel(label);
       else if (selectedField) {
-        if (!labelsAreUnique(selected.section as "meaning" | "optional", label, selectedField)) { setMessage("Attribute names must be unique within this section."); return; }
+        if (!labelsAreUnique(selected.section, label, selectedField)) { setMessage("Attribute names must be unique within this section."); return; }
         setFields((current) => current.map((field) => field === selectedField ? { ...field, label } : field));
       }
     } else {
@@ -1398,7 +1416,7 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
       if (!labelsAreUnique(section, label)) { setMessage("Attribute names must be unique within this section."); return; }
       const newField: MetadataAttribute = { key: nextKey(section, label), role: section, label, languageCode: null, required: false, visible: false, displayOrder: section === "meaning" ? meanings.length + 1 : optional.length + 1 };
       setFields((current) => section === "meaning" ? [...current.filter((field) => field.role === "meaning"), newField, ...current.filter((field) => field.role === "optional")] : [...current, newField]);
-      setSelectedIndex(section === "meaning" ? 1 + meanings.length : 1 + meanings.length + optional.length);
+      setSelectedIndex(section === "meaning" ? 1 + meanings.length : 1 + meanings.length + presets.length + optional.length);
     }
     setEditAction("none"); setBuffer(""); setMessage("");
   }
@@ -1437,12 +1455,14 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
     if (key.ctrl && input.toLowerCase() === "p") { promoteSelectedMeaning(); return; }
     if (key.ctrl && input.toLowerCase() === "a") { beginAdd(); return; }
     if (key.ctrl && input.toLowerCase() === "r") { beginRename(); return; }
+    if (isPresetActivationInput(input, key)) { togglePreset(); return; }
     if (input === " ") {
       if (selected.section === "vocabulary" || (selected.section === "meaning" && meanings[0] === selectedField)) { setMessage(selected.section === "vocabulary" ? "Vocabulary is always shown." : "The Primary Meaning is required and always shown."); return; }
       if (selectedField) setFields((current) => current.map((field) => field === selectedField ? { ...field, visible: !field.visible } : field));
       return;
     }
     if (key.delete) {
+      if (selected.section === "preset") { setMessage("Preset attributes cannot be removed. Ctrl+Space toggles activation."); return; }
       if (selected.section === "vocabulary") { setMessage("Vocabulary cannot be deleted."); return; }
       if (!selectedField) return;
       if (selected.section === "meaning" && meanings[0] === selectedField) { setMessage("The Primary Meaning cannot be deleted."); return; }
@@ -1459,13 +1479,37 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
   }
 
   const meaningFooter = meanings[0] === selectedField ? "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Esc leave" : `↑↓ navigate | Ctrl+A add | Ctrl+R rename${selectedField?.id === undefined ? "" : " | Ctrl+P make primary"} | Space show/hide | Del remove | Esc leave`;
-  const footer = editAction !== "none" ? "Enter confirm | Esc cancel edit" : selected.section === "vocabulary" ? "↑↓ navigate | Ctrl+R rename | Esc leave" : selected.section === "meaning" ? meaningFooter : "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Space show/hide | Del remove | Esc leave";
-  const row = (field: MetadataAttribute, fieldIndex: number) => <Text key={field.id ?? field.key} color={selected.fieldIndex === fieldIndex ? SELECTED_TEXT_COLOR : "white"}>{`${selected.fieldIndex === fieldIndex ? ">" : " "} ${field.label} [${field.visible ? "shown" : "hidden"}]${meanings[0] === field ? " (primary, required)" : ""}`}</Text>;
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Attributes - ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Configure field names and visibility. Changes are staged until you leave this page.", width)}</Text><Text color={message ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text>
-    <Box flexDirection="column" borderStyle="single" borderColor={selected.section === "vocabulary" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}><Text bold color={selected.section === "vocabulary" ? SELECTED_TEXT_COLOR : undefined}>Vocabulary</Text><Text color={AUXILIARY_TEXT_COLOR}>The workbook type is fixed. Only this display name can be changed.</Text><Text color={selected.section === "vocabulary" ? SELECTED_TEXT_COLOR : "white"}>{`${selected.section === "vocabulary" ? ">" : " "} ${vocabularyLabel} [shown] (required)`}</Text></Box>
-    <Box flexDirection="column" borderStyle="single" borderColor={selected.section === "meaning" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}><Text bold color={selected.section === "meaning" ? SELECTED_TEXT_COLOR : undefined}>Meanings</Text><Text color={AUXILIARY_TEXT_COLOR}>The Primary Meaning is required and always shown. Up to five meanings are supported.</Text>{fields.map((field, index) => field.role === "meaning" ? row(field, index) : null)}</Box>
-    <Box flexDirection="column" borderStyle="single" borderColor={selected.section === "optional" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}><Text bold color={selected.section === "optional" ? SELECTED_TEXT_COLOR : undefined}>Optional Attributes</Text><Text color={AUXILIARY_TEXT_COLOR}>Supplemental fields can be freely added, renamed, hidden, shown, or removed.</Text>{optional.length ? fields.map((field, index) => field.role === "optional" ? row(field, index) : null) : <Text color={selected.section === "optional" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{`${selected.section === "optional" ? ">" : " "} No optional attributes`}</Text>}</Box>
-    {editAction !== "none" ? <CaretInputLine key={`${editAction}-${selectedIndex}`} prefix={`${editAction === "add" ? "New attribute" : "Display name"}: `} value={buffer} onChange={(value) => { setBuffer(value); setMessage(""); }} width={width} color="cyan" inputKey={`${editAction}-${selectedIndex}`} /> : null}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footer, width)}</Text></Box>;
+  const footer = editAction !== "none" ? "Enter confirm | Esc cancel edit" : selected.section === "vocabulary" ? "↑↓ navigate | Ctrl+R rename | Esc leave" : selected.section === "meaning" ? meaningFooter : selected.section === "preset" ? "↑↓ select | Ctrl+Space active | Ctrl+R rename | Space show/hide | Esc leave" : "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Space show/hide | Del remove | Esc leave";
+  const lines: Array<{ text: string; color?: string; bold?: boolean; selected?: boolean }> = [];
+  function group(section: AttributeSection, title: string, description: string, members: Array<{ field: MetadataAttribute; index: number }>): void {
+    const borderColor = selected.section === section ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR;
+    const innerWidth = Math.max(1, width - 4);
+    const line = (text: string, color?: string, bold?: boolean, focused = false) => lines.push({ text: `│ ${padLine(text, innerWidth)} │`, color, bold, selected: focused });
+    lines.push({ text: `┌${"─".repeat(Math.max(1, width - 2))}┐`, color: borderColor });
+    line(title, borderColor, true);
+    line(description, AUXILIARY_TEXT_COLOR);
+    if (section === "vocabulary") line(`${selected.section === "vocabulary" ? ">" : " "} ${vocabularyLabel} [shown] (required)`, selected.section === "vocabulary" ? SELECTED_TEXT_COLOR : "white", false, selected.section === "vocabulary");
+    else if (!members.length) line(`${selected.section === section ? ">" : " "} No optional attributes`, AUXILIARY_TEXT_COLOR, false, selected.section === section);
+    else for (const { field, index } of members) {
+      const focused = selected.fieldIndex === index;
+      const activation = field.presetKey ? ` [${isActiveAttribute(field) ? "active" : "inactive"}]` : "";
+      const color = field.presetKey ? isActiveAttribute(field) ? "white" : AUXILIARY_TEXT_COLOR : focused ? SELECTED_TEXT_COLOR : "white";
+      line(`${focused ? ">" : " "} ${field.label}${activation} [${field.visible ? "shown" : "hidden"}]${meanings[0] === field ? " (primary, required)" : ""}`, color, false, focused);
+    }
+    lines.push({ text: `└${"─".repeat(Math.max(1, width - 2))}┘`, color: borderColor });
+  }
+  const indexed = fields.map((field, index) => ({ field, index }));
+  group("vocabulary", "Vocabulary", "The workbook type is fixed. This display name can be changed.", []);
+  group("meaning", "Meanings", "The Primary Meaning is required and always shown. Up to five meanings.", indexed.filter(({ field }) => field.role === "meaning"));
+  if (presets.length) group("preset", "Language Preset Attributes", "Rename, activate, or change visibility. Preset membership is fixed.", indexed.filter(({ field }) => Boolean(field.presetKey)));
+  group("optional", "Optional Attributes", "Custom fields can be added, renamed, shown, hidden, or removed.", indexed.filter(({ field }) => field.role === "optional" && !field.presetKey));
+  const viewportSize = Math.max(1, height - (editAction !== "none" ? 7 : 6));
+  const focusedLine = Math.max(0, lines.findIndex((line) => line.selected));
+  const firstLine = Math.max(0, Math.min(lines.length - viewportSize, focusedLine - Math.floor(viewportSize / 2)));
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Attributes - ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Configure field names, activation, and visibility. Changes are staged.", width)}</Text><Text color={message ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text>
+    {lines.slice(firstLine, firstLine + viewportSize).map((line, index) => <Text key={firstLine + index} color={line.color} bold={line.bold}>{line.text}</Text>)}
+    {editAction !== "none" ? <CaretInputLine key={`${editAction}-${selectedIndex}`} prefix={`${editAction === "add" ? "New attribute" : "Display name"}: `} value={buffer} onChange={(value) => { setBuffer(value); setMessage(""); }} width={width} color="cyan" inputKey={`${editAction}-${selectedIndex}`} /> : null}
+    <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`${firstLine > 0 ? "↑ more above" : ""}${firstLine + viewportSize < lines.length ? "  ↓ more below" : ""}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footer, width)}</Text></Box>;
 }
 
 type TagSelection = { kind: "type"; typeIndex: number } | { kind: "tag"; typeIndex: number; tagIndex: number } | { kind: "add-type" };

@@ -3,7 +3,7 @@ import test from "node:test";
 import type { EntryRow, WorkbookRow } from "./db.js";
 import { createInitialState, update } from "./orchestration.js";
 
-const workbook: WorkbookRow = { id: 1, name: "Demo", wordCount: 0, createdAt: "", vocabularyLabel: "Vocabulary", vocabularyLanguageCode: "EN", presetEnabled: true, vocabularyKind: "preset_language", importFilePath: null, dailyGoal: null, todayPracticeCount: 0, meaningAttributes: [{ position: 1, label: "Primary Meaning", languageCode: null }, { position: 2, label: "Secondary Meaning", languageCode: null }], metadataAttributes: [{ key: "note", role: "optional", label: "Note", languageCode: null, required: false, visible: true, displayOrder: 1 }] };
+const workbook: WorkbookRow = { id: 1, name: "Demo", wordCount: 0, createdAt: "", vocabularyLabel: "Vocabulary", vocabularyLanguageCode: "EN", vocabularyKind: "preset_language", importFilePath: null, dailyGoal: null, todayPracticeCount: 0, meaningAttributes: [{ position: 1, label: "Primary Meaning", languageCode: null }, { position: 2, label: "Secondary Meaning", languageCode: null }], metadataAttributes: [{ key: "note", role: "optional", label: "Note", languageCode: null, required: false, visible: true, displayOrder: 1 }] };
 const entry = (id: number, vocabulary: string): EntryRow => ({ id, workbookId: 1, vocabulary, meaning: "meaning", meanings: ["meaning", ""], kanaText: null, attributes: {}, tags: [], createdAt: "", updatedAt: "", testCount: 0, errorCount: 0, tier: "gray", lastTested: null, nextTestDeadline: null });
 
 test("command transitions enter add mode and search resets page", () => {

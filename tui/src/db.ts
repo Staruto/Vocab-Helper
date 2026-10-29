@@ -3,10 +3,14 @@ import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { addCalendarDays, localCalendarDay, reviewDeadline } from "./calendar.js";
 import { runSchemaMigrations } from "./schema.js";
+import { LANGUAGE_PRESET_DEFINITIONS } from "./language-presets.js";
+import { createPresetAttributes, isActiveAttribute } from "./attributes.js";
+export { LANGUAGE_PRESET_DEFINITIONS } from "./language-presets.js";
+export type { LanguagePresetDefinition } from "./language-presets.js";
 
 export type VocabularyKind = "preset_language" | "other_language" | "non_language";
 export type MeaningAttribute = { id?: number; key?: string; position: number; label: string; languageCode: string | null };
-export type MetadataAttribute = { id?: number; key: string; role?: "vocabulary" | "meaning" | "optional"; label: string; languageCode: string | null; required: boolean; visible: boolean; displayOrder: number; provenance?: "preset" | "custom" };
+export type MetadataAttribute = { id?: number; key: string; role?: "vocabulary" | "meaning" | "optional"; label: string; languageCode: string | null; required: boolean; visible: boolean; displayOrder: number; provenance?: "preset" | "custom"; presetKey?: string | null; active?: boolean };
 export type Tag = { id: number; tagTypeId: number; name: string };
 export type TagType = { id: number; workbookId: number; name: string; position: number; visible: boolean; tags: Tag[] };
 export type TagDraft = { id?: number; name: string };
@@ -16,7 +20,7 @@ export type WorkbookConfigurationInput = {
   vocabularyKind: VocabularyKind;
   vocabularyLabel: string;
   vocabularyLanguageCode: string | null;
-  presetEnabled: boolean;
+  presetAttributes: MetadataAttribute[];
   meaningAttributes: MeaningAttribute[];
   optionalAttributes: MetadataAttribute[];
   tagTypes: TagTypeDraft[];
@@ -30,7 +34,7 @@ export type TagUpdateImpact = { removals: Array<{ typeName: string; tagName: str
 export type WorkbookRow = {
   id: number; name: string; wordCount: number; createdAt: string;
   vocabularyLabel: string; vocabularyLanguageCode: string | null;
-  presetEnabled: boolean; vocabularyKind: VocabularyKind;
+  vocabularyKind: VocabularyKind;
   importFilePath: string | null;
   dailyGoal: number | null; todayPracticeCount: number;
   meaningAttributes: MeaningAttribute[]; metadataAttributes: MetadataAttribute[];
@@ -46,31 +50,6 @@ export type DailyPracticeRow = { day: string; practiceCount: number };
 
 export type ImportEntryInput = { vocabulary: string; meanings: string[]; attributes: Record<string, string>; tagIds: number[] };
 export type ImportResult = { added: number; updated: number; unchanged: number; entries: EntryRow[] };
-export type LanguagePresetDefinition = { optionalAttributes: Array<{ key: string; label: string; languageCode: string | null }>; partOfSpeechTags: string[] };
-
-function exampleFields(languageCode: string): LanguagePresetDefinition["optionalAttributes"] {
-  return [
-    { key: "example_sentence_1", label: "Example Sentence 1", languageCode },
-    { key: "example_sentence_2", label: "Example Sentence 2", languageCode },
-  ];
-}
-
-export const LANGUAGE_PRESET_DEFINITIONS: Record<string, LanguagePresetDefinition> = {
-  JP: {
-    optionalAttributes: [{ key: "kana", label: "Kana", languageCode: "JP" }, ...exampleFields("JP")],
-    partOfSpeechTags: ["名詞", "固有名詞", "イ形容詞", "ナ形容詞", "動詞 (自動詞)", "動詞 (他動詞)", "副詞", "連体詞", "接続詞", "連語", "その他"],
-  },
-  EN: { optionalAttributes: exampleFields("EN"), partOfSpeechTags: ["n.", "v.", "adj.", "adv.", "pron.", "prep.", "conj.", "phrase."] },
-  DE: {
-    optionalAttributes: exampleFields("DE"),
-    partOfSpeechTags: ["m. noun - maskulines Substantiv", "f. noun - feminines Substantiv", "n. noun - neutrales Substantiv", "art. - Artikel", "adj. - Adjektiv", "pron. - Pronomen", "num. - Numerale", "adv. - Adverb", "prep. - Präposition", "conj. - Konjunktion", "interj. - Interjektion"],
-  },
-  ZH: { optionalAttributes: exampleFields("ZH"), partOfSpeechTags: [] },
-  KO: { optionalAttributes: exampleFields("KO"), partOfSpeechTags: [] },
-  ES: { optionalAttributes: exampleFields("ES"), partOfSpeechTags: [] },
-  FR: { optionalAttributes: exampleFields("FR"), partOfSpeechTags: [] },
-};
-
 export class WorkbookDataLossError extends Error {
   constructor(readonly impact: WorkbookUpdateImpact) {
     super("This change removes populated workbook fields and requires confirmation.");
@@ -146,7 +125,7 @@ export class VocabularyRepository {
       const result = this.db.prepare(`INSERT INTO workbooks
         (name, vocabulary_kind, vocabulary_label, vocabulary_language_code, preset_enabled, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)`)
-        .run(config.name, config.vocabularyKind, config.vocabularyLabel, config.vocabularyLanguageCode, config.presetEnabled ? 1 : 0, now, now);
+        .run(config.name, config.vocabularyKind, config.vocabularyLabel, config.vocabularyLanguageCode, config.vocabularyKind === "preset_language" ? 1 : 0, now, now);
       const id = Number(result.lastInsertRowid);
       this.writeFields(id, config);
       this.writeInitialTagTypes(id, config.tagTypes);
@@ -155,21 +134,23 @@ export class VocabularyRepository {
     });
     return this.requireWorkbook(workbookId);
   }
-  createWorkbook(name: string, vocabularyLabel = "Vocabulary", vocabularyLanguageCode: string | null = null, meaningAttributes: MeaningAttribute[] = [{ position: 1, label: "Primary Meaning", languageCode: null }], presetEnabled = vocabularyLanguageCode === "JP"): WorkbookRow {
+  createWorkbook(name: string, vocabularyLabel = "Vocabulary", vocabularyLanguageCode: string | null = null, meaningAttributes: MeaningAttribute[] = [{ position: 1, label: "Primary Meaning", languageCode: null }]): WorkbookRow {
+    vocabularyLanguageCode = trimOptional(vocabularyLanguageCode)?.toUpperCase() ?? null;
     const kind: VocabularyKind = vocabularyLanguageCode ? "preset_language" : "non_language";
     const preset = vocabularyLanguageCode ? LANGUAGE_PRESET_DEFINITIONS[vocabularyLanguageCode] : undefined;
     return this.createConfiguredWorkbook({
-      name, vocabularyKind: kind, vocabularyLabel, vocabularyLanguageCode, meaningAttributes, presetEnabled,
-      optionalAttributes: presetEnabled ? (preset?.optionalAttributes ?? []).map((field, index) => ({ ...field, required: false, visible: false, displayOrder: index + 1, provenance: "preset" })) : [],
+      name, vocabularyKind: kind, vocabularyLabel, vocabularyLanguageCode, meaningAttributes,
+      presetAttributes: createPresetAttributes(vocabularyLanguageCode), optionalAttributes: [],
       tagTypes: kind === "non_language" ? [] : [{ name: "Part of Speech", visible: false, tags: (preset?.partOfSpeechTags ?? []).map((tagName) => ({ name: tagName })) }],
     });
   }
 
   previewWorkbookUpdate(workbookId: number, input: WorkbookConfigurationInput): WorkbookUpdateImpact {
     this.requireWorkbook(workbookId);
-    const config = this.normalizeConfiguration(input);
-    const retainedIds = new Set([...config.meaningAttributes, ...config.optionalAttributes].flatMap((field) => field.id === undefined ? [] : [field.id]));
-    const retainedKeys = new Set([...config.meaningAttributes.map((field) => field.key ?? `meaning_${field.position}`), ...config.optionalAttributes.map((field) => field.key)]);
+    const config = this.normalizeConfiguration(input, workbookId);
+    this.assertPresetMembership(workbookId, [...config.presetAttributes, ...config.optionalAttributes]);
+    const retainedIds = new Set([...config.meaningAttributes, ...config.presetAttributes, ...config.optionalAttributes].flatMap((field) => field.id === undefined ? [] : [field.id]));
+    const retainedKeys = new Set([...config.meaningAttributes.map((field) => field.key ?? `meaning_${field.position}`), ...[...config.presetAttributes, ...config.optionalAttributes].map((field) => field.key)]);
     const rows = this.db.prepare(`SELECT f.id, f.field_key, f.label, COUNT(CASE WHEN trim(v.value) <> '' THEN 1 END) AS value_count
       FROM workbook_fields f LEFT JOIN entry_field_values v ON v.field_id = f.id
       WHERE f.workbook_id = ? GROUP BY f.id ORDER BY f.role, f.position`).all(workbookId) as Record<string, unknown>[];
@@ -178,28 +159,29 @@ export class VocabularyRepository {
   }
 
   updateConfiguredWorkbook(workbookId: number, input: WorkbookConfigurationInput, confirmDataLoss = false): WorkbookRow {
-    const config = this.normalizeConfiguration(input);
+    const config = this.normalizeConfiguration(input, workbookId);
     const current = this.requireWorkbook(workbookId);
     if (config.vocabularyKind !== current.vocabularyKind || config.vocabularyLanguageCode !== current.vocabularyLanguageCode) {
       throw new ValidationError("Workbook type cannot be changed after creation.");
     }
-    if (config.presetEnabled !== current.presetEnabled) throw new ValidationError("Preset selection cannot be changed after creation.");
+    this.assertPresetMembership(workbookId, [...config.meaningAttributes.map((field) => ({ ...field, key: field.key ?? `meaning_${field.position}`, role: "meaning" as const, required: field.position === 1, visible: field.position === 1, displayOrder: field.position })), ...config.presetAttributes, ...config.optionalAttributes]);
     transaction(this.db, () => {
       const impact = this.previewWorkbookUpdate(workbookId, config);
       if (impact.populatedFields.length > 0 && !confirmDataLoss) throw new WorkbookDataLossError(impact);
       this.db.prepare(`UPDATE workbooks SET name = ?, vocabulary_kind = ?, vocabulary_label = ?, vocabulary_language_code = ?,
         preset_enabled = ?, updated_at = ? WHERE id = ?`)
-        .run(config.name, config.vocabularyKind, config.vocabularyLabel, config.vocabularyLanguageCode, config.presetEnabled ? 1 : 0, new Date().toISOString(), workbookId);
+        .run(config.name, config.vocabularyKind, config.vocabularyLabel, config.vocabularyLanguageCode, config.vocabularyKind === "preset_language" ? 1 : 0, new Date().toISOString(), workbookId);
       this.syncFields(workbookId, config);
     });
     return this.requireWorkbook(workbookId);
   }
-  updateWorkbookSettings(workbookId: number, name: string, vocabularyLabel: string, vocabularyLanguageCode: string | null, meaningAttributes: MeaningAttribute[], presetEnabled = vocabularyLanguageCode === "JP"): WorkbookRow {
+  updateWorkbookSettings(workbookId: number, name: string, vocabularyLabel: string, vocabularyLanguageCode: string | null, meaningAttributes: MeaningAttribute[]): WorkbookRow {
     const current = this.requireWorkbook(workbookId);
     return this.updateConfiguredWorkbook(workbookId, {
-      name, vocabularyLabel, vocabularyLanguageCode, meaningAttributes, presetEnabled,
+      name, vocabularyLabel, vocabularyLanguageCode, meaningAttributes,
       vocabularyKind: vocabularyLanguageCode ? "preset_language" : current.vocabularyKind,
-      optionalAttributes: current.metadataAttributes.filter((field) => field.role === "optional"),
+      presetAttributes: current.metadataAttributes.filter((field) => Boolean(field.presetKey)),
+      optionalAttributes: current.metadataAttributes.filter((field) => field.role === "optional" && !field.presetKey),
       tagTypes: this.listTagTypes(workbookId).map((type) => ({ id: type.id, name: type.name, visible: type.visible, tags: type.tags.map((tag) => ({ id: tag.id, name: tag.name })) })),
     });
   }
@@ -268,7 +250,7 @@ export class VocabularyRepository {
     const row = this.db.prepare("SELECT e.*, s.test_count, s.error_count, s.last_tested, s.next_test_deadline FROM entries e JOIN entry_stats s ON s.entry_id = e.id WHERE e.id = ?").get(entryId) as Record<string, unknown> | undefined;
     if (!row) return null;
     const workbookId = Number(row.workbook_id);
-    const fields = this.db.prepare(`SELECT f.field_key, f.role, f.position, v.value FROM workbook_fields f
+    const fields = this.db.prepare(`SELECT f.field_key, f.role, f.position, f.preset_key, v.value FROM workbook_fields f
       LEFT JOIN entry_field_values v ON v.field_id = f.id AND v.entry_id = ? WHERE f.workbook_id = ? ORDER BY f.role, f.position`).all(entryId, workbookId) as Record<string, unknown>[];
     const meanings = fields.filter((field) => field.role === "meaning").map((field) => String(field.value ?? ""));
     const attributes: Record<string, string> = {};
@@ -279,7 +261,7 @@ export class VocabularyRepository {
     const testCount = Number(row.test_count); const errorCount = Number(row.error_count);
     return {
       id: Number(row.id), workbookId, vocabulary: String(row.vocabulary), meaning: meanings[0] ?? "", meanings,
-      kanaText: attributes.kana || null, attributes,
+      kanaText: String(fields.find((field) => field.preset_key === "kana")?.value ?? "") || null, attributes,
       tags: tags.map((tag) => ({ id: Number(tag.id), tagTypeId: Number(tag.tag_type_id), name: String(tag.name) })),
       createdAt: String(row.created_at), updatedAt: String(row.updated_at), testCount, errorCount, tier: tierFor(testCount, errorCount),
       lastTested: row.last_tested == null ? null : String(row.last_tested), nextTestDeadline: row.next_test_deadline == null ? null : String(row.next_test_deadline),
@@ -290,6 +272,7 @@ export class VocabularyRepository {
     const workbook = this.requireWorkbook(workbookId);
     const values = this.normalizeEntryMeanings(workbook, meanings?.length ? meanings : [meaning]);
     this.validateEntryAssociations(workbookId, attributes, tagIds);
+    attributes = this.preserveInactiveAttributes(workbook, attributes);
     const now = new Date().toISOString();
     const id = transaction(this.db, () => {
       const result = this.db.prepare("INSERT INTO entries (workbook_id, vocabulary, created_at, updated_at) VALUES (?, ?, ?, ?)").run(workbookId, trimRequired(vocabulary, "Vocabulary"), now, now);
@@ -315,6 +298,8 @@ export class VocabularyRepository {
       const touched: number[] = [];
       for (const entry of normalized) {
         const existingId = ids.get(entry.vocabulary);
+        const current = existingId === undefined ? undefined : this.getEntry(existingId)!;
+        entry.attributes = this.preserveInactiveAttributes(workbook, entry.attributes, current);
         if (existingId === undefined) {
           const now = new Date().toISOString();
           const result = this.db.prepare("INSERT INTO entries (workbook_id, vocabulary, created_at, updated_at) VALUES (?, ?, ?, ?)").run(workbookId, entry.vocabulary, now, now);
@@ -322,11 +307,10 @@ export class VocabularyRepository {
           this.saveEntryValues(id, workbookId, entry.meanings, entry.attributes); this.saveEntryTags(id, workbookId, entry.tagIds); this.db.prepare("INSERT INTO entry_stats (entry_id) VALUES (?)").run(id);
           added++; touched.push(id); continue;
         }
-        const current = this.getEntry(existingId)!;
-        if (this.entryContentMatches(current, entry)) { unchanged++; touched.push(existingId); continue; }
+        if (this.entryContentMatches(current!, entry)) { unchanged++; touched.push(existingId); continue; }
         this.db.prepare("DELETE FROM entry_field_values WHERE entry_id = ?").run(existingId);
         this.saveEntryValues(existingId, workbookId, entry.meanings, entry.attributes); this.saveEntryTags(existingId, workbookId, entry.tagIds);
-        const currentTime = Date.parse(current.updatedAt);
+        const currentTime = Date.parse(current!.updatedAt);
         const candidateTime = Date.now();
         const updatedAt = new Date(Math.max(candidateTime, Number.isNaN(currentTime) ? candidateTime : currentTime + 1)).toISOString();
         this.db.prepare("UPDATE entries SET updated_at = ? WHERE id = ?").run(updatedAt, existingId);
@@ -340,6 +324,7 @@ export class VocabularyRepository {
     const existing = this.requireEntry(entryId); const workbook = this.requireWorkbook(existing.workbookId);
     const values = this.normalizeEntryMeanings(workbook, meanings?.length ? meanings : [meaning]);
     this.validateEntryAssociations(existing.workbookId, attributes, tagIds);
+    attributes = this.preserveInactiveAttributes(workbook, attributes, existing);
     const normalizedVocabulary = trimRequired(vocabulary, "Vocabulary");
     if (this.entryContentMatches(existing, { vocabulary: normalizedVocabulary, meanings: values, attributes, tagIds })) return existing;
     transaction(this.db, () => {
@@ -382,10 +367,10 @@ export class VocabularyRepository {
       for (const row of existing) if (!retainedIds.has(Number(row.id))) this.db.prepare("DELETE FROM workbook_fields WHERE id = ? AND workbook_id = ?").run(row.id, workbookId);
       const maxPosition = Number((this.db.prepare("SELECT COALESCE(MAX(position), 0) AS value FROM workbook_fields WHERE workbook_id = ?").get(workbookId) as { value: number }).value);
       this.db.prepare("UPDATE workbook_fields SET position = position + ? WHERE workbook_id = ?").run(maxPosition + 100, workbookId);
-      const update = this.db.prepare("UPDATE workbook_fields SET position=?, label=?, language_code=?, is_required=?, is_visible=? WHERE id=? AND workbook_id=?");
-      const insert = this.db.prepare("INSERT INTO workbook_fields (workbook_id,field_key,role,position,label,language_code,is_required,is_visible,provenance) VALUES (?,?,?,?,?,?,?,?,'custom')");
+      const update = this.db.prepare("UPDATE workbook_fields SET position=?, label=?, language_code=?, is_required=?, is_visible=?, is_active=? WHERE id=? AND workbook_id=?");
+      const insert = this.db.prepare("INSERT INTO workbook_fields (workbook_id,field_key,role,position,label,language_code,is_required,is_visible,provenance,preset_key,is_active) VALUES (?,?,?,?,?,?,?,?,'custom',NULL,1)");
       for (const field of normalized.fields) {
-        if (field.id !== undefined) update.run(field.displayOrder, field.label, field.languageCode, field.required ? 1 : 0, field.visible ? 1 : 0, field.id, workbookId);
+        if (field.id !== undefined) update.run(field.displayOrder, field.label, field.languageCode, field.required ? 1 : 0, field.visible ? 1 : 0, isActiveAttribute(field) ? 1 : 0, field.id, workbookId);
         else {
           if (field.role === undefined) throw new Error("Normalized workbook fields must have a role.");
           const result = insert.run(workbookId, field.key, field.role, field.displayOrder, field.label, field.languageCode, field.required ? 1 : 0, field.visible ? 1 : 0);
@@ -540,29 +525,36 @@ export class VocabularyRepository {
       ...fields.map((field) => ({
         id: Number(field.id), key: String(field.field_key), role: String(field.role) as "meaning" | "optional", label: String(field.label), languageCode: field.language_code == null ? null : String(field.language_code),
         required: Number(field.is_required) === 1, visible: Number(field.is_visible) === 1,
+        presetKey: field.preset_key == null ? null : String(field.preset_key), active: Number(field.is_active) === 1,
         displayOrder: field.role === "meaning" ? Number(field.position) : meanings.length + Number(field.position), provenance: String(field.provenance) as "preset" | "custom",
       })),
     ];
     return {
       id, name: String(row.name), wordCount: Number(row.word_count ?? 0), createdAt: String(row.created_at), vocabularyLabel, vocabularyLanguageCode,
-      presetEnabled: Number(row.preset_enabled) === 1, vocabularyKind: String(row.vocabulary_kind) as VocabularyKind,
+      vocabularyKind: String(row.vocabulary_kind) as VocabularyKind,
       importFilePath: row.import_file_path == null ? null : String(row.import_file_path),
       dailyGoal: row.daily_goal == null ? null : Number(row.daily_goal), todayPracticeCount: Number(row.today_practice_count ?? 0),
       meaningAttributes: meanings, metadataAttributes: metadata,
     };
   }
-  private normalizeConfiguration(input: WorkbookConfigurationInput): WorkbookConfigurationInput {
+  private normalizeConfiguration(input: WorkbookConfigurationInput, workbookId?: number): WorkbookConfigurationInput {
     const kinds: VocabularyKind[] = ["preset_language", "other_language", "non_language"];
     if (!kinds.includes(input.vocabularyKind)) throw new ValidationError("Choose a valid vocabulary type.");
     const code = input.vocabularyKind === "preset_language" ? trimRequired(input.vocabularyLanguageCode ?? "", "Preset language").toUpperCase() : null;
     if (input.vocabularyKind === "preset_language" && !LANGUAGE_PRESET_DEFINITIONS[code!]) throw new ValidationError("Choose a supported language preset.");
     const meanings = this.normalizeMeaningAttributes(input.meaningAttributes); const keys = new Set<string>();
-    const optional = input.optionalAttributes.map((field, index) => {
+    const definitions = code ? LANGUAGE_PRESET_DEFINITIONS[code].attributes : [];
+    const presetFields = input.presetAttributes;
+    if (presetFields.length !== definitions.length || definitions.some((definition) => presetFields.filter((field) => field.presetKey === definition.key).length !== 1)) throw new ValidationError("Language preset attributes cannot be added or removed.");
+    if (input.optionalAttributes.some((field) => field.presetKey)) throw new ValidationError("Preset attributes cannot change sections.");
+    const supplemental = [...definitions.map((definition) => presetFields.find((field) => field.presetKey === definition.key)!), ...input.optionalAttributes];
+    const optional = supplemental.map((field, index) => {
       const key = trimRequired(field.key, "Attribute key").toLowerCase();
       if (key === "vocab" || key.startsWith("meaning_") || keys.has(key)) throw new ValidationError("Optional attribute keys must be unique.");
       keys.add(key);
-      return { ...field, key, label: trimRequired(field.label, "Attribute label"), languageCode: trimOptional(field.languageCode)?.toUpperCase() ?? null, required: false, displayOrder: index + 1, provenance: field.provenance ?? "custom" };
+      return { ...field, key, role: "optional" as const, label: trimRequired(field.label, "Attribute label"), languageCode: field.presetKey ? code : trimOptional(field.languageCode)?.toUpperCase() ?? null, required: false, active: field.presetKey ? field.active !== false : true, displayOrder: index + 1, provenance: field.presetKey ? "preset" as const : "custom" as const };
     });
+    this.assertAttributeLabels(optional, "Optional", workbookId);
     const typeNames = new Set<string>();
     const tagTypes = input.tagTypes.map((type) => {
       const name = trimRequired(type.name, "Tag type name"); const typeKey = name.toLocaleLowerCase();
@@ -578,8 +570,8 @@ export class VocabularyRepository {
     });
     return {
       ...input, name: trimRequired(input.name, "Workbook name"), vocabularyLabel: trimRequired(input.vocabularyLabel, "Vocabulary label"), vocabularyLanguageCode: code,
-      presetEnabled: input.vocabularyKind === "preset_language" && input.presetEnabled,
-      meaningAttributes: meanings, optionalAttributes: optional, tagTypes,
+      presetAttributes: optional.filter((field) => Boolean(field.presetKey)),
+      meaningAttributes: meanings, optionalAttributes: optional.filter((field) => !field.presetKey), tagTypes,
     };
   }
   private normalizeMeaningAttributes(attributes: MeaningAttribute[]): MeaningAttribute[] {
@@ -588,18 +580,45 @@ export class VocabularyRepository {
     if (new Set(fields.map((field) => field.label.toLocaleLowerCase())).size !== fields.length) throw new ValidationError("Meaning attribute labels must be unique.");
     return fields;
   }
+  private assertPresetMembership(workbookId: number, fields: MetadataAttribute[]): void {
+    const existing = this.requireWorkbook(workbookId).metadataAttributes.filter((field) => field.role !== "vocabulary");
+    for (const field of fields) {
+      const original = field.id === undefined ? existing.find((candidate) => candidate.key === field.key) : existing.find((candidate) => candidate.id === field.id);
+      if ((field.presetKey ?? null) !== (original?.presetKey ?? null)) throw new ValidationError("Language preset identity cannot be changed or assigned to another field.");
+      if (field.presetKey && (field.role !== "optional" || field.key !== original?.key)) throw new ValidationError("Language preset attributes cannot change sections or keys.");
+    }
+    for (const original of existing.filter((field) => field.presetKey)) {
+      const matches = fields.filter((field) => field.presetKey === original.presetKey);
+      if (matches.length !== 1 || matches[0].key !== original.key || (matches[0].id !== undefined && matches[0].id !== original.id)) throw new ValidationError("Language preset attributes cannot be added or removed.");
+    }
+  }
+  private assertAttributeLabels(fields: MetadataAttribute[], section: string, workbookId?: number): void {
+    const originals = workbookId === undefined ? [] : this.requireWorkbook(workbookId).metadataAttributes;
+    const labels = fields.map((field) => field.label.trim().toLocaleLowerCase());
+    const introducesDuplicate = fields.some((field, index) =>
+      labels.indexOf(labels[index]) !== labels.lastIndexOf(labels[index])
+      && !originals.some((original) => original.key === field.key && original.label.trim().toLocaleLowerCase() === labels[index]));
+    if (introducesDuplicate) throw new ValidationError(`${section} attribute labels must be unique.`);
+  }
+  private preserveInactiveAttributes(workbook: WorkbookRow, attributes: Record<string, string>, current?: EntryRow): Record<string, string> {
+    return Object.fromEntries(workbook.metadataAttributes.filter((field) => field.role === "optional").map((field) => [field.key,
+      isActiveAttribute(field) ? attributes[field.key] ?? "" : current?.attributes[field.key] ?? "",
+    ]));
+  }
   private normalizeAttributesDraft(workbookId: number, draft: WorkbookAttributesDraft): WorkbookAttributesDraft {
     const vocabularyLabel = trimRequired(draft.vocabularyLabel, "Vocabulary label");
+    this.assertPresetMembership(workbookId, draft.fields);
     const existingRows = this.db.prepare("SELECT id, field_key, role FROM workbook_fields WHERE workbook_id = ?").all(workbookId) as Array<{ id: number; field_key: string; role: "meaning" | "optional" }>;
     const existingById = new Map(existingRows.map((row) => [Number(row.id), row]));
     const existingByKey = new Map(existingRows.map((row) => [String(row.field_key), row]));
     const usedIds = new Set<number>(); const usedKeys = new Set<string>();
     const meanings = draft.fields.filter((field) => field.role === "meaning");
-    const optional = draft.fields.filter((field) => field.role === "optional");
+    const presetOrder = this.requireWorkbook(workbookId).metadataAttributes.filter((field) => field.presetKey).map((field) => field.presetKey);
+    const optional = [...presetOrder.map((key) => draft.fields.find((field) => field.presetKey === key)!), ...draft.fields.filter((field) => field.role === "optional" && !field.presetKey)];
     if (meanings.length < 1 || meanings.length > 5) throw new ValidationError("Meaning attributes must contain between 1 and 5 items.");
     for (const [section, fields] of [["Meaning", meanings], ["Optional", optional]] as const) {
-      const labels = fields.map((field) => trimRequired(field.label, `${section} attribute label`).toLocaleLowerCase());
-      if (new Set(labels).size !== labels.length) throw new ValidationError(`${section} attribute labels must be unique.`);
+      for (const field of fields) trimRequired(field.label, `${section} attribute label`);
+      this.assertAttributeLabels(fields, section, workbookId);
     }
     const normalizeFields = (fields: MetadataAttribute[], role: "meaning" | "optional") => fields.map((field, index) => {
       const id = field.id;
@@ -615,7 +634,7 @@ export class VocabularyRepository {
       usedKeys.add(key);
       const firstMeaning = role === "meaning" && index === 0;
       return { ...field, id, key, role, label: trimRequired(field.label, `${role === "meaning" ? "Meaning" : "Optional"} attribute label`), languageCode: trimOptional(field.languageCode)?.toUpperCase() ?? null,
-        required: firstMeaning, visible: firstMeaning ? true : Boolean(field.visible), displayOrder: index + 1 };
+        required: firstMeaning, active: isActiveAttribute(field), visible: firstMeaning ? true : Boolean(field.visible), displayOrder: index + 1 };
     });
     return { vocabularyLabel, fields: [...normalizeFields(meanings, "meaning"), ...normalizeFields(optional, "optional")] };
   }
@@ -663,9 +682,9 @@ export class VocabularyRepository {
     return { types };
   }
   private writeFields(workbookId: number, config: WorkbookConfigurationInput): void {
-    const insert = this.db.prepare("INSERT INTO workbook_fields (workbook_id, field_key, role, position, label, language_code, is_required, is_visible, provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
-    for (const field of config.meaningAttributes) insert.run(workbookId, field.key ?? `meaning_${field.position}`, "meaning", field.position, field.label, field.languageCode, field.position === 1 ? 1 : 0, field.position === 1 ? 1 : 0, "custom");
-    config.optionalAttributes.forEach((field, index) => insert.run(workbookId, field.key, "optional", index + 1, field.label, field.languageCode, 0, field.visible ? 1 : 0, field.provenance ?? "custom"));
+    const insert = this.db.prepare("INSERT INTO workbook_fields (workbook_id, field_key, role, position, label, language_code, is_required, is_visible, provenance, preset_key, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    for (const field of config.meaningAttributes) insert.run(workbookId, field.key ?? `meaning_${field.position}`, "meaning", field.position, field.label, field.languageCode, field.position === 1 ? 1 : 0, field.position === 1 ? 1 : 0, "custom", null, 1);
+    [...config.presetAttributes, ...config.optionalAttributes].forEach((field, index) => insert.run(workbookId, field.key, "optional", index + 1, field.label, field.languageCode, 0, field.visible ? 1 : 0, field.provenance ?? "custom", field.presetKey ?? null, isActiveAttribute(field) ? 1 : 0));
   }
   private syncFields(workbookId: number, config: WorkbookConfigurationInput): void {
     const existing = this.db.prepare("SELECT id, field_key, role FROM workbook_fields WHERE workbook_id = ?").all(workbookId) as Array<{ id: number; field_key: string; role: "meaning" | "optional" }>;
@@ -673,7 +692,7 @@ export class VocabularyRepository {
     const existingByKey = new Map(existing.map((row) => [String(row.field_key), row]));
     const desired = [
       ...config.meaningAttributes.map((field) => ({ field, role: "meaning" as const, key: field.key ?? `meaning_${field.position}` })),
-      ...config.optionalAttributes.map((field) => ({ field, role: "optional" as const, key: field.key })),
+      ...[...config.presetAttributes, ...config.optionalAttributes].map((field) => ({ field, role: "optional" as const, key: field.key })),
     ];
     const resolved = desired.map((item) => {
       const row = item.field.id === undefined ? existingByKey.get(item.key) : existingById.get(item.field.id);
@@ -685,12 +704,12 @@ export class VocabularyRepository {
     for (const row of existing) if (!retainedIds.has(Number(row.id))) this.db.prepare("DELETE FROM workbook_fields WHERE id = ? AND workbook_id = ?").run(row.id, workbookId);
     const maxPosition = Number((this.db.prepare("SELECT COALESCE(MAX(position), 0) AS value FROM workbook_fields WHERE workbook_id = ?").get(workbookId) as { value: number }).value);
     this.db.prepare("UPDATE workbook_fields SET position = position + ? WHERE workbook_id = ?").run(maxPosition + 100, workbookId);
-    const update = this.db.prepare("UPDATE workbook_fields SET position=?, label=?, language_code=?, is_required=?, is_visible=? WHERE id=? AND workbook_id=?");
-    const insert = this.db.prepare("INSERT INTO workbook_fields (workbook_id,field_key,role,position,label,language_code,is_required,is_visible,provenance) VALUES (?,?,?,?,?,?,?,?,?)");
+    const update = this.db.prepare("UPDATE workbook_fields SET position=?, label=?, language_code=?, is_required=?, is_visible=?, is_active=? WHERE id=? AND workbook_id=?");
+    const insert = this.db.prepare("INSERT INTO workbook_fields (workbook_id,field_key,role,position,label,language_code,is_required,is_visible,provenance,preset_key,is_active) VALUES (?,?,?,?,?,?,?,?,?,?,?)");
     const save = (field: MetadataAttribute, role: "meaning" | "optional", position: number, key: string, required: boolean, visible: boolean, existingId?: number) => {
-      if (existingId !== undefined) update.run(position, field.label, field.languageCode, required ? 1 : 0, visible ? 1 : 0, existingId, workbookId);
+      if (existingId !== undefined) update.run(position, field.label, field.languageCode, required ? 1 : 0, visible ? 1 : 0, isActiveAttribute(field) ? 1 : 0, existingId, workbookId);
       else {
-        const result = insert.run(workbookId, key, role, position, field.label, field.languageCode, required ? 1 : 0, visible ? 1 : 0, field.provenance ?? "custom");
+        const result = insert.run(workbookId, key, role, position, field.label, field.languageCode, required ? 1 : 0, visible ? 1 : 0, field.provenance ?? "custom", field.presetKey ?? null, isActiveAttribute(field) ? 1 : 0);
         this.db.prepare("INSERT INTO entry_field_values (entry_id,field_id,workbook_id,value) SELECT id,?,?,'' FROM entries WHERE workbook_id=?").run(Number(result.lastInsertRowid), workbookId, workbookId);
       }
     };

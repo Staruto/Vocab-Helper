@@ -1,4 +1,5 @@
 import { EntryRow, TagType, WorkbookRow } from "./db.js";
+import { entryAttributes } from "./attributes.js";
 import { calendarDay } from "./calendar.js";
 import { visibleAssignedTagGroups, VisibleTagGroup } from "./tag-display.js";
 
@@ -25,8 +26,7 @@ export function buildDetailSections(workbook: WorkbookRow, entry: EntryRow, tagT
     key: workbook.meaningAttributes[index]?.label ?? `Meaning ${index + 1}`,
     value: value.trim() || "—",
   }));
-  const attributes = workbook.metadataAttributes
-    .filter((attribute) => attribute.role === "optional")
+  const attributes = entryAttributes(workbook.metadataAttributes)
     .map((attribute) => ({
       key: attribute.label,
       value: entry.attributes[attribute.key]?.trim() || "—",

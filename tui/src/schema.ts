@@ -1,7 +1,8 @@
 import { DatabaseSync } from "node:sqlite";
 import { reviewDeadline } from "./calendar.js";
+import { LANGUAGE_PRESET_DEFINITIONS } from "./language-presets.js";
 
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 7;
 
 export type SchemaMigration = {
   version: number;
@@ -229,6 +230,51 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     },
   },
 ];
+
+SCHEMA_MIGRATIONS.push({
+  version: 7,
+  apply(db) {
+    db.exec(`ALTER TABLE workbook_fields ADD COLUMN preset_key TEXT NULL;
+      ALTER TABLE workbook_fields ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1));
+      CREATE UNIQUE INDEX idx_fields_preset_identity ON workbook_fields(workbook_id, preset_key) WHERE preset_key IS NOT NULL;`);
+    const workbooks = db.prepare("SELECT id, vocabulary_language_code FROM workbooks WHERE vocabulary_kind = 'preset_language' ORDER BY id").all() as Array<{ id: number; vocabulary_language_code: string }>;
+    for (const workbook of workbooks) {
+      const definitions = LANGUAGE_PRESET_DEFINITIONS[workbook.vocabulary_language_code]?.attributes;
+      if (!definitions) continue;
+      const fields = db.prepare("SELECT id, field_key, label, provenance, position FROM workbook_fields WHERE workbook_id = ? AND role = 'optional' ORDER BY position, id").all(workbook.id) as Array<{ id: number; field_key: string; label: string; provenance: string; position: number }>;
+      const usedKeys = new Set((db.prepare("SELECT field_key FROM workbook_fields WHERE workbook_id = ?").all(workbook.id) as Array<{ field_key: string }>).map((field) => field.field_key));
+      const reservedIds = new Set(fields.filter((field) => field.provenance === "preset" && definitions.some((definition) => definition.key === field.field_key)).map((field) => field.id));
+      const promoted = new Set<number>();
+      const maxPosition = fields.reduce((max, field) => Math.max(max, field.position), 0);
+      db.prepare("UPDATE workbook_fields SET position = position + ? WHERE workbook_id = ? AND role = 'optional'").run(maxPosition + definitions.length + 1, workbook.id);
+      for (const [index, definition] of definitions.entries()) {
+        const available = fields.filter((field) => !promoted.has(field.id));
+        const candidate = available.find((field) => field.provenance === "preset" && field.field_key === definition.key)
+          ?? available.find((field) => {
+            if (reservedIds.has(field.id)) return false;
+            const label = field.label.trim().toLocaleLowerCase();
+            return label === definition.label.toLocaleLowerCase() || (definition.key === "kana" && label === "kana");
+          });
+        if (candidate) {
+          promoted.add(candidate.id);
+          const label = definition.key === "kana" && candidate.label.trim().toLocaleLowerCase() === "kana" ? definition.label : candidate.label;
+          db.prepare("UPDATE workbook_fields SET preset_key = ?, provenance = 'preset', position = ?, label = ? WHERE id = ?").run(definition.key, index + 1, label, candidate.id);
+        } else {
+          let key = definition.key;
+          let suffix = 2;
+          while (usedKeys.has(key)) key = `${definition.key}_${suffix++}`;
+          usedKeys.add(key);
+          const result = db.prepare("INSERT INTO workbook_fields (workbook_id, field_key, role, position, label, language_code, provenance, preset_key) VALUES (?, ?, 'optional', ?, ?, ?, 'preset', ?)").run(workbook.id, key, index + 1, definition.label, definition.languageCode, definition.key);
+          db.prepare("INSERT INTO entry_field_values (entry_id, field_id, workbook_id, value) SELECT id, ?, ?, '' FROM entries WHERE workbook_id = ?").run(Number(result.lastInsertRowid), workbook.id, workbook.id);
+        }
+      }
+      fields.filter((field) => !promoted.has(field.id)).forEach((field, index) => {
+        db.prepare("UPDATE workbook_fields SET position = ?, provenance = 'custom' WHERE id = ?").run(definitions.length + index + 1, field.id);
+      });
+      db.prepare("UPDATE workbooks SET preset_enabled = 1 WHERE id = ?").run(workbook.id);
+    }
+  },
+});
 
 export function runSchemaMigrations(db: DatabaseSync, migrations: SchemaMigration[] = SCHEMA_MIGRATIONS): void {
   db.exec("PRAGMA foreign_keys = ON");

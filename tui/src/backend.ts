@@ -25,9 +25,8 @@ export class VocabularyBackend {
     vocabularyLabel: string,
     vocabularyLanguageCode: string | null,
     meaningAttributes: MeaningAttribute[],
-    presetEnabled = vocabularyLanguageCode === "JP",
   ): WorkbookRow {
-    return this.repository.updateWorkbookSettings(workbookId, name, vocabularyLabel, vocabularyLanguageCode, meaningAttributes, presetEnabled);
+    return this.repository.updateWorkbookSettings(workbookId, name, vocabularyLabel, vocabularyLanguageCode, meaningAttributes);
   }
 
   listMeaningAttributes(workbookId: number): MeaningAttribute[] {
@@ -39,9 +38,8 @@ export class VocabularyBackend {
     vocabularyLabel = "Vocabulary",
     vocabularyLanguageCode: string | null = null,
     meaningAttributes: MeaningAttribute[] = [{ position: 1, label: "Primary Meaning", languageCode: null }],
-    presetEnabled = vocabularyLanguageCode === "JP",
   ): WorkbookRow {
-    return this.repository.createWorkbook(name, vocabularyLabel, vocabularyLanguageCode, meaningAttributes, presetEnabled);
+    return this.repository.createWorkbook(name, vocabularyLabel, vocabularyLanguageCode, meaningAttributes);
   }
 
   createConfiguredWorkbook(input: CreateWorkbookInput): WorkbookRow { return this.repository.createConfiguredWorkbook(input); }

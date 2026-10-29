@@ -7,6 +7,7 @@ A modern TypeScript TUI for vocabulary memorization.
 - Multiple configurable workbooks
 - List, add, view, edit, and delete vocabulary entries
 - Custom meaning and optional fields
+- Permanent language preset fields with independent activation and list visibility
 - Workbook tag types with optional list and practice badges
 - Prioritized practice with learning statistics
 - Normalized SQLite storage
@@ -31,6 +32,16 @@ Build:
 npm run build
 npm run start
 ```
+
+## Language preset attributes
+
+Japanese, English, German, Chinese, Korean, Spanish, and French workbooks automatically include Example Sentence 1–5, Common Collocations, and Similar Words. Japanese also includes 読み方 (kana). All preset fields start active and hidden from list columns.
+
+During creation, choose which exclusive attributes are active. Later, open `/setting` → **Attributes** → **Language Preset Attributes**, between Meanings and Optional Attributes. Use Up/Down to select, **Ctrl+Space** to toggle activation, **Space** to toggle list visibility, and **Ctrl+R** to rename. Active fields are white; inactive fields are grey. Preset fields cannot be added or removed. Settings changes use the existing save/discard prompt.
+
+Inactive fields are omitted from entry prompts, details, list columns, search, and import destinations. Their stored values and visibility preferences survive edits and imports and become available again when reactivated. Active fields still follow their separate visibility setting for list columns and search.
+
+Existing supported-language workbooks are upgraded automatically, including workbooks created with presets disabled. Existing preset identities and matching optional-field names are promoted without losing values or learning history. Missing fields are added active and hidden. The default Kana label becomes 読み方 (kana); customized names remain unchanged. Import labels use the current displayed names.
 
 ## Import
 

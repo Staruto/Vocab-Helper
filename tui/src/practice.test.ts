@@ -9,7 +9,7 @@ import { textActionFromRawInput } from "./text-input.js";
 const workbook: WorkbookRow = {
   id: 1, name: "Practice", wordCount: 0, createdAt: "",
   vocabularyLabel: "Vocabulary", vocabularyLanguageCode: null,
-  presetEnabled: false, vocabularyKind: "non_language", importFilePath: null, dailyGoal: null, todayPracticeCount: 0,
+  vocabularyKind: "non_language", importFilePath: null, dailyGoal: null, todayPracticeCount: 0,
   meaningAttributes: [{ position: 1, label: "Meaning", languageCode: null }],
   metadataAttributes: [],
 };

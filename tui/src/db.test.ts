@@ -1,3 +1,4 @@
+import { createPresetAttributes } from "./attributes.js";
 import assert from "node:assert/strict";
 import { mkdtempSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -5,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { defaultDbPath, LANGUAGE_PRESET_DEFINITIONS, TagDataLossError, ValidationError, VocabularyRepository, WorkbookDataLossError, WorkbookConfigurationInput } from "./db.js";
+import { defaultDbPath, TagDataLossError, ValidationError, VocabularyRepository, WorkbookDataLossError, WorkbookConfigurationInput } from "./db.js";
 import { assertDatabaseIntegrity, CURRENT_SCHEMA_VERSION, runSchemaMigrations, SCHEMA_MIGRATIONS } from "./schema.js";
 import type { EntryRow, ImportEntryInput } from "./db.js";
 
@@ -17,10 +18,18 @@ function temporaryDatabase(): { directory: string; path: string; cleanup: () => 
 function basicWorkbook(name = "Test"): WorkbookConfigurationInput {
   return {
     name, vocabularyKind: "preset_language", vocabularyLabel: "Japanese", vocabularyLanguageCode: "JP",
-    presetEnabled: true,
     meaningAttributes: [{ position: 1, label: "English", languageCode: "EN" }],
-    optionalAttributes: LANGUAGE_PRESET_DEFINITIONS.JP.optionalAttributes.map((field, index) => ({ ...field, required: false, visible: false, displayOrder: index + 1, provenance: "preset" })),
+    presetAttributes: createPresetAttributes("JP"), optionalAttributes: [],
     tagTypes: [{ name: "Part of Speech", visible: false, tags: [{ name: "名詞" }] }],
+  };
+}
+
+function customAttributesWorkbook(): WorkbookConfigurationInput {
+  return { ...basicWorkbook(), vocabularyKind: "non_language", vocabularyLanguageCode: null, presetAttributes: [],
+    optionalAttributes: [
+      { key: "kana", label: "Kana", languageCode: null, required: false, visible: false, displayOrder: 1 },
+      { key: "example_sentence_1", label: "Example Sentence 1", languageCode: null, required: false, visible: false, displayOrder: 2 },
+    ],
   };
 }
 
@@ -306,7 +315,7 @@ for (const mode of ["edit", "import"] as const) {
 test("workbook updates require confirmation before deleting populated fields", () => {
   const temp = temporaryDatabase();
   try {
-    const repository = new VocabularyRepository(temp.path); const input = basicWorkbook(); const workbook = repository.createConfiguredWorkbook(input);
+    const repository = new VocabularyRepository(temp.path); const input = customAttributesWorkbook(); const workbook = repository.createConfiguredWorkbook(input);
     repository.addEntry(workbook.id, "猫", "cat", ["cat"], { kana: "ねこ", example_sentence_1: "A cat." });
     const changed = { ...input, optionalAttributes: input.optionalAttributes.filter((field) => field.key !== "example_sentence_1") };
     const impact = repository.previewWorkbookUpdate(workbook.id, changed);
@@ -449,9 +458,9 @@ test("attribute drafts reject invalid identities, section changes, and duplicate
     assert.throws(() => repository!.updateWorkbookAttributes(workbook.id, { vocabularyLabel: workbook.vocabularyLabel, fields: fields.map((field) => field === optional ? { ...field, id: undefined } : field) }), /already belongs/i);
     assert.throws(() => repository!.updateWorkbookAttributes(workbook.id, { vocabularyLabel: workbook.vocabularyLabel, fields: fields.map((field) => field === optional ? { ...field, label: fields.find((candidate) => candidate.role === "optional" && candidate !== optional)!.label } : field) }), /must be unique/i);
 
-    const changedType = { ...basicWorkbook(), vocabularyKind: "non_language" as const, vocabularyLanguageCode: null };
+    const changedType = { ...basicWorkbook(), vocabularyKind: "non_language" as const, vocabularyLanguageCode: null, presetAttributes: [] };
     assert.throws(() => repository!.updateConfiguredWorkbook(workbook.id, changedType), /type cannot be changed/i);
-    assert.throws(() => repository!.updateConfiguredWorkbook(workbook.id, { ...basicWorkbook(), presetEnabled: false }), /preset selection cannot be changed/i);
+    assert.throws(() => repository!.updateConfiguredWorkbook(workbook.id, { ...basicWorkbook(), presetAttributes: [] }), /preset attributes cannot be added or removed/i);
   } finally { repository?.close(); temp.cleanup(); }
 });
 
@@ -459,7 +468,7 @@ test("only populated attribute removal requires destructive confirmation", () =>
   const temp = temporaryDatabase(); let repository: VocabularyRepository | undefined;
   try {
     repository = new VocabularyRepository(temp.path);
-    const workbook = repository.createConfiguredWorkbook(basicWorkbook());
+    const workbook = repository.createConfiguredWorkbook(customAttributesWorkbook());
     repository.addEntry(workbook.id, "cat", "cat", ["cat"], { kana: "", example_sentence_1: "A cat." });
     const baseFields = workbook.metadataAttributes.filter((field) => field.key !== "vocab");
     const withoutEmptyKana = baseFields.filter((field) => field.key !== "kana");

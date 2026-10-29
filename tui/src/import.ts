@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import { ImportEntryInput, TagType, WorkbookRow } from "./db.js";
+import { entryAttributes } from "./attributes.js";
 
 export type ImportDiagnosticKind = "ignored-field" | "ignored-tag" | "invalid" | "duplicate";
 export type ImportDiagnostic = { recordNumber: number; kind: ImportDiagnosticKind; message: string };
@@ -59,7 +60,7 @@ export function parseLabeledTextImport(text: string, workbook: WorkbookRow, tagT
   const addDestination = (label: string, destination: Destination) => destinations.set(label, [...(destinations.get(label) ?? []), destination]);
   addDestination(workbook.vocabularyLabel, { kind: "vocabulary" });
   workbook.meaningAttributes.forEach((field, index) => addDestination(field.label, { kind: "meaning", index }));
-  workbook.metadataAttributes.filter((field) => field.role === "optional").forEach((field) => addDestination(field.label, { kind: "optional", key: field.key }));
+  entryAttributes(workbook.metadataAttributes).forEach((field) => addDestination(field.label, { kind: "optional", key: field.key }));
   tagTypes.forEach((type) => addDestination(type.name, { kind: "tags", type }));
 
   const seenVocabulary = new Set(existingVocabulary.map((value) => value.trim()));
