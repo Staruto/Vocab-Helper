@@ -1106,7 +1106,7 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
         setPresetAttributes((items) => items.map((field, index) => index !== selected ? field : activation ? { ...field, active: !isActiveAttribute(field) } : { ...field, visible: !field.visible })); return;
       }
       if (key.ctrl && input.toLowerCase() === "r" && presetAttributes[selected]) { setEditAction("rename"); setEditBuffer(presetAttributes[selected].label); return; }
-      if ((key.ctrl && input.toLowerCase() === "a") || key.delete) { setError("Preset attributes are fixed. Ctrl+Space toggles activation."); return; }
+      if ((key.ctrl && input.toLowerCase() === "a") || key.delete) { setError("Preset attributes are fixed. T toggles activation."); return; }
     }
     if (stage === "pos" && (key.upArrow || key.downArrow || input === " ")) { setAddPosType((value) => !value); return; }
     if (stage === "meaning-count" && (key.upArrow || key.downArrow)) { setMeaningCount((value) => key.upArrow ? Math.min(5, value + 1) : Math.max(1, value - 1)); return; }
@@ -1134,7 +1134,7 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
   let footer = "Enter next | Esc cancel";
   if (stage === "type") { description = existingWorkbook ? "The vocabulary type is fixed after workbook creation." : "Choose a vocabulary type with ↑↓. This selection is required."; footer = existingWorkbook ? "←/→ navigate questions | Esc cancel" : "↑↓ choose type | ←/→ navigate questions | Esc cancel"; }
   if (stage === "label") { description = "Choose the label users will see for vocabulary entries. You can edit the default."; footer = "←/→ to navigate questions | Enter next | Esc cancel"; }
-  if (stage === "preset") { description = "Select exclusive attributes to be active or inactive. You can change them later in Settings."; footer = "↑↓ select | Ctrl+Space active | Space show/hide | Ctrl+R rename | → next"; }
+  if (stage === "preset") { description = "Select exclusive attributes to be active or inactive. You can change them later in Settings."; footer = "↑↓ select | T active/inactive | Space show/hide | Ctrl+R rename | → next"; }
   if (stage === "pos") { description = "Choose whether to add the Part of Speech tag type and its preset tags. After creation, manage it in Settings."; footer = "↑↓/Space toggle | ←/→ to navigate questions | Esc cancel"; }
   if (stage === "tags") { description = "Review and customize the Part of Speech tags for this workbook."; footer = "↑↓ select | Ctrl+A add | Ctrl+R rename | Del delete | ←/→ navigate"; }
   if (stage === "meaning-count") { description = "Choose how many meaning fields each vocabulary entry will have."; footer = "↑↓ choose number | ←/→ to navigate questions | Esc cancel"; }
@@ -1146,7 +1146,7 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
     {stage === "name" ? <CaretInputLine key="workbook-name" prefix="Workbook name: " value={name} onChange={(value) => { setName(value); setError(""); }} width={width} inputKey="workbook-name" /> : null}
     {stage === "type" ? existingWorkbook ? <Text color={SELECTED_TEXT_COLOR}>{padLine(selectedType.label, width)}</Text> : VOCABULARY_TYPES.map((item, index) => <Text key={item.label} color={index === typeIndex ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${index === typeIndex ? ">" : " "} ${item.label}`, width)}</Text>) : null}
     {stage === "label" ? <CaretInputLine key="vocabulary-label" prefix="Vocabulary label: " value={vocabularyLabel} onChange={(value) => { setVocabularyLabel(value); setError(""); }} width={width} inputKey="vocabulary-label" /> : null}
-    {stage === "preset" ? <>{presetAttributes.map((field, index) => <Text key={field.key} color={isActiveAttribute(field) ? "white" : AUXILIARY_TEXT_COLOR}>{padLine(`${index === selected ? ">" : " "} ${field.label} [${isActiveAttribute(field) ? "active" : "inactive"}] [${field.visible ? "shown" : "hidden"}]`, width)}</Text>)}{editAction === "rename" ? <CaretInputLine prefix="Rename: " value={editBuffer} onChange={setEditBuffer} width={width} inputKey={`preset-rename-${selected}`} /> : null}</> : null}
+    {stage === "preset" ? <>{presetAttributes.map((field, index) => <Text key={field.key} color={index === selected ? SELECTED_TEXT_COLOR : "white"}>{padLine(`${index === selected ? ">" : " "} ${field.label} [${isActiveAttribute(field) ? "active" : "inactive"}] [${field.visible ? "shown" : "hidden"}]`, width)}</Text>)}{editAction === "rename" ? <CaretInputLine prefix="Rename: " value={editBuffer} onChange={setEditBuffer} width={width} inputKey={`preset-rename-${selected}`} /> : null}</> : null}
     {stage === "pos" ? <><Text color={addPosType ? "green" : AUXILIARY_TEXT_COLOR}>{padLine(`Add Part of Speech: ${addPosType ? "Yes" : "No"}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine((presetDefinition?.partOfSpeechTags ?? []).length ? `Preset tags: ${(presetDefinition?.partOfSpeechTags ?? []).join(", ")}` : "No preset tags are currently defined for this language.", width)}</Text></> : null}
     {stage === "meaning-count" ? <Text>{padLine(`Meaning attributes: ${meaningCount}`, width)}</Text> : null}
     {stage === "meaning" ? <><CaretInputLine key={`meaning-${meaningIndex}`} prefix={`Meaning ${meaningIndex + 1}/${meaningCount}: `} value={meanings[meaningIndex]?.label ?? ""} onChange={(value) => { setMeaningPalette(null); setMeanings((items) => items.map((item, index) => index === meaningIndex ? { ...item, label: value, languageCode: null } : item)); setError(""); }} width={width} inputKey={`meaning-${meaningIndex}`} />{meaningPalette !== null ? LANGUAGE_PRESETS.map((item, index) => <Text key={item.code} color={index === meaningPalette ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${index === meaningPalette ? ">" : " "} ${item.label} (${item.code})`, width)}</Text>) : null}</> : null}
@@ -1372,7 +1372,7 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
     setMessage("");
   }
   function beginAdd(): void {
-    if (selected.section === "preset") { setMessage("Preset attributes are fixed. Ctrl+Space toggles activation."); return; }
+    if (selected.section === "preset") { setMessage("Preset attributes are fixed. T toggles activation."); return; }
     if (selected.section === "vocabulary") { setMessage("Vocabulary cannot be added or removed."); return; }
     if (selected.section === "meaning" && meanings.length >= 5) { setMessage("A workbook can have at most five meaning attributes."); return; }
     setEditAction("add"); setBuffer(""); setMessage(`Enter a new ${selected.section === "meaning" ? "meaning" : "optional"} attribute name.`);
@@ -1462,7 +1462,7 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
       return;
     }
     if (key.delete) {
-      if (selected.section === "preset") { setMessage("Preset attributes cannot be removed. Ctrl+Space toggles activation."); return; }
+      if (selected.section === "preset") { setMessage("Preset attributes cannot be removed. T toggles activation."); return; }
       if (selected.section === "vocabulary") { setMessage("Vocabulary cannot be deleted."); return; }
       if (!selectedField) return;
       if (selected.section === "meaning" && meanings[0] === selectedField) { setMessage("The Primary Meaning cannot be deleted."); return; }
@@ -1479,7 +1479,7 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
   }
 
   const meaningFooter = meanings[0] === selectedField ? "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Esc leave" : `↑↓ navigate | Ctrl+A add | Ctrl+R rename${selectedField?.id === undefined ? "" : " | Ctrl+P make primary"} | Space show/hide | Del remove | Esc leave`;
-  const footer = editAction !== "none" ? "Enter confirm | Esc cancel edit" : selected.section === "vocabulary" ? "↑↓ navigate | Ctrl+R rename | Esc leave" : selected.section === "meaning" ? meaningFooter : selected.section === "preset" ? "↑↓ select | Ctrl+Space active | Ctrl+R rename | Space show/hide | Esc leave" : "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Space show/hide | Del remove | Esc leave";
+  const footer = editAction !== "none" ? "Enter confirm | Esc cancel edit" : selected.section === "vocabulary" ? "↑↓ navigate | Ctrl+R rename | Esc leave" : selected.section === "meaning" ? meaningFooter : selected.section === "preset" ? "↑↓ select | T active/inactive | Ctrl+R rename | Space show/hide | Esc leave" : "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Space show/hide | Del remove | Esc leave";
   const lines: Array<{ text: string; color?: string; bold?: boolean; selected?: boolean }> = [];
   function group(section: AttributeSection, title: string, description: string, members: Array<{ field: MetadataAttribute; index: number }>): void {
     const borderColor = selected.section === section ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR;
@@ -1493,7 +1493,7 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
     else for (const { field, index } of members) {
       const focused = selected.fieldIndex === index;
       const activation = field.presetKey ? ` [${isActiveAttribute(field) ? "active" : "inactive"}]` : "";
-      const color = field.presetKey ? isActiveAttribute(field) ? "white" : AUXILIARY_TEXT_COLOR : focused ? SELECTED_TEXT_COLOR : "white";
+      const color = focused ? SELECTED_TEXT_COLOR : "white";
       line(`${focused ? ">" : " "} ${field.label}${activation} [${field.visible ? "shown" : "hidden"}]${meanings[0] === field ? " (primary, required)" : ""}`, color, false, focused);
     }
     lines.push({ text: `└${"─".repeat(Math.max(1, width - 2))}┘`, color: borderColor });

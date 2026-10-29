@@ -16,7 +16,6 @@ export function entryAttributes(fields: MetadataAttribute[]): MetadataAttribute[
   return fields.filter((field) => field.role === "optional" && isActiveAttribute(field));
 }
 
-// Ink 5 parses the NUL emitted by Ctrl+Space as Ctrl+`.
-export function isPresetActivationInput(input: string, key: { ctrl: boolean }): boolean {
-  return input === "\x00" || (key.ctrl && (input === " " || input === "`"));
+export function isPresetActivationInput(input: string, key: { ctrl: boolean; meta?: boolean }): boolean {
+  return !key.ctrl && !key.meta && input.toLowerCase() === "t";
 }

@@ -114,10 +114,19 @@ test("inactive presets leave prompts, detail, visible search, and import while a
     assert.match(state.statusLines.join(" "), /Example Sentence 1/);
     const transition = update(state, { type: "addFieldSubmitted", value: "example" });
     assert.equal(transition.effects[0]?.type, "addEntry");
-    assert.equal(isPresetActivationInput("`", { ctrl: true }), true);
-    assert.equal(isPresetActivationInput("\x00", { ctrl: false }), true);
-    assert.equal(isPresetActivationInput(" ", { ctrl: false }), false);
   } finally { repository.close(); }
+});
+
+test("preset activation uses plain T and rejects modifier combinations and legacy inputs", () => {
+  assert.equal(isPresetActivationInput("t", { ctrl: false }), true);
+  assert.equal(isPresetActivationInput("T", { ctrl: false }), true);
+  for (const input of [" ", "\x00", "`", "\x14"]) {
+    assert.equal(isPresetActivationInput(input, { ctrl: false }), false);
+    assert.equal(isPresetActivationInput(input, { ctrl: true }), false);
+  }
+  assert.equal(isPresetActivationInput("t", { ctrl: true }), false);
+  assert.equal(isPresetActivationInput("t", { ctrl: false, meta: true }), false);
+  assert.equal(isPresetActivationInput("T", { ctrl: false, meta: true }), false);
 });
 
 test("v6 migration promotes by identity then name, preserves all values and stats, and runs once", () => {
