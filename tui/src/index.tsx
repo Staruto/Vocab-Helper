@@ -5,6 +5,7 @@ import { CreateWorkbookInput, EntryRow, LANGUAGE_PRESET_DEFINITIONS, MeaningAttr
 import { VocabularyBackend } from "./backend.js";
 import { fitTagBadges, visibleAssignedTagGroups } from "./tag-display.js";
 import { adjacentEntryId, buildDetailSections, buildReviewFields, detailNavigationLabel, DetailField } from "./detail-display.js";
+import { similarWordLines } from "./similar-words.js";
 import { formatImportPreviewFilter, formatImportPreviewRecord, importPreviewPageSize, ImportPreview, ImportPreviewFilter, loadLabeledTextFile, paginateImportPreview } from "./import.js";
 import { CaretInputLine } from "./text-input.js";
 import { filterEntriesForSearch } from "./search.js";
@@ -1636,6 +1637,14 @@ function wrapDetailText(value: string, width: number): string[] {
 
 function detailFieldLines(field: DetailField, width: number, keyWidth: number, valueColor = "white"): JSX.Element[] {
   const valueWidth = Math.max(1, width - keyWidth - 1);
+  if (field.similarWords) {
+    return similarWordLines(field.similarWords, valueWidth, displayWidth).map((spans, index) => {
+      const keyPart = padLine(index === 0 ? `${field.key}:` : "", keyWidth);
+      const content = spans.map((span) => span.text).join("");
+      const remaining = Math.max(0, width - displayWidth(keyPart) - 1 - displayWidth(content));
+      return <Text key={`${field.key}-${index}`}><Text color={AUXILIARY_TEXT_COLOR}>{keyPart}</Text>{" "}{spans.map((span, spanIndex) => <Text key={spanIndex} color={span.word ? "cyan" : valueColor} bold={span.word}>{span.text}</Text>)}{" ".repeat(remaining)}</Text>;
+    });
+  }
   return wrapDetailText(field.value, valueWidth).map((chunk, index) => {
     const key = index === 0 ? `${field.key}:` : "";
     const keyPart = padLine(key, keyWidth);

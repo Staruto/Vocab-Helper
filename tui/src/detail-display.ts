@@ -2,8 +2,9 @@ import { EntryRow, TagType, WorkbookRow } from "./db.js";
 import { entryAttributes } from "./attributes.js";
 import { calendarDay } from "./calendar.js";
 import { visibleAssignedTagGroups, VisibleTagGroup } from "./tag-display.js";
+import { parseSimilarWords, SimilarWord } from "./similar-words.js";
 
-export type DetailField = { key: string; value: string };
+export type DetailField = { key: string; value: string; similarWords?: SimilarWord[] };
 
 export function buildReviewFields(entry: EntryRow): DetailField[] {
   return [
@@ -27,10 +28,11 @@ export function buildDetailSections(workbook: WorkbookRow, entry: EntryRow, tagT
     value: value.trim() || "—",
   }));
   const attributes = entryAttributes(workbook.metadataAttributes)
-    .map((attribute) => ({
-      key: attribute.label,
-      value: entry.attributes[attribute.key]?.trim() || "—",
-    }));
+    .map((attribute): DetailField => {
+      const value = entry.attributes[attribute.key]?.trim() || "—";
+      const similarWords = attribute.presetKey === "similar_words" ? parseSimilarWords(value) : null;
+      return { key: attribute.label, value, ...(similarWords ? { similarWords } : {}) };
+    });
   return { meanings, attributes, tags: visibleAssignedTagGroups(entry, tagTypes) };
 }
 

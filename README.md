@@ -43,6 +43,16 @@ Inactive fields are omitted from entry prompts, details, list columns, search, a
 
 Existing supported-language workbooks are upgraded automatically, including workbooks created with presets disabled. Existing preset identities and matching optional-field names are promoted without losing values or learning history. Missing fields are added active and hidden. The default Kana label becomes 読み方 (kana); customized names remain unchanged. Import labels use the current displayed names.
 
+### Similar Words
+
+In `/add`, `/edit`, or an import field, enter `{word} (explanation)`. Explanations are optional: `{word}` also works. Separate multiple items with spaces or commas, for example:
+
+```text
+Similar Words: {near} (short distance), {close} (little separation), {adjacent}
+```
+
+Entry details and practice review show each item on a separate line, with the word in cyan bold followed by two spaces and its explanation in normal text. Braces and enclosing parentheses are hidden. Spaces and commas inside words or explanations are preserved; explanations may contain balanced parentheses. Renaming the preset does not change this behavior; imports use its current label. Existing plain text and values that do not fully match the format display unchanged. Workbook list columns keep their compact display.
+
 ## Import
 
 Run `/import` inside an open workbook. If that workbook has no default import file, enter the path to a UTF-8 `.txt` file. In the preview, use Up/Down to select the file path, status filters, or record list. Press Enter on the file path to load a different file, or press Enter on the filters or records to import all ready entries. Esc cancels.
