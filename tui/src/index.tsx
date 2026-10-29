@@ -1480,11 +1480,11 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
 
   const meaningFooter = meanings[0] === selectedField ? "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Esc leave" : `↑↓ navigate | Ctrl+A add | Ctrl+R rename${selectedField?.id === undefined ? "" : " | Ctrl+P make primary"} | Space show/hide | Del remove | Esc leave`;
   const footer = editAction !== "none" ? "Enter confirm | Esc cancel edit" : selected.section === "vocabulary" ? "↑↓ navigate | Ctrl+R rename | Esc leave" : selected.section === "meaning" ? meaningFooter : selected.section === "preset" ? "↑↓ select | T active/inactive | Ctrl+R rename | Space show/hide | Esc leave" : "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Space show/hide | Del remove | Esc leave";
-  const lines: Array<{ text: string; color?: string; bold?: boolean; selected?: boolean }> = [];
+  const lines: Array<{ text: string; color?: string; borderColor?: string; bold?: boolean; selected?: boolean }> = [];
   function group(section: AttributeSection, title: string, description: string, members: Array<{ field: MetadataAttribute; index: number }>): void {
     const borderColor = selected.section === section ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR;
     const innerWidth = Math.max(1, width - 4);
-    const line = (text: string, color?: string, bold?: boolean, focused = false) => lines.push({ text: `│ ${padLine(text, innerWidth)} │`, color, bold, selected: focused });
+    const line = (text: string, color?: string, bold?: boolean, focused = false) => lines.push({ text: padLine(text, innerWidth), color, borderColor, bold, selected: focused });
     lines.push({ text: `┌${"─".repeat(Math.max(1, width - 2))}┐`, color: borderColor });
     line(title, borderColor, true);
     line(description, AUXILIARY_TEXT_COLOR);
@@ -1507,7 +1507,7 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
   const focusedLine = Math.max(0, lines.findIndex((line) => line.selected));
   const firstLine = Math.max(0, Math.min(lines.length - viewportSize, focusedLine - Math.floor(viewportSize / 2)));
   return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Attributes - ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Configure field names, activation, and visibility. Changes are staged.", width)}</Text><Text color={message ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text>
-    {lines.slice(firstLine, firstLine + viewportSize).map((line, index) => <Text key={firstLine + index} color={line.color} bold={line.bold}>{line.text}</Text>)}
+    {lines.slice(firstLine, firstLine + viewportSize).map((line, index) => <Text key={firstLine + index} color={line.borderColor ?? line.color}>{line.borderColor ? <>{"│ "}<Text color={line.color} bold={line.bold}>{line.text}</Text>{" │"}</> : line.text}</Text>)}
     {editAction !== "none" ? <CaretInputLine key={`${editAction}-${selectedIndex}`} prefix={`${editAction === "add" ? "New attribute" : "Display name"}: `} value={buffer} onChange={(value) => { setBuffer(value); setMessage(""); }} width={width} color="cyan" inputKey={`${editAction}-${selectedIndex}`} /> : null}
     <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`${firstLine > 0 ? "↑ more above" : ""}${firstLine + viewportSize < lines.length ? "  ↓ more below" : ""}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footer, width)}</Text></Box>;
 }
