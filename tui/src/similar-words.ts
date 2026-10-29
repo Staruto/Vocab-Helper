@@ -1,5 +1,6 @@
+import { StyledTextSpan, wrapStyledText } from "./styled-text.js";
+
 export type SimilarWord = { word: string; explanation?: string };
-export type SimilarWordSpan = { text: string; word: boolean };
 
 // Parse the whole value so malformed or legacy text can be displayed unchanged.
 export function parseSimilarWords(value: string): SimilarWord[] | null {
@@ -42,26 +43,9 @@ export function parseSimilarWords(value: string): SimilarWord[] | null {
   return items.length ? items : null;
 }
 
-export function similarWordLines(items: SimilarWord[], width: number, measure: (text: string) => number): SimilarWordSpan[][] {
-  const lines: SimilarWordSpan[][] = [];
-  for (const item of items) {
-    let line: SimilarWordSpan[] = [];
-    let text = "";
-    const spans = [{ text: item.word, word: true }, ...(item.explanation ? [{ text: `  ${item.explanation}`, word: false }] : [])];
-    for (const span of spans) {
-      for (const char of Array.from(span.text)) {
-        if (text && measure(text + char) > Math.max(1, width)) {
-          lines.push(line);
-          line = [];
-          text = "";
-        }
-        const last = line.at(-1);
-        if (last?.word === span.word) last.text += char;
-        else line.push({ text: char, word: span.word });
-        text += char;
-      }
-    }
-    lines.push(line);
-  }
-  return lines;
+export function similarWordLines(items: SimilarWord[], width: number, measure: (text: string) => number): StyledTextSpan[][] {
+  return items.flatMap((item) => wrapStyledText([
+    { text: item.word, highlight: true },
+    ...(item.explanation ? [{ text: `  ${item.explanation}`, highlight: false }] : []),
+  ], width, measure));
 }

@@ -43,6 +43,12 @@ Inactive fields are omitted from entry prompts, details, list columns, search, a
 
 Existing supported-language workbooks are upgraded automatically, including workbooks created with presets disabled. Existing preset identities and matching optional-field names are promoted without losing values or learning history. Missing fields are added active and hidden. The default Kana label becomes 読み方 (kana); customized names remain unchanged. Import labels use the current displayed names.
 
+### Example Sentences
+
+In any Example Sentence 1–5 preset, surround text with `{...}` to highlight it in cyan bold in entry details and practice review. For example, `She lives {near the station}.` displays with `near the station` highlighted and the braces hidden. Multiple and adjacent pairs are supported; surrounding text keeps its normal style. Empty `{}` pairs disappear. Unmatched braces and nested brace groups stay literal while independent valid pairs still highlight.
+
+This works with `/add`, `/edit`, and `/import`, including renamed presets. The original text, including braces, is kept for editing. Workbook list columns keep their compact display.
+
 ### Similar Words
 
 In `/add`, `/edit`, or an import field, enter `{word} (explanation)`. Explanations are optional: `{word}` also works. Separate multiple items with spaces or commas, for example:

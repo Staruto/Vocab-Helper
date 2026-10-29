@@ -3,8 +3,9 @@ import { entryAttributes } from "./attributes.js";
 import { calendarDay } from "./calendar.js";
 import { visibleAssignedTagGroups, VisibleTagGroup } from "./tag-display.js";
 import { parseSimilarWords, SimilarWord } from "./similar-words.js";
+import { parseExampleSentence, StyledTextSpan } from "./styled-text.js";
 
-export type DetailField = { key: string; value: string; similarWords?: SimilarWord[] };
+export type DetailField = { key: string; value: string; similarWords?: SimilarWord[]; spans?: StyledTextSpan[] };
 
 export function buildReviewFields(entry: EntryRow): DetailField[] {
   return [
@@ -31,7 +32,8 @@ export function buildDetailSections(workbook: WorkbookRow, entry: EntryRow, tagT
     .map((attribute): DetailField => {
       const value = entry.attributes[attribute.key]?.trim() || "—";
       const similarWords = attribute.presetKey === "similar_words" ? parseSimilarWords(value) : null;
-      return { key: attribute.label, value, ...(similarWords ? { similarWords } : {}) };
+      const spans = /^example_sentence_[1-5]$/.test(attribute.presetKey ?? "") ? parseExampleSentence(value) : null;
+      return { key: attribute.label, value, ...(similarWords ? { similarWords } : {}), ...(spans ? { spans } : {}) };
     });
   return { meanings, attributes, tags: visibleAssignedTagGroups(entry, tagTypes) };
 }

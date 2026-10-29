@@ -25,18 +25,18 @@ test("malformed and mixed values fall back as a whole", () => {
 test("similar word lines retain styling boundaries and start each item on a new line", () => {
   const items = [{ word: "near", explanation: "short distance" }, { word: "close" }];
   assert.deepEqual(similarWordLines(items, 80, (text) => text.length), [
-    [{ text: "near", word: true }, { text: "  short distance", word: false }],
-    [{ text: "close", word: true }],
+    [{ text: "near", highlight: true }, { text: "  short distance", highlight: false }],
+    [{ text: "close", highlight: true }],
   ]);
   const lines = similarWordLines(items, 3, (text) => text.length);
   assert.deepEqual(lines.slice(0, 2), [
-    [{ text: "nea", word: true }],
-    [{ text: "r", word: true }, { text: "  ", word: false }],
+    [{ text: "nea", highlight: true }],
+    [{ text: "r", highlight: true }, { text: "  ", highlight: false }],
   ]);
   assert.equal(lines.flat().map((span) => span.text).join(""), "near  short distanceclose");
   assert.ok(lines.every((line) => line.reduce((sum, span) => sum + span.text.length, 0) <= 3));
   const wideLines = similarWordLines([{ word: "隣近", explanation: "近い" }], 4, (text) => Array.from(text).reduce((sum, char) => sum + (char.charCodeAt(0) > 255 ? 2 : 1), 0));
-  assert.deepEqual(wideLines, [[{ text: "隣近", word: true }], [{ text: "  近", word: false }], [{ text: "い", word: false }]]);
+  assert.deepEqual(wideLines, [[{ text: "隣近", highlight: true }], [{ text: "  近", highlight: false }], [{ text: "い", highlight: false }]]);
 });
 
 test("only the active preset identity receives structured details", () => {
