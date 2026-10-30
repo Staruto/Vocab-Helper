@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { reviewDeadline } from "./calendar.js";
 import { LANGUAGE_PRESET_DEFINITIONS } from "./language-presets.js";
 
-export const CURRENT_SCHEMA_VERSION = 7;
+export const CURRENT_SCHEMA_VERSION = 8;
 
 export type SchemaMigration = {
   version: number;
@@ -273,6 +273,16 @@ SCHEMA_MIGRATIONS.push({
       });
       db.prepare("UPDATE workbooks SET preset_enabled = 1 WHERE id = ?").run(workbook.id);
     }
+  },
+});
+
+SCHEMA_MIGRATIONS.push({
+  version: 8,
+  apply(db) {
+    db.exec(`ALTER TABLE workbook_daily_practice ADD COLUMN goal_snapshot INTEGER NULL
+      CHECK (goal_snapshot IS NULL OR (typeof(goal_snapshot) = 'integer' AND goal_snapshot > 0 AND goal_snapshot <= 9007199254740991));
+      UPDATE workbook_daily_practice SET goal_snapshot =
+        (SELECT daily_goal FROM workbooks WHERE workbooks.id = workbook_daily_practice.workbook_id);`);
   },
 });
 

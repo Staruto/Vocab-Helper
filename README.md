@@ -1,4 +1,4 @@
-# VocabHelper 3.5.0
+# VocabHelper 3.6.0
 
 A modern TypeScript TUI for vocabulary memorization.
 
@@ -96,7 +96,7 @@ Last tested is the local calendar day of completion. The next deadline is that d
 
 Run `/profile` inside a workbook to see its practice calendar and streaks. The Monday–Sunday grid covers up to 53 weeks ending this week; narrower terminals show only the newest weeks that fit, without scrolling. Month labels appear above the grid, with the visible date range and color legend underneath. Esc returns to the workbook.
 
-A grey `·` means no recorded practice, yellow `█` means positive practice below the current goal, and green `█` means the goal was reached or exceeded. Without a goal, any positive practice is green. All historical colors use the current daily goal, so changing it recolors history. Future days are blank. History exists only since daily tracking began; missing dates show no recorded practice.
+A grey `·` means no recorded practice, yellow `█` means positive practice below that day's saved goal, and green `█` means the goal was reached or exceeded. Without a goal, any positive practice is green. Past days retain their saved goals. Changing or clearing the goal updates today's color only; future practice days record the goal in effect when first saved. On upgrade to v3.6.0, existing recorded days use the workbook's current goal as their saved goal, preserving their appearance at upgrade time. Future days are blank. History exists only since daily tracking began; missing dates show no recorded practice.
 
 Current and longest streaks count consecutive local calendar days with any practice, regardless of goal completion. If today has no practice yet, the current streak may end yesterday. Longest streak uses all recorded history, including dates outside the visible grid.
 

@@ -46,7 +46,7 @@ export type EntryRow = {
   tier: "gray" | "green" | "yellow" | "red"; lastTested: string | null; nextTestDeadline: string | null;
 };
 export type PracticeSessionResult = { entryId: number; answers: boolean[] };
-export type DailyPracticeRow = { day: string; practiceCount: number };
+export type DailyPracticeRow = { day: string; practiceCount: number; goalSnapshot: number | null };
 
 export type ImportEntryInput = { vocabulary: string; meanings: string[]; attributes: Record<string, string>; tagIds: number[] };
 export type ImportResult = { added: number; updated: number; unchanged: number; entries: EntryRow[] };
@@ -234,16 +234,20 @@ export class VocabularyRepository {
     if (goal !== null && (!Number.isSafeInteger(goal) || goal <= 0)) {
       throw new ValidationError("Daily goal must be a positive whole number, or empty for no goal.");
     }
-    this.db.prepare("UPDATE workbooks SET daily_goal = ?, updated_at = ? WHERE id = ?")
-      .run(goal, new Date().toISOString(), workbookId);
+    transaction(this.db, () => {
+      this.db.prepare("UPDATE workbooks SET daily_goal = ?, updated_at = ? WHERE id = ?")
+        .run(goal, new Date().toISOString(), workbookId);
+      this.db.prepare("UPDATE workbook_daily_practice SET goal_snapshot = ? WHERE workbook_id = ? AND practice_day = ?")
+        .run(goal, workbookId, localCalendarDay());
+    });
     return this.requireWorkbook(workbookId);
   }
 
   listDailyPractice(workbookId: number): DailyPracticeRow[] {
     this.requireWorkbook(workbookId);
-    const rows = this.db.prepare("SELECT practice_day, practice_count FROM workbook_daily_practice WHERE workbook_id = ? ORDER BY practice_day")
-      .all(workbookId) as Array<{ practice_day: string; practice_count: number }>;
-    return rows.map((row) => ({ day: row.practice_day, practiceCount: Number(row.practice_count) }));
+    const rows = this.db.prepare("SELECT practice_day, practice_count, goal_snapshot FROM workbook_daily_practice WHERE workbook_id = ? ORDER BY practice_day")
+      .all(workbookId) as Array<{ practice_day: string; practice_count: number; goal_snapshot: number | null }>;
+    return rows.map((row) => ({ day: row.practice_day, practiceCount: Number(row.practice_count), goalSnapshot: row.goal_snapshot == null ? null : Number(row.goal_snapshot) }));
   }
 
   getEntry(entryId: number): EntryRow | null {
@@ -489,9 +493,10 @@ export class VocabularyRepository {
           .run(result.answers.length, errors, completedDay, deadline, entry.id);
       }
       if (results.length > 0) {
-        this.db.prepare(`INSERT INTO workbook_daily_practice (workbook_id, practice_day, practice_count) VALUES (?, ?, ?)
+        const goal = this.requireWorkbook(workbookId).dailyGoal;
+        this.db.prepare(`INSERT INTO workbook_daily_practice (workbook_id, practice_day, practice_count, goal_snapshot) VALUES (?, ?, ?, ?)
           ON CONFLICT (workbook_id, practice_day) DO UPDATE SET practice_count = practice_count + excluded.practice_count`)
-          .run(workbookId, completedDay, results.length);
+          .run(workbookId, completedDay, results.length, goal);
       }
       return results.map((result) => this.requireEntry(result.entryId));
     });

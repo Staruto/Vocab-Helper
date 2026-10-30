@@ -57,7 +57,7 @@ type ParameterizedCommand = "edit" | "delete";
 type LanguagePreset = { code: string; label: string };
 
 const PAGE_SIZE = 20;
-const TITLE = "VocabHelper 3.5.0";
+const TITLE = "VocabHelper 3.6.0";
 const AUXILIARY_TEXT_COLOR = "#8a8a8a"; // light gray
 const GRAY_TIER_COLOR = "#777777"; // medium gray
 const SELECTED_TEXT_COLOR = "#cea8ff";
@@ -1797,7 +1797,7 @@ function PracticeProfileScreen({ workbook, onCancel, onQuit }: { workbook: Workb
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
   const [today, setToday] = useState(() => localCalendarDay());
   const history = useMemo(() => backend.listDailyPractice(workbook.id), [workbook.id, today]);
-  const profile = useMemo(() => buildPracticeProfile(history, workbook.dailyGoal, width, today), [history, workbook.dailyGoal, width, today]);
+  const profile = useMemo(() => buildPracticeProfile(history, width, today), [history, width, today]);
   useEffect(() => {
     const resize = () => setWidth(stdout?.columns ?? 80);
     stdout?.on("resize", resize);
@@ -1811,7 +1811,7 @@ function PracticeProfileScreen({ workbook, onCancel, onQuit }: { workbook: Workb
   const notes = [
     `Current streak: ${profile.streaks.current} days | Longest streak: ${profile.streaks.longest} days`,
     `Current daily goal: ${workbook.dailyGoal ?? "No goal"}${workbook.dailyGoal != null ? " words" : ""}`,
-    `Any practice counts for the streak. Changing the goal recolors history.`,
+    `Any practice counts for the streak.`,
   ];
   return <Box flexDirection="column">
     <Text color="cyan" bold>{centerLine(`Profile - ${workbook.name}`, width)}</Text>
@@ -1826,7 +1826,7 @@ function PracticeProfileScreen({ workbook, onCancel, onQuit }: { workbook: Workb
     <Text>{padLine("", width)}</Text>
     {notes.map((note, index) => <Text key={note} color={index === 2 ? AUXILIARY_TEXT_COLOR : undefined}>{note}</Text>)}
     <Text>{padLine("", width)}</Text>
-    <Text color={AUXILIARY_TEXT_COLOR}>{centerLine("Esc back", width)}</Text>
+    <Text color={AUXILIARY_TEXT_COLOR} italic>{centerLine("Esc return", width)}</Text>
   </Box>;
 }
 

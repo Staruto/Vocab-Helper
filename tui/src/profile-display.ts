@@ -31,18 +31,19 @@ export function practiceStreaks(history: DailyPracticeRow[], today = localCalend
   return { current, longest };
 }
 
-export function buildPracticeProfile(history: DailyPracticeRow[], goal: number | null, width: number, today = localCalendarDay()) {
+export function buildPracticeProfile(history: DailyPracticeRow[], width: number, today = localCalendarDay()) {
   const weekday = (new Date(`${today}T00:00:00.000Z`).getUTCDay() + 6) % 7;
   const currentMonday = addCalendarDays(today, -weekday);
   // Four characters for weekday labels, then two columns per week (no trailing gap).
   const weekCount = Math.min(53, Math.max(1, Math.floor((width - 3) / 2)));
   const startDay = addCalendarDays(currentMonday, -(weekCount - 1) * 7);
-  const counts = new Map(history.map((row) => [row.day, row.practiceCount]));
+  const days = new Map(history.map((row) => [row.day, row]));
   const rows = WEEKDAYS.map((label, dayIndex) => ({
     label,
     cells: Array.from({ length: weekCount }, (_, week): PracticeDayCell => {
       const day = addCalendarDays(startDay, week * 7 + dayIndex);
-      const practiceCount = counts.get(day) ?? 0;
+      const practiceCount = days.get(day)?.practiceCount ?? 0;
+      const goal = days.get(day)?.goalSnapshot ?? null;
       return {
         day, practiceCount,
         symbol: day > today ? " " : practiceCount === 0 ? "·" : "█",
