@@ -8,7 +8,7 @@ import { adjacentEntryId, buildDetailSections, buildReviewFields, detailNavigati
 import { similarWordLines } from "./similar-words.js";
 import { wrapStyledText } from "./styled-text.js";
 import { formatImportPreviewFilter, formatImportPreviewRecord, importPreviewPageSize, ImportPreview, ImportPreviewFilter, loadLabeledTextFile, paginateImportPreview } from "./import.js";
-import { createDetailEditor, detailEditRows, detailEditorKeyAction, detailRowChanged, detailRowValue, saveDetailEditor, updateDetailEditor, DetailEditRow, DetailEditorState } from "./detail-editor.js";
+import { createDetailEditor, DETAIL_EXIT_CHOICES, detailEditRows, detailEditorKeyAction, detailRowChanged, detailRowValue, saveDetailEditor, updateDetailEditor, DetailEditRow, DetailEditorState } from "./detail-editor.js";
 import { CaretInputLine } from "./text-input.js";
 import { filterEntriesForSearch } from "./search.js";
 import { localCalendarDay } from "./calendar.js";
@@ -1700,6 +1700,7 @@ function EntryDetails({ workbook, entry, tagTypes, width, showVocabulary = false
   wrapDetailText(entry.vocabulary, Math.max(1, width - 2)).forEach((text, index) => line(`title-${index}`, <Text color="cyan" bold>{centerLine(text, width)}</Text>));
   blank("title-space");
   if (showVocabulary) {
+    line("vocabulary-heading", <Text color="cyan" bold>{padLine("Vocabulary", width)}</Text>);
     fieldLines("vocabulary", { key: workbook.vocabularyLabel, value: displayedEntry.vocabulary || "—" }, editRows[0]);
     blank("vocabulary-space");
   }
@@ -1756,11 +1757,12 @@ function EntryViewScreen({ workbook, entryId, editing = false, onNavigate, onCan
     if (!current) { if (key.escape) onCancel(); return; }
     const action = detailEditorKeyAction(current.mode, input, key);
     if (action === "confirmChoice") {
-      if (current.exitChoice === 0) {
-        const saved = saveDetailEditor(current, workbook, (draft) => backend.updateEntry(entryId, draft.vocabulary, draft.meanings[0], draft.meanings, draft.attributes, draft.tagIds));
+      const choice = DETAIL_EXIT_CHOICES[current.exitChoice];
+      if (choice.action === "save") {
+        const saved = saveDetailEditor(current, workbook, (draft, options) => backend.updateEntry(entryId, draft.vocabulary, draft.meanings[0], draft.meanings, draft.attributes, draft.tagIds, options));
         replaceEditor(saved);
         if (saved.mode === "view") setEntries((items) => items.map((item) => item.id === saved.original.id ? saved.original : item));
-      } else dispatch({ type: current.exitChoice === 1 ? "discard" : "continue" });
+      } else dispatch({ type: choice.action });
       return;
     }
     if (action) { setBoundaryMessage(""); dispatch(action); return; }
@@ -1780,7 +1782,7 @@ function EntryViewScreen({ workbook, entryId, editing = false, onNavigate, onCan
       <Text color="cyan" bold>{centerLine("Unsaved vocabulary changes", width)}</Text>
       <Text color={AUXILIARY_TEXT_COLOR}>{padLine("Choose what to do with your staged changes.", width)}</Text>
       <Text>{padLine("", width)}</Text>
-      {["Save Changes", "Discard Changes", "Continue Editing"].map((choice, index) => <Text key={choice} color={index === editor.exitChoice ? "black" : "white"} backgroundColor={index === editor.exitChoice ? "white" : undefined}>{padLine(`${index === editor.exitChoice ? ">" : " "} ${choice}`, width)}</Text>)}
+      {DETAIL_EXIT_CHOICES.map((choice, index) => <Text key={choice.label} color={index === editor.exitChoice ? "black" : "white"} backgroundColor={index === editor.exitChoice ? "white" : undefined}>{padLine(`${index === editor.exitChoice ? ">" : " "} ${choice.label}`, width)}</Text>)}
       <Text>{padLine("", width)}</Text>
       <Text color={AUXILIARY_TEXT_COLOR}>{padLine("↑↓ select | Enter confirm | Esc continue editing", width)}</Text>
     </Box>;

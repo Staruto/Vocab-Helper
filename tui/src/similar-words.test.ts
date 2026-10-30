@@ -85,7 +85,7 @@ test("add, edit, and labeled imports preserve the source and share formatted det
     editor = updateDetailEditor(editor, { type: "move", delta: rowIndex }, workbook, []);
     editor = updateDetailEditor(editor, { type: "change", value: `${value} ` }, workbook, []);
     editor = updateDetailEditor(editor, { type: "exit" }, workbook, []);
-    editor = saveDetailEditor(editor, workbook, (draft) => repository.updateEntry(entry.id, draft.vocabulary, draft.meanings[0], draft.meanings, draft.attributes, draft.tagIds));
+    editor = saveDetailEditor(editor, workbook, (draft, options) => repository.updateEntry(entry.id, draft.vocabulary, draft.meanings[0], draft.meanings, draft.attributes, draft.tagIds, options));
     assert.equal(editor.mode, "view");
     const edited = editor.original;
     assert.deepEqual(buildDetailSections(workbook, edited, []).attributes, expected);

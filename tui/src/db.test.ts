@@ -208,8 +208,8 @@ function seedTestRecord(repository: VocabularyRepository, entryId: number): Entr
   return tested;
 }
 
-function saveEntryThrough(repository: VocabularyRepository, mode: "edit" | "import", current: EntryRow, input: ImportEntryInput): EntryRow {
-  if (mode === "edit") return repository.updateEntry(current.id, input.vocabulary, input.meanings[0], input.meanings, input.attributes, input.tagIds);
+function saveEntryThrough(repository: VocabularyRepository, mode: "edit" | "import", current: EntryRow, input: ImportEntryInput, preserveTestData = false): EntryRow {
+  if (mode === "edit") return repository.updateEntry(current.id, input.vocabulary, input.meanings[0], input.meanings, input.attributes, input.tagIds, preserveTestData ? { preserveTestData: true } : undefined);
   const result = repository.importEntries(current.workbookId, [input]);
   assert.equal(result.added, 0);
   assert.equal(result.updated, 1);
@@ -220,44 +220,47 @@ function saveEntryThrough(repository: VocabularyRepository, mode: "edit" | "impo
 for (const mode of ["edit", "import"] as const) {
   const changes = ["primary meaning", "secondary meaning", "optional field", "cleared optional field", "tags", ...(mode === "edit" ? ["vocabulary"] : [])];
   for (const change of changes) {
-    test(`${mode} resets the complete test record when ${change} changes`, () => {
-      const temp = temporaryDatabase();
-      let repository = new VocabularyRepository(temp.path);
-      try {
-        const config = basicWorkbook();
-        config.meaningAttributes.push({ position: 2, label: "Secondary", languageCode: "EN" });
-        const workbook = repository.createConfiguredWorkbook(config);
-        const tag = repository.listTagTypes(workbook.id)[0].tags[0];
-        const current = repository.addEntry(workbook.id, "word", "meaning", ["meaning", "secondary"], { kana: "reading" }, [tag.id]);
-        const unrelated = seedTestRecord(repository, repository.addEntry(workbook.id, "other", "other meaning").id);
-        seedTestRecord(repository, current.id);
-        const input: ImportEntryInput = { vocabulary: current.vocabulary, meanings: [...current.meanings], attributes: { ...current.attributes }, tagIds: [tag.id] };
-        if (change === "vocabulary") input.vocabulary = "renamed";
-        else if (change === "primary meaning") input.meanings[0] = "updated meaning";
-        else if (change === "secondary meaning") input.meanings[1] = "updated secondary";
-        else if (change === "optional field") input.attributes.kana = "updated reading";
-        else if (change === "cleared optional field") delete input.attributes.kana;
-        else input.tagIds = [];
+    for (const preserveTestData of mode === "edit" ? [false, true] : [false]) {
+      test(`${mode} ${preserveTestData ? "preserves" : "resets"} the complete test record when ${change} changes`, () => {
+        const temp = temporaryDatabase();
+        let repository = new VocabularyRepository(temp.path);
+        try {
+          const config = basicWorkbook();
+          config.meaningAttributes.push({ position: 2, label: "Secondary", languageCode: "EN" });
+          const workbook = repository.createConfiguredWorkbook(config);
+          const tag = repository.listTagTypes(workbook.id)[0].tags[0];
+          const current = repository.addEntry(workbook.id, "word", "meaning", ["meaning", "secondary"], { kana: "reading" }, [tag.id]);
+          const unrelated = seedTestRecord(repository, repository.addEntry(workbook.id, "other", "other meaning").id);
+          seedTestRecord(repository, current.id);
+          const statsBefore = repository.getEntryStats(current.id);
+          const historyBefore = repository.listDailyPractice(workbook.id);
+          const input: ImportEntryInput = { vocabulary: current.vocabulary, meanings: [...current.meanings], attributes: { ...current.attributes }, tagIds: [tag.id] };
+          if (change === "vocabulary") input.vocabulary = "renamed";
+          else if (change === "primary meaning") input.meanings[0] = "updated meaning";
+          else if (change === "secondary meaning") input.meanings[1] = "updated secondary";
+          else if (change === "optional field") input.attributes.kana = "updated reading";
+          else if (change === "cleared optional field") delete input.attributes.kana;
+          else input.tagIds = [];
 
-        const saved = saveEntryThrough(repository, mode, current, input);
-        assert.equal(saved.id, current.id);
-        assert.equal(saved.createdAt, current.createdAt);
-        assert.equal(saved.vocabulary, input.vocabulary);
-        assert.deepEqual(saved.meanings, input.meanings);
-        assert.equal(saved.attributes.kana, input.attributes.kana ?? "");
-        assert.deepEqual(saved.tags.map((item) => item.id), input.tagIds);
-        assert.equal(saved.testCount, 0);
-        assert.equal(saved.errorCount, 0);
-        assert.equal(saved.lastTested, null);
-        assert.equal(saved.nextTestDeadline, null);
-        assert.equal(saved.tier, "gray");
-        repository.close();
-        repository = new VocabularyRepository(temp.path);
-        assert.deepEqual(repository.getEntry(saved.id), saved);
-        assert.deepEqual(repository.getEntry(unrelated.id), unrelated);
-        assert.equal(repository.selectPracticeCandidates(workbook.id, 1)[0].id, saved.id);
-      } finally { repository.close(); temp.cleanup(); }
-    });
+          const saved = saveEntryThrough(repository, mode, current, input, preserveTestData);
+          assert.equal(saved.id, current.id);
+          assert.equal(saved.createdAt, current.createdAt);
+          assert.equal(saved.vocabulary, input.vocabulary);
+          assert.deepEqual(saved.meanings, input.meanings);
+          assert.equal(saved.attributes.kana, input.attributes.kana ?? "");
+          assert.deepEqual(saved.tags.map((item) => item.id), input.tagIds);
+          assert.deepEqual(repository.getEntryStats(saved.id), preserveTestData ? statsBefore : {
+            testCount: 0, errorCount: 0, lastTested: null, nextTestDeadline: null, tier: "gray",
+          });
+          assert.deepEqual(repository.listDailyPractice(workbook.id), historyBefore);
+          repository.close();
+          repository = new VocabularyRepository(temp.path);
+          assert.deepEqual(repository.getEntry(saved.id), saved);
+          assert.deepEqual(repository.getEntry(unrelated.id), unrelated);
+          if (!preserveTestData) assert.equal(repository.selectPracticeCandidates(workbook.id, 1)[0].id, saved.id);
+        } finally { repository.close(); temp.cleanup(); }
+      });
+    }
   }
 
   test(`${mode} preserves test records and timestamps for equivalent content`, () => {
@@ -271,7 +274,9 @@ for (const mode of ["edit", "import"] as const) {
       const current = seedTestRecord(repository, repository.addEntry(workbook.id, "word", "meaning", ["meaning"], {}, tagIds).id);
       const input: ImportEntryInput = { vocabulary: " word ", meanings: [" meaning "], attributes: {}, tagIds: [tagIds[1], tagIds[0], tagIds[1]] };
       if (mode === "edit") {
-        assert.deepEqual(repository.updateEntry(current.id, input.vocabulary, input.meanings[0], input.meanings, input.attributes, input.tagIds), current);
+        for (const preserveTestData of [false, true]) {
+          assert.deepEqual(repository.updateEntry(current.id, input.vocabulary, input.meanings[0], input.meanings, input.attributes, input.tagIds, { preserveTestData }), current);
+        }
       } else {
         const result = repository.importEntries(workbook.id, [input]);
         assert.equal(result.updated, 0);
@@ -311,6 +316,26 @@ for (const mode of ["edit", "import"] as const) {
     } finally { repository.close(); temp.cleanup(); }
   });
 }
+
+test("preserving test data rolls back content and assignments when saving fails", () => {
+  const temp = temporaryDatabase();
+  const repository = new VocabularyRepository(temp.path);
+  try {
+    const workbook = repository.createConfiguredWorkbook(basicWorkbook());
+    const tag = repository.listTagTypes(workbook.id)[0].tags[0];
+    const current = seedTestRecord(repository, repository.addEntry(workbook.id, "word", "meaning", ["meaning"], { kana: "reading" }, [tag.id]).id);
+    const historyBefore = repository.listDailyPractice(workbook.id);
+    const db = new DatabaseSync(temp.path);
+    try {
+      db.exec(`CREATE TRIGGER fail_assignment_save BEFORE DELETE ON entry_tags
+        WHEN OLD.entry_id = ${current.id}
+        BEGIN SELECT RAISE(ABORT, 'assignment write failed'); END`);
+    } finally { db.close(); }
+    assert.throws(() => repository.updateEntry(current.id, "changed", "changed meaning", ["changed meaning"], { kana: "changed reading" }, [tag.id], { preserveTestData: true }), /assignment write failed/);
+    assert.deepEqual(repository.getEntry(current.id), current);
+    assert.deepEqual(repository.listDailyPractice(workbook.id), historyBefore);
+  } finally { repository.close(); temp.cleanup(); }
+});
 
 test("workbook updates require confirmation before deleting populated fields", () => {
   const temp = temporaryDatabase();

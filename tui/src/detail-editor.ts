@@ -1,5 +1,12 @@
 import { entryAttributes } from "./attributes.js";
-import type { EntryRow, ImportEntryInput, TagType, WorkbookRow } from "./db.js";
+import type { EntryRow, EntryUpdateOptions, ImportEntryInput, TagType, WorkbookRow } from "./db.js";
+
+export const DETAIL_EXIT_CHOICES = [
+  { label: "Save Changes (Preserve Test Data)", action: "save", preserveTestData: true },
+  { label: "Save Changes (Reset Test Data)", action: "save", preserveTestData: false },
+  { label: "Discard Changes", action: "discard" },
+  { label: "Continue Editing", action: "continue" },
+] as const;
 
 export type DetailEditRow =
   | { id: "vocabulary"; kind: "vocabulary"; label: string }
@@ -83,7 +90,7 @@ export function updateDetailEditor(state: DetailEditorState, action: DetailEdito
   if (action.type === "begin" && state.mode === "view") return createDetailEditor(state.original, true);
   if (action.type === "continue" && state.mode === "confirm") return { ...state, mode: "edit", error: "" };
   if (action.type === "discard" && state.mode === "confirm") return createDetailEditor(state.original);
-  if (action.type === "moveChoice" && state.mode === "confirm") return { ...state, exitChoice: (state.exitChoice + action.delta + 3) % 3 };
+  if (action.type === "moveChoice" && state.mode === "confirm") return { ...state, exitChoice: (state.exitChoice + action.delta + DETAIL_EXIT_CHOICES.length) % DETAIL_EXIT_CHOICES.length };
   if (action.type === "exit" && (state.mode === "edit" || state.mode === "tags")) {
     const staged = state.mode === "tags" ? acceptTags(state, tagTypes) : state;
     return detailHasChanges(staged, workbook, tagTypes) ? { ...staged, mode: "confirm", exitChoice: 0, error: "" } : createDetailEditor(state.original);
@@ -118,8 +125,9 @@ export function updateDetailEditor(state: DetailEditorState, action: DetailEdito
 }
 
 // The only persistence boundary: a draft cannot be written before exit confirmation.
-export function saveDetailEditor(state: DetailEditorState, workbook: WorkbookRow, write: (draft: ImportEntryInput) => EntryRow): DetailEditorState {
-  if (state.mode !== "confirm") return state;
+export function saveDetailEditor(state: DetailEditorState, workbook: WorkbookRow, write: (draft: ImportEntryInput, options: EntryUpdateOptions) => EntryRow): DetailEditorState {
+  const choice = DETAIL_EXIT_CHOICES[state.exitChoice];
+  if (state.mode !== "confirm" || choice?.action !== "save") return state;
   try {
     const vocabulary = state.draft.vocabulary.trim();
     const meanings = state.draft.meanings.map((value) => value.trim());
@@ -127,7 +135,7 @@ export function saveDetailEditor(state: DetailEditorState, workbook: WorkbookRow
     if (!meanings[0]) return { ...state, mode: "edit", selected: 1, error: `${workbook.meaningAttributes[0]?.label ?? "Primary Meaning"} is required.` };
     const attributes = { ...state.draft.attributes };
     for (const field of entryAttributes(workbook.metadataAttributes)) attributes[field.key] = (attributes[field.key] ?? "").trim();
-    return createDetailEditor(write({ vocabulary, meanings, attributes, tagIds: [...state.draft.tagIds] }));
+    return createDetailEditor(write({ vocabulary, meanings, attributes, tagIds: [...state.draft.tagIds] }, { preserveTestData: choice.preserveTestData }));
   } catch (caught) {
     return { ...state, mode: "edit", error: caught instanceof Error ? caught.message : "Could not save vocabulary changes." };
   }

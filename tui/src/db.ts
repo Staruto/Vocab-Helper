@@ -49,6 +49,7 @@ export type PracticeSessionResult = { entryId: number; answers: boolean[] };
 export type DailyPracticeRow = { day: string; practiceCount: number; goalSnapshot: number | null };
 
 export type ImportEntryInput = { vocabulary: string; meanings: string[]; attributes: Record<string, string>; tagIds: number[] };
+export type EntryUpdateOptions = { preserveTestData?: boolean };
 export type ImportResult = { added: number; updated: number; unchanged: number; entries: EntryRow[] };
 export class WorkbookDataLossError extends Error {
   constructor(readonly impact: WorkbookUpdateImpact) {
@@ -324,7 +325,7 @@ export class VocabularyRepository {
       return { added, updated, unchanged, entries: [...new Set(touched)].map((id) => this.getEntry(id)!) };
     });
   }
-  updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[], attributes: Record<string, string> = {}, tagIds: number[] = []): EntryRow {
+  updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[], attributes: Record<string, string> = {}, tagIds: number[] = [], options: EntryUpdateOptions = {}): EntryRow {
     const existing = this.requireEntry(entryId); const workbook = this.requireWorkbook(existing.workbookId);
     const values = this.normalizeEntryMeanings(workbook, meanings?.length ? meanings : [meaning]);
     this.validateEntryAssociations(existing.workbookId, attributes, tagIds);
@@ -335,7 +336,7 @@ export class VocabularyRepository {
       this.db.prepare("UPDATE entries SET vocabulary = ?, updated_at = ? WHERE id = ?").run(normalizedVocabulary, new Date().toISOString(), entryId);
       this.db.prepare("DELETE FROM entry_field_values WHERE entry_id = ?").run(entryId);
       this.saveEntryValues(entryId, existing.workbookId, values, attributes); this.saveEntryTags(entryId, existing.workbookId, tagIds);
-      this.resetEntryStats(entryId);
+      if (!options.preserveTestData) this.resetEntryStats(entryId);
     });
     return this.getEntry(entryId)!;
   }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { VocabularyRepository } from "./db.js";
-import type { EntryRow, TagType, WorkbookRow } from "./db.js";
+import type { EntryRow, EntryUpdateOptions, TagType, WorkbookRow } from "./db.js";
 import { createDetailEditor, detailEditRows, detailEditorKeyAction, detailHasChanges, detailRowChanged, detailRowValue, saveDetailEditor, updateDetailEditor } from "./detail-editor.js";
 import type { DetailEditorAction, DetailEditorState } from "./detail-editor.js";
 
@@ -98,7 +98,12 @@ test("exit confirmation supports continue, discard, and unchanged exits without 
   assert.equal(state.mode, "confirm");
   assert.equal(state.exitChoice, 0);
   state = act(state, { type: "moveChoice", delta: -1 });
-  assert.equal(state.exitChoice, 2);
+  assert.equal(state.exitChoice, 3);
+  assert.equal(saveDetailEditor(state, workbook, write), state);
+  assert.equal(act(state, { type: "moveChoice", delta: 1 }).exitChoice, 0);
+  const discardChoice = act(state, { type: "moveChoice", delta: -1 });
+  assert.equal(discardChoice.exitChoice, 2);
+  assert.equal(saveDetailEditor(discardChoice, workbook, write), discardChoice);
   state = act(state, { type: "continue" });
   assert.equal(state.mode, "edit");
   assert.equal(state.draft.vocabulary, "changed");
@@ -109,26 +114,32 @@ test("exit confirmation supports continue, discard, and unchanged exits without 
   assert.equal(writes, 0);
 });
 
-test("validation and write failures preserve drafts for correction and retry", () => {
-  const fail = () => { throw new Error("Database unavailable"); };
-  let state = act(createDetailEditor(entry, true), { type: "change", value: " " });
-  state = saveDetailEditor(act(state, { type: "exit" }), workbook, fail);
-  assert.equal(state.mode, "edit");
-  assert.equal(state.selected, 0);
-  assert.match(state.error, /Vocabulary is required/);
-  state = act(state, { type: "change", value: "fixed" });
-  state = act(state, { type: "move", delta: 1 });
-  state = act(state, { type: "change", value: "" });
-  state = saveDetailEditor(act(state, { type: "exit" }), workbook, fail);
-  assert.equal(state.selected, 1);
-  assert.match(state.error, /Meaning is required/);
-  state = act(state, { type: "change", value: "restored" });
-  state = saveDetailEditor(act(state, { type: "exit" }), workbook, fail);
-  assert.equal(state.mode, "edit");
-  assert.equal(state.error, "Database unavailable");
-  assert.equal(state.draft.vocabulary, "fixed");
-  assert.equal(state.draft.meanings[0], "restored");
-});
+for (const preserveTestData of [true, false]) {
+  test(`validation and write failures preserve drafts with preserveTestData=${preserveTestData}`, () => {
+    const confirm = (state: DetailEditorState) => {
+      const exiting = act(state, { type: "exit" });
+      return preserveTestData ? exiting : act(exiting, { type: "moveChoice", delta: 1 });
+    };
+    const fail = () => { throw new Error("Database unavailable"); };
+    let state = act(createDetailEditor(entry, true), { type: "change", value: " " });
+    state = saveDetailEditor(confirm(state), workbook, fail);
+    assert.equal(state.mode, "edit");
+    assert.equal(state.selected, 0);
+    assert.match(state.error, /Vocabulary is required/);
+    state = act(state, { type: "change", value: "fixed" });
+    state = act(state, { type: "move", delta: 1 });
+    state = act(state, { type: "change", value: "" });
+    state = saveDetailEditor(confirm(state), workbook, fail);
+    assert.equal(state.selected, 1);
+    assert.match(state.error, /Meaning is required/);
+    state = act(state, { type: "change", value: "restored" });
+    state = saveDetailEditor(confirm(state), workbook, fail);
+    assert.equal(state.mode, "edit");
+    assert.equal(state.error, "Database unavailable");
+    assert.equal(state.draft.vocabulary, "fixed");
+    assert.equal(state.draft.meanings[0], "restored");
+  });
+}
 
 test("keyboard ownership keeps entry navigation out of edit, picker, and confirmation modes", () => {
   assert.deepEqual(detailEditorKeyAction("view", "e", { ctrl: true }), { type: "begin" });
@@ -143,28 +154,37 @@ test("keyboard ownership keeps entry navigation out of edit, picker, and confirm
   }
 });
 
-test("confirmed saving uses the repository and refreshes learning state; discard leaves the database untouched", () => {
-  const repository = new VocabularyRepository(":memory:");
-  try {
-    const workbook = repository.createWorkbook("Editor");
-    const added = repository.addEntry(workbook.id, "word", "meaning");
-    const [original] = repository.completePracticeSession(workbook.id, [{ entryId: added.id, answers: [false, true] }], "2026-10-30");
-    const update = (state: DetailEditorState, action: DetailEditorAction) => updateDetailEditor(state, action, workbook, []);
-    const write = (draft: DetailEditorState["draft"]) => repository.updateEntry(added.id, draft.vocabulary, draft.meanings[0], draft.meanings, draft.attributes, draft.tagIds);
-    let state = update(createDetailEditor(original, true), { type: "change", value: " changed " });
-    assert.deepEqual(repository.getEntry(added.id), original);
-    assert.deepEqual(update(update(state, { type: "exit" }), { type: "discard" }).original, original);
-    state = saveDetailEditor(update(state, { type: "exit" }), workbook, write);
-    assert.equal(state.mode, "view");
-    assert.equal(state.original.vocabulary, "changed");
-    assert.equal(state.original.tier, "gray");
-    assert.equal(state.original.testCount, 0);
-    assert.equal(state.original.lastTested, null);
-    assert.deepEqual(repository.getEntry(added.id), state.original);
-    assert.equal(detailHasChanges(state, workbook, []), false);
-    const [tested] = repository.completePracticeSession(workbook.id, [{ entryId: added.id, answers: [true] }], "2026-10-31");
-    state = update(createDetailEditor(tested, true), { type: "change", value: " changed " });
-    state = saveDetailEditor(update(state, { type: "exit" }), workbook, write);
-    assert.deepEqual(state.original, tested);
-  } finally { repository.close(); }
-});
+for (const preserveTestData of [true, false]) {
+  test(`confirmed saving ${preserveTestData ? "preserves" : "resets"} learning state; discard leaves the database untouched`, () => {
+    const repository = new VocabularyRepository(":memory:");
+    try {
+      const workbook = repository.createWorkbook("Editor");
+      const added = repository.addEntry(workbook.id, "word", "meaning");
+      const [original] = repository.completePracticeSession(workbook.id, [{ entryId: added.id, answers: [false, true] }], "2026-10-30");
+      const update = (state: DetailEditorState, action: DetailEditorAction) => updateDetailEditor(state, action, workbook, []);
+      const write = (draft: DetailEditorState["draft"], options: EntryUpdateOptions) => {
+        assert.equal(options.preserveTestData, preserveTestData);
+        return repository.updateEntry(added.id, draft.vocabulary, draft.meanings[0], draft.meanings, draft.attributes, draft.tagIds, options);
+      };
+      let state = update(createDetailEditor(original, true), { type: "change", value: " changed " });
+      assert.deepEqual(repository.getEntry(added.id), original);
+      assert.deepEqual(update(update(state, { type: "exit" }), { type: "discard" }).original, original);
+      state = update(state, { type: "exit" });
+      if (!preserveTestData) state = update(state, { type: "moveChoice", delta: 1 });
+      state = saveDetailEditor(state, workbook, write);
+      assert.equal(state.mode, "view");
+      assert.equal(state.original.vocabulary, "changed");
+      assert.equal(state.original.tier, preserveTestData ? original.tier : "gray");
+      assert.equal(state.original.testCount, preserveTestData ? original.testCount : 0);
+      assert.equal(state.original.lastTested, preserveTestData ? original.lastTested : null);
+      assert.deepEqual(repository.getEntry(added.id), state.original);
+      assert.equal(detailHasChanges(state, workbook, []), false);
+      const [tested] = repository.completePracticeSession(workbook.id, [{ entryId: added.id, answers: [true] }], "2026-10-31");
+      state = update(createDetailEditor(tested, true), { type: "change", value: " changed " });
+      state = update(state, { type: "exit" });
+      if (!preserveTestData) state = update(state, { type: "moveChoice", delta: 1 });
+      state = saveDetailEditor(state, workbook, write);
+      assert.deepEqual(state.original, tested);
+    } finally { repository.close(); }
+  });
+}

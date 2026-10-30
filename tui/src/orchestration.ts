@@ -1,6 +1,6 @@
 import { entryAttributes } from "./attributes.js";
 import { localCalendarDay } from "./calendar.js";
-import type { PracticeSessionResult, EntryRow, ImportEntryInput, ImportResult, TagType, WorkbookRow } from "./db.js";
+import type { PracticeSessionResult, EntryRow, EntryUpdateOptions, ImportEntryInput, ImportResult, TagType, WorkbookRow } from "./db.js";
 import type { ImportPreview, ImportPreviewFilter, ImportDiagnostic } from "./import.js";
 
 export type { ImportPreview, ImportPreviewFilter, ImportDiagnostic };
@@ -53,7 +53,7 @@ export type OrchestrationState = {
 
 export type OrchestrationCapabilities = {
   reads: { listEntries(workbookId: number): EntryRow[]; getEntry(entryId: number): EntryRow | null; listTagTypes(workbookId: number): TagType[]; getWorkbook(workbookId: number): WorkbookRow | null };
-  writes: { addEntry(workbookId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, tagIds?: number[]): EntryRow; updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, tagIds?: number[]): EntryRow; deleteEntry(entryId: number): void };
+  writes: { addEntry(workbookId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, tagIds?: number[]): EntryRow; updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, tagIds?: number[], options?: EntryUpdateOptions): EntryRow; deleteEntry(entryId: number): void };
   import: { readLabeledTextFile(path: string): Promise<{ path: string; text: string }>; importEntries(workbookId: number, entries: ImportEntryInput[]): ImportResult; readWorkbookImportPath(workbookId: number): string | null; saveWorkbookImportPath(workbookId: number, path: string | null): WorkbookRow };
   practice: { selectPracticeCandidates(workbookId: number, count: number): EntryRow[]; completePracticeSession(workbookId: number, results: PracticeSessionResult[], completedDay: string): EntryRow[] };
 };

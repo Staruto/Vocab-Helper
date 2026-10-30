@@ -27,6 +27,7 @@ test("detail page keyboard flow preserves carets and drafts, owns navigation, an
   const entry = repository.addEntry(workbook.id, "猫", "primary", ["primary", "secondary"], { note_0: "long text ".repeat(25) }, [types[0].tags[0].id, types[1].tags[0].id]);
   repository.addEntry(workbook.id, "second", "next meaning");
   repository.completePracticeSession(workbook.id, [{ entryId: entry.id, answers: [false, true] }], "2026-10-30");
+  const historyBefore = repository.listDailyPractice(workbook.id);
   repository.close();
 
   // Exercise the real app and Ink input/rendering using terminal-shaped pipe streams.
@@ -90,6 +91,10 @@ test("detail page keyboard flow preserves carets and drafts, owns navigation, an
     await key("\r", /Enter id for \/edit/);
     await key(String(entry.id), /\/edit 1/);
     let rendered = await key("\r", /rows.*caret/);
+    assert.match(stripVTControlCharacters(rendered), /\nVocabulary\s*\n>\s+Word:/);
+    const vocabularyHeading = rendered.split("\n").find((line) => stripVTControlCharacters(line).trim() === "Vocabulary")!;
+    assert.match(vocabularyHeading, /\x1b\[1m/);
+    assert.match(vocabularyHeading, /\x1b\[36m/);
     assert.match(stripVTControlCharacters(rendered), /Word:\s+猫/);
     assertSelectedRow(rendered, "Word", true);
     rendered = await key("X", /Word:\s+猫X/);
@@ -104,13 +109,17 @@ test("detail page keyboard flow preserves carets and drafts, owns navigation, an
     await key("Z", /Meaning:\s+primaryZ/);
     await key(up, /Word:\s+猫X/);
     await key("!", /Word:\s+猫X!/); // Revisiting resets the caret to the end.
-    await key("\x1b", /Unsaved vocabulary changes/);
+    rendered = await key("\x1b", /Unsaved vocabulary changes/);
+    assert.match(stripVTControlCharacters(rendered), /> Save Changes \(Preserve Test Data\)/);
+    await key(down, /> Save Changes \(Reset Test Data\)/);
     await key(down, /> Discard Changes/);
     await key(down, /> Continue Editing/);
     await key("\r", /Word:\s+猫X!/);
     await key("\x13", /Unsaved vocabulary changes/);
+    await key(down, /> Save Changes \(Reset Test Data\)/);
     await key(down, /> Discard Changes/);
-    await key("\r", /Ctrl\+E edit/);
+    rendered = await key("\r", /Ctrl\+E edit/);
+    assert.match(stripVTControlCharacters(rendered), /\nVocabulary\s*\nWord:/);
     await key("\x05", /rows.*caret/);
     await key("\x1b", /Ctrl\+E edit/); // An unchanged exit skips confirmation.
     await key("\x1b[C", /Word:\s+second/);
@@ -142,18 +151,31 @@ test("detail page keyboard flow preserves carets and drafts, owns navigation, an
     await key("\r", /No tags configured/);
     await key("\r", /Empty:/);
     await key("\x13", /Unsaved vocabulary changes/);
-    await key("\r", /Ctrl\+E edit/);
+    rendered = await key("\r", /Ctrl\+E edit/);
+    assert.match(stripVTControlCharacters(rendered), /Tests:\s+2/);
+    assert.match(stripVTControlCharacters(rendered), /Errors:\s+1/);
+    assert.match(stripVTControlCharacters(rendered), /Tier:\s+Yellow/);
+    assert.match(stripVTControlCharacters(rendered), /Last tested:\s+2026-10-30/);
+    assert.match(stripVTControlCharacters(rendered), /Next deadline:\s+2026-11-06/);
     assert.doesNotMatch(stripVTControlCharacters(output), /Hidden:/);
+    await key("\x05", /rows.*caret/);
+    await key("?", /Word:\s+猫!\?/);
+    await key("\x13", /Unsaved vocabulary changes/);
+    await key(down, /> Save Changes \(Reset Test Data\)/);
+    rendered = await key("\r", /Ctrl\+E edit/);
+    assert.match(stripVTControlCharacters(rendered), /Tests:\s+0/);
+    assert.match(stripVTControlCharacters(rendered), /Tier:\s+Gray/);
     assert.equal(stderr, "");
     const verify = new VocabularyRepository(path);
     try {
       const saved = verify.getEntry(entry.id)!;
-      assert.equal(saved.vocabulary, "猫!");
+      assert.equal(saved.vocabulary, "猫!?");
       assert.deepEqual(saved.meanings, ["primary", "secondary"]);
       assert.deepEqual(saved.tags.map((tag) => tag.id), [types[0].tags[0].id]);
       assert.equal(saved.testCount, 0);
       assert.equal(saved.tier, "gray");
       assert.equal(verify.listEntries(workbook.id)[1].vocabulary, "second");
+      assert.deepEqual(verify.listDailyPractice(workbook.id), historyBefore);
     } finally { verify.close(); }
   } finally {
     if (child.exitCode === null && child.signalCode === null) {

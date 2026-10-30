@@ -1,4 +1,4 @@
-import { PracticeSessionResult, CreateWorkbookInput, defaultDbPath, EntryRow, ImportEntryInput, ImportResult, MeaningAttribute, MeaningPromotionImpact, MetadataAttribute, TagType, TagUpdateImpact, WorkbookAttributesDraft, WorkbookConfigurationInput, WorkbookRow, WorkbookTagsDraft, WorkbookUpdateImpact, VocabularyRepository } from "./db.js";
+import { PracticeSessionResult, CreateWorkbookInput, defaultDbPath, EntryRow, EntryUpdateOptions, ImportEntryInput, ImportResult, MeaningAttribute, MeaningPromotionImpact, MetadataAttribute, TagType, TagUpdateImpact, WorkbookAttributesDraft, WorkbookConfigurationInput, WorkbookRow, WorkbookTagsDraft, WorkbookUpdateImpact, VocabularyRepository } from "./db.js";
 
 export class VocabularyBackend {
   private readonly repository: VocabularyRepository;
@@ -85,8 +85,8 @@ export class VocabularyBackend {
     return this.repository.importEntries(workbookId, entries);
   }
 
-  updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, tagIds?: number[]): EntryRow {
-    return this.repository.updateEntry(entryId, vocabulary, meaning, meanings, attributes, tagIds);
+  updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, tagIds?: number[], options?: EntryUpdateOptions): EntryRow {
+    return this.repository.updateEntry(entryId, vocabulary, meaning, meanings, attributes, tagIds, options);
   }
 
   deleteEntry(entryId: number): void {

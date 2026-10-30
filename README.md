@@ -35,13 +35,13 @@ npm run start
 
 ## Viewing and editing entries
 
-Use `/view <id>` to open entry details. The vocabulary appears as both the title and the first labeled row. Left/Right opens the previous/next entry; Ctrl+E enters edit mode. `/edit <id>` opens details directly in edit mode; `/edit` prompts for an ID.
+Use `/view <id>` to open entry details. The vocabulary appears as both the title and the first labeled row under a Vocabulary section heading. Left/Right opens the previous/next entry; Ctrl+E enters edit mode. `/edit <id>` opens details directly in edit mode; `/edit` prompts for an ID.
 
 In edit mode, Up/Down selects vocabulary, meaning, optional attribute, or tag-type rows. Review fields are read-only. The selected row starts with `>` and uses the selected text color for both key and value on the normal terminal background. Its text value is immediately editable with a white block caret initially at the end. Left/Right moves the caret instead of changing entries. Changed keys receive a `*`; they use the selected text color while selected and yellow otherwise. Restoring the original value clears the marker. Changes remain staged until saved.
 
 All tag types appear while editing, including hidden types and types with no assignments. Press Enter on a tag-type row to open its checkbox picker: Up/Down selects, Space toggles, Enter stages the selections, and Esc cancels the picker. Ctrl+S stages the current picker selections and requests exit.
 
-Esc or Ctrl+S exits edit mode to view mode. When changes exist, choose **Save Changes**, **Discard Changes**, or **Continue Editing** with Up/Down and Enter; Esc continues editing. Failed saves preserve the draft and display the error. Saving actual changes resets the entry's learning statistics, as described below.
+Esc or Ctrl+S exits edit mode to view mode. When changes exist, choose **Save Changes (Preserve Test Data)**, **Save Changes (Reset Test Data)**, **Discard Changes**, or **Continue Editing** with Up/Down and Enter; Esc continues editing. Failed saves preserve the draft and display the error. The preserve option is selected initially. Preserving keeps Test Count, Error Count, Last Tested, and Next Deadline; resetting clears them and returns the entry to the gray tier. Daily practice totals and history remain unchanged with either option.
 
 ## Language preset attributes
 
@@ -86,7 +86,7 @@ Japanese: 休暇
 English: vacation
 ```
 
-Updating an existing entry through `/edit` or `/import` resets its test count, error count, last-tested time, and next-test deadline, returning it to the gray, untested tier. Changes to vocabulary, meanings, optional fields, or assigned tags trigger the reset. Identical edits and imports preserve the test record.
+Saving through `/edit` lets you preserve test data or reset its test count, error count, last-tested time, and next-test deadline. Resetting returns the entry to the gray, untested tier. Updates through `/import` continue to reset test data. When resetting is chosen, changes to vocabulary, meanings, optional fields, or assigned tags trigger the reset. Identical edits and imports preserve the test record.
 
 ## Practice
 

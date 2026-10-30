@@ -93,7 +93,7 @@ test("add, edit, and import keep sentence braces in storage and produce the same
       editor = updateDetailEditor(editor, { type: "change", value: changed }, workbook, []);
     }
     editor = updateDetailEditor(editor, { type: "exit" }, workbook, []);
-    editor = saveDetailEditor(editor, workbook, (draft) => repository.updateEntry(entry.id, draft.vocabulary, draft.meanings[0], draft.meanings, draft.attributes, draft.tagIds));
+    editor = saveDetailEditor(editor, workbook, (draft, options) => repository.updateEntry(entry.id, draft.vocabulary, draft.meanings[0], draft.meanings, draft.attributes, draft.tagIds, options));
     assert.equal(editor.mode, "view");
     const edited = editor.original;
     for (let index = 1; index <= 5; index++) assert.equal(edited.attributes[`example_sentence_${index}`], changed);
