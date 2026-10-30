@@ -11,7 +11,6 @@ export type UiMode =
   | { kind: "command" }
   | { kind: "commandArg"; command: ParameterizedCommand }
   | { kind: "add"; stage: "vocabulary" | "meaning" | "metadata" | "tags"; vocabulary: string; meanings: string[]; meaningIndex: number; metadata: Record<string, string>; metadataIndex: number; selectedTagIds: number[]; tagIndex: number }
-  | { kind: "edit"; stage: "vocabulary" | "meaning" | "metadata" | "tags"; entryId: number; vocabulary: string; meanings: string[]; meaningIndex: number; metadata: Record<string, string>; metadataIndex: number; selectedTagIds: number[]; tagIndex: number }
   | { kind: "delete"; entryId: number; label: string }
   | { kind: "importPath"; alternate: boolean }
   | { kind: "importLoading"; path: string; alternate: boolean; requestId?: number }
@@ -66,7 +65,6 @@ export type Intent =
   | { type: "searchChanged"; query: string }
   | { type: "pageChanged"; delta: number }
   | { type: "addFieldSubmitted"; value: string }
-  | { type: "editFieldSubmitted"; value: string }
   | { type: "deleteConfirmationSubmitted"; value: string }
   | { type: "tagSelectionToggled"; tagId: number }
   | { type: "tagCursorMoved"; delta: number }
@@ -105,7 +103,6 @@ export type Effect =
   | { type: "commitImport"; workbookId: number; path: string; entries: ImportEntryInput[] }
   | { type: "saveImportPath"; workbookId: number; path: string | null }
   | { type: "addEntry"; workbookId: number; vocabulary: string; meanings: string[]; attributes: Record<string, string>; tagIds: number[] }
-  | { type: "updateEntry"; entryId: number; vocabulary: string; meanings: string[]; attributes: Record<string, string>; tagIds: number[] }
   | { type: "deleteEntry"; entryId: number }
   | { type: "completePracticeSession"; requestId: number; workbookId: number; results: PracticeSessionResult[]; completedDay: string };
 
@@ -121,10 +118,8 @@ export function createInitialState(workbook: WorkbookRow, entries: EntryRow[] = 
   return { workbook, entries, tagTypes, activeSearchQuery: "", pageIndex: 0, commandBuffer: "", inputFocus: "command", statusLines: status("Ready."), mode: { kind: "command" }, importRequestId: 0, practice: { phase: "empty", candidates: [], index: 0, retryRound: [], nextRetryRound: [], retryNumber: 1, currentEntry: null, meaningIndex: 0, detailSourcePhase: "initial", score: 0, feedback: null, requestId: 0, results: [], completedDay: null, error: null } };
 }
 
-function formComplete(state: OrchestrationState, form: Extract<UiMode, { kind: "add" | "edit" }>): Transition {
-  const tags = state.workbook.metadataAttributes.length ? form.selectedTagIds : form.selectedTagIds;
-  const effect: Effect = form.kind === "add" ? { type: "addEntry", workbookId: state.workbook.id, vocabulary: form.vocabulary, meanings: form.meanings, attributes: form.metadata, tagIds: tags } : { type: "updateEntry", entryId: form.entryId, vocabulary: form.vocabulary, meanings: form.meanings, attributes: form.metadata, tagIds: tags };
-  return { state: { ...state, mode: { kind: "command" }, commandBuffer: "", statusLines: status(form.kind === "add" ? "Saving entry..." : "Updating entry...") }, effects: [effect] };
+function formComplete(state: OrchestrationState, form: Extract<UiMode, { kind: "add" }>): Transition {
+  return { state: { ...state, mode: { kind: "command" }, commandBuffer: "", statusLines: status("Saving entry...") }, effects: [{ type: "addEntry", workbookId: state.workbook.id, vocabulary: form.vocabulary, meanings: form.meanings, attributes: form.metadata, tagIds: form.selectedTagIds }] };
 }
 
 function savePracticeSession(state: OrchestrationState): Transition {
@@ -158,19 +153,26 @@ export function update(state: OrchestrationState, intent: Intent): Transition {
     if (lower === "search") return update(state, { type: "searchChanged", query: args.join(" " ) });
     if (lower === "add") return { state: { ...state, mode: { kind: "add", stage: "vocabulary", vocabulary: "", meanings: [], meaningIndex: 0, metadata: {}, metadataIndex: 0, selectedTagIds: [], tagIndex: 0 }, commandBuffer: "", statusLines: status(`Adding a new entry.\nEnter ${state.workbook.vocabularyLabel}.`) }, effects: [] };
     if (lower === "import") { const saved = state.workbook.importFilePath; return saved ? update(state, { type: "importPathLoadRequested", path: saved, alternate: false }) : { state: { ...state, mode: { kind: "importPath", alternate: true }, commandBuffer: "", statusLines: status("Enter the path to a UTF-8 .txt import file.") }, effects: [] }; }
-    if (lower === "edit" || lower === "delete") { const id = Number(args[0]); if (!Number.isInteger(id)) return { state: { ...state, mode: { kind: "commandArg", command: lower }, commandBuffer: `/${lower} `, statusLines: status(`Enter id for /${lower}.`) }, effects: [] }; const entry = state.entries.find((item) => item.id === id); if (!entry) return { state: { ...state, statusLines: status(`Entry #${id} was not found.`) }, effects: [] }; if (lower === "delete") return { state: { ...state, mode: { kind: "delete", entryId: id, label: entryLabel(entry) }, commandBuffer: "", statusLines: status(`Type yes to delete ${entryLabel(entry)}.`) }, effects: [] }; return { state: { ...state, mode: { kind: "edit", stage: "vocabulary", entryId: id, vocabulary: entry.vocabulary, meanings: [...entry.meanings], meaningIndex: 0, metadata: { ...entry.attributes }, metadataIndex: 0, selectedTagIds: entry.tags.map((tag) => tag.id), tagIndex: 0 }, commandBuffer: entry.vocabulary, statusLines: status(`Editing #${id}.\nEdit vocabulary.`) }, effects: [] }; }
+    if (lower === "edit") return { state: { ...state, mode: { kind: "commandArg", command: "edit" }, commandBuffer: "/edit ", statusLines: status("Enter id for /edit.") }, effects: [] };
+    if (lower === "delete") {
+      const id = Number(args[0]);
+      if (!args[0] || !Number.isInteger(id)) return { state: { ...state, mode: { kind: "commandArg", command: "delete" }, commandBuffer: "/delete ", statusLines: status("Enter id for /delete.") }, effects: [] };
+      const entry = state.entries.find((item) => item.id === id);
+      if (!entry) return { state: { ...state, statusLines: status(`Entry #${id} was not found.`) }, effects: [] };
+      return { state: { ...state, mode: { kind: "delete", entryId: id, label: entryLabel(entry) }, commandBuffer: "", statusLines: status(`Type yes to delete ${entryLabel(entry)}.`) }, effects: [] };
+    }
     return { state: { ...state, statusLines: status(command ? `Unknown command: ${command}` : "") }, effects: [] };
   }
-  if (intent.type === "addFieldSubmitted" || intent.type === "editFieldSubmitted") {
-    const mode = state.mode; if (mode.kind !== (intent.type === "addFieldSubmitted" ? "add" : "edit")) return { state, effects: [] }; const text = intent.value.trim();
+  if (intent.type === "addFieldSubmitted") {
+    const mode = state.mode; if (mode.kind !== "add") return { state, effects: [] }; const text = intent.value.trim();
     if (mode.stage === "vocabulary") { if (!text) return { state: { ...state, statusLines: status("Vocabulary is required.") }, effects: [] }; return { state: { ...state, mode: { ...mode, stage: "meaning", vocabulary: text }, commandBuffer: "", statusLines: status(`Enter ${state.workbook.meaningAttributes[0]?.label ?? "Primary Meaning"}.`) }, effects: [] }; }
     if (mode.stage === "meaning") { if (mode.meaningIndex === 0 && !text) return { state: { ...state, statusLines: status("Meaning is required.") }, effects: [] }; const meanings = [...mode.meanings]; meanings[mode.meaningIndex] = text; if (mode.meaningIndex + 1 < state.workbook.meaningAttributes.length) return { state: { ...state, mode: { ...mode, meanings, meaningIndex: mode.meaningIndex + 1 }, commandBuffer: "", statusLines: status(`Enter ${state.workbook.meaningAttributes[mode.meaningIndex + 1].label}. Optional.`) }, effects: [] }; const optional = entryAttributes(state.workbook.metadataAttributes); if (optional.length) return { state: { ...state, mode: { ...mode, meanings, stage: "metadata", metadataIndex: 0 }, commandBuffer: "", statusLines: status(`Enter ${optional[0].label}. Optional.`) }, effects: [] }; if (state.tagTypes.flatMap((type) => type.tags).length) return { state: { ...state, mode: { ...mode, meanings, stage: "tags", tagIndex: 0 }, commandBuffer: "", statusLines: status("Select tags with Space, then press Enter.") }, effects: [] }; return formComplete(state, { ...mode, meanings }); }
     if (mode.stage === "metadata") { const optional = entryAttributes(state.workbook.metadataAttributes); const field = optional[mode.metadataIndex]; const metadata = { ...mode.metadata, ...(field ? { [field.key]: text } : {}) }; if (mode.metadataIndex + 1 < optional.length) return { state: { ...state, mode: { ...mode, metadata, metadataIndex: mode.metadataIndex + 1 }, commandBuffer: "", statusLines: status(`Enter ${optional[mode.metadataIndex + 1].label}. Optional.`) }, effects: [] }; if (state.tagTypes.flatMap((type) => type.tags).length) return { state: { ...state, mode: { ...mode, metadata, stage: "tags", tagIndex: 0 }, commandBuffer: "", statusLines: status("Select tags with Space, then press Enter.") }, effects: [] }; return formComplete(state, { ...mode, metadata }); }
     if (mode.stage === "tags") return formComplete(state, mode);
   }
   if (intent.type === "deleteConfirmationSubmitted") { if (state.mode.kind !== "delete") return { state, effects: [] }; if (intent.value.trim().toLowerCase() !== "yes") return { state: { ...state, mode: { kind: "command" }, commandBuffer: "", statusLines: status("Delete cancelled.") }, effects: [] }; return { state: { ...state, mode: { kind: "command" }, commandBuffer: "", statusLines: status("Deleting entry...") }, effects: [{ type: "deleteEntry", entryId: state.mode.entryId }, { type: "loadEntries", workbookId: state.workbook.id }] }; }
-  if (intent.type === "tagSelectionToggled") { const mode = state.mode; if ((mode.kind !== "add" && mode.kind !== "edit") || mode.stage !== "tags") return { state, effects: [] }; const selectedTagIds = mode.selectedTagIds.includes(intent.tagId) ? mode.selectedTagIds.filter((id) => id !== intent.tagId) : [...mode.selectedTagIds, intent.tagId]; return { state: { ...state, mode: { ...mode, selectedTagIds } }, effects: [] }; }
-  if (intent.type === "tagCursorMoved") { const mode = state.mode; if ((mode.kind !== "add" && mode.kind !== "edit") || mode.stage !== "tags") return { state, effects: [] }; return { state: { ...state, mode: { ...mode, tagIndex: Math.max(0, mode.tagIndex + intent.delta) } }, effects: [] }; }
+  if (intent.type === "tagSelectionToggled") { const mode = state.mode; if (mode.kind !== "add" || mode.stage !== "tags") return { state, effects: [] }; const selectedTagIds = mode.selectedTagIds.includes(intent.tagId) ? mode.selectedTagIds.filter((id) => id !== intent.tagId) : [...mode.selectedTagIds, intent.tagId]; return { state: { ...state, mode: { ...mode, selectedTagIds } }, effects: [] }; }
+  if (intent.type === "tagCursorMoved") { const mode = state.mode; if (mode.kind !== "add" || mode.stage !== "tags") return { state, effects: [] }; return { state: { ...state, mode: { ...mode, tagIndex: Math.max(0, mode.tagIndex + intent.delta) } }, effects: [] }; }
   if (intent.type === "importPathLoadRequested") { const requestId = state.importRequestId + 1; const path = intent.path.trim(); if (!path) return { state: { ...state, statusLines: status("A file path is required.") }, effects: [] }; return { state: { ...state, importRequestId: requestId, mode: { kind: "importLoading", path, alternate: Boolean(intent.alternate), requestId }, statusLines: status("Reading and validating import file...") }, effects: [{ type: "loadImportPreview", workbookId: state.workbook.id, path, requestId }] }; }
   if (intent.type === "importPreviewLoaded") { if (intent.requestId !== state.importRequestId) return { state, effects: [] }; return { state: { ...state, mode: { kind: "importPreview", path: intent.path, pathBuffer: intent.path, preview: intent.preview, pageIndex: 0, filter: "records", focus: "filters" }, statusLines: status("Import preview ready.") }, effects: [] }; }
   if (intent.type === "importLoadFailed") { if (intent.requestId !== state.importRequestId) return { state, effects: [] }; return { state: { ...state, mode: { kind: "importPath", alternate: true }, commandBuffer: intent.path, statusLines: status(`Could not load '${intent.path}': ${intent.error}`), importError: intent.error }, effects: [] }; }

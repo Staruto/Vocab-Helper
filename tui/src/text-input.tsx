@@ -156,11 +156,13 @@ type CaretInputLineProps = {
   prefix?: string;
   width: number;
   color?: string;
+  backgroundColor?: string;
+  prefixColor?: string;
   focus?: boolean;
   inputKey?: string;
 };
 
-export function CaretInputLine({ value, onChange, prefix = "", width, color, focus = true, inputKey = "default" }: CaretInputLineProps): JSX.Element {
+export function CaretInputLine({ value, onChange, prefix = "", width, color, backgroundColor, prefixColor, focus = true, inputKey = "default" }: CaretInputLineProps): JSX.Element {
   const { internal_eventEmitter: inputEvents } = useStdin();
   const [cursor, setCursor] = useState(() => splitGraphemes(value).length);
   const lastEmittedValue = useRef(value);
@@ -203,5 +205,5 @@ export function CaretInputLine({ value, onChange, prefix = "", width, color, foc
   }, [focus, inputEvents, onChange]);
 
   const segments = buildInputSegments(prefix, value, cursor, width);
-  return <Text color={color}>{segments.prefix}{segments.before}{focus ? <Text color="black" backgroundColor="white">{segments.cursorCell}</Text> : segments.cursorCell}{segments.after}{segments.padding}</Text>;
+  return <Text color={color} backgroundColor={backgroundColor}><Text color={prefixColor}>{segments.prefix}</Text>{segments.before}{focus ? <Text color={backgroundColor === "white" ? "white" : "black"} backgroundColor={backgroundColor === "white" ? "black" : "white"}>{segments.cursorCell}</Text> : segments.cursorCell}{segments.after}{segments.padding}</Text>;
 }

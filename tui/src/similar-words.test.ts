@@ -4,6 +4,7 @@ import { parseSimilarWords, similarWordLines } from "./similar-words.js";
 import { VocabularyRepository } from "./db.js";
 import { buildDetailSections } from "./detail-display.js";
 import { parseLabeledTextImport } from "./import.js";
+import { createDetailEditor, detailEditRows, saveDetailEditor, updateDetailEditor } from "./detail-editor.js";
 import { createInitialState, update } from "./orchestration.js";
 
 test("similar words support optional explanations, separators, and punctuation within items", () => {
@@ -78,15 +79,15 @@ test("add, edit, and labeled imports preserve the source and share formatted det
     const entry = repository.addEntry(add.workbookId, add.vocabulary, add.meanings[0], add.meanings, add.attributes, add.tagIds);
     assert.equal(entry.attributes.similar_words, value);
     const expected = buildDetailSections(workbook, entry, []).attributes;
-    state = update(createInitialState(workbook, [entry]), { type: "commandSubmitted", raw: `/edit ${entry.id}` }).state;
-    for (const input of ["nearby", "not far"]) state = update(state, { type: "editFieldSubmitted", value: input }).state;
-    assert.equal(state.mode.kind, "edit");
-    if (state.mode.kind !== "edit") throw new Error("Expected edit form");
-    assert.equal(state.mode.metadata.similar_words, value);
-    const edit = update(state, { type: "editFieldSubmitted", value }).effects[0];
-    assert.equal(edit.type, "updateEntry");
-    if (edit.type !== "updateEntry") throw new Error("Expected edit effect");
-    const edited = repository.updateEntry(edit.entryId, edit.vocabulary, edit.meanings[0], edit.meanings, edit.attributes, edit.tagIds);
+    let editor = createDetailEditor(entry, true);
+    assert.equal(editor.draft.attributes.similar_words, value);
+    const rowIndex = detailEditRows(workbook, []).findIndex((row) => row.kind === "attribute" && row.key === "similar_words");
+    editor = updateDetailEditor(editor, { type: "move", delta: rowIndex }, workbook, []);
+    editor = updateDetailEditor(editor, { type: "change", value: `${value} ` }, workbook, []);
+    editor = updateDetailEditor(editor, { type: "exit" }, workbook, []);
+    editor = saveDetailEditor(editor, workbook, (draft) => repository.updateEntry(entry.id, draft.vocabulary, draft.meanings[0], draft.meanings, draft.attributes, draft.tagIds));
+    assert.equal(editor.mode, "view");
+    const edited = editor.original;
     assert.deepEqual(buildDetailSections(workbook, edited, []).attributes, expected);
     const preview = parseLabeledTextImport(`Word: nearby\nPrimary Meaning: not far\nRelated: ${value}`, workbook, [], [entry.vocabulary]);
     assert.deepEqual(preview.diagnostics.map((item) => item.kind), ["duplicate"]);

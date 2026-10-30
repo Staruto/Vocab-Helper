@@ -4,6 +4,7 @@ import { parseExampleSentence, wrapStyledText } from "./styled-text.js";
 import { VocabularyRepository } from "./db.js";
 import { buildDetailSections } from "./detail-display.js";
 import { parseLabeledTextImport } from "./import.js";
+import { createDetailEditor, detailEditRows, saveDetailEditor, updateDetailEditor } from "./detail-editor.js";
 import { createInitialState, update } from "./orchestration.js";
 
 test("sentence highlighting preserves surrounding text, whitespace, and adjacent pairs", () => {
@@ -83,16 +84,18 @@ test("add, edit, and import keep sentence braces in storage and produce the same
     if (add.type !== "addEntry") throw new Error("Expected add effect");
     const entry = repository.addEntry(add.workbookId, add.vocabulary, add.meanings[0], add.meanings, add.attributes, add.tagIds);
     for (let index = 1; index <= 5; index++) assert.equal(entry.attributes[`example_sentence_${index}`], original);
-    state = update(createInitialState(workbook, [entry]), { type: "commandSubmitted", raw: `/edit ${entry.id}` }).state;
-    assert.equal(state.mode.kind, "edit");
-    if (state.mode.kind !== "edit") throw new Error("Expected edit form");
-    assert.equal(state.mode.metadata.example_sentence_1, original);
+    let editor = createDetailEditor(entry, true);
+    assert.equal(editor.draft.attributes.example_sentence_1, original);
     const changed = "She lives {nearby}, {too}.";
-    for (const value of ["near", "not far", ...Array(4).fill(changed)]) state = update(state, { type: "editFieldSubmitted", value }).state;
-    const edit = update(state, { type: "editFieldSubmitted", value: changed }).effects[0];
-    assert.equal(edit.type, "updateEntry");
-    if (edit.type !== "updateEntry") throw new Error("Expected edit effect");
-    const edited = repository.updateEntry(edit.entryId, edit.vocabulary, edit.meanings[0], edit.meanings, edit.attributes, edit.tagIds);
+    for (const [index, row] of detailEditRows(workbook, []).entries()) {
+      if (row.kind !== "attribute") continue;
+      editor = updateDetailEditor(editor, { type: "move", delta: index - editor.selected }, workbook, []);
+      editor = updateDetailEditor(editor, { type: "change", value: changed }, workbook, []);
+    }
+    editor = updateDetailEditor(editor, { type: "exit" }, workbook, []);
+    editor = saveDetailEditor(editor, workbook, (draft) => repository.updateEntry(entry.id, draft.vocabulary, draft.meanings[0], draft.meanings, draft.attributes, draft.tagIds));
+    assert.equal(editor.mode, "view");
+    const edited = editor.original;
     for (let index = 1; index <= 5; index++) assert.equal(edited.attributes[`example_sentence_${index}`], changed);
     const expected = buildDetailSections(workbook, edited, []).attributes;
     assert.ok(expected.every((field) => field.spans?.some((span) => span.highlight)));

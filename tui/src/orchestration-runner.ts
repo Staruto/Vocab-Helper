@@ -42,10 +42,6 @@ export async function executeEffect(effect: Effect, state: OrchestrationState, c
       const entry = capabilities.writes.addEntry(effect.workbookId, effect.vocabulary, effect.meanings[0] ?? "", effect.meanings, effect.attributes, effect.tagIds);
       return { type: "entriesLoaded", entries: [...state.entries, entry], message: `Added #${entry.id}.` };
     }
-    case "updateEntry": {
-      const entry = capabilities.writes.updateEntry(effect.entryId, effect.vocabulary, effect.meanings[0] ?? "", effect.meanings, effect.attributes, effect.tagIds);
-      return { type: "entriesLoaded", entries: state.entries.map((item) => item.id === entry.id ? entry : item), message: `Updated #${entry.id}.` };
-    }
     case "deleteEntry":
       capabilities.writes.deleteEntry(effect.entryId);
       return { type: "entriesLoaded", entries: state.entries.filter((entry) => entry.id !== effect.entryId), message: "Entry deleted." };

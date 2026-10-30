@@ -33,6 +33,16 @@ npm run build
 npm run start
 ```
 
+## Viewing and editing entries
+
+Use `/view <id>` to open entry details. The vocabulary appears as both the title and the first labeled row. Left/Right opens the previous/next entry; Ctrl+E enters edit mode. `/edit <id>` opens details directly in edit mode; `/edit` prompts for an ID.
+
+In edit mode, Up/Down selects vocabulary, meaning, optional attribute, or tag-type rows. Review fields are read-only. The selected row has a white background, and its text value is immediately editable with the caret initially at the end. Left/Right moves the caret instead of changing entries. Changed keys receive a yellow `*`; restoring the original value clears it. Changes remain staged until saved.
+
+All tag types appear while editing, including hidden types and types with no assignments. Press Enter on a tag-type row to open its checkbox picker: Up/Down selects, Space toggles, Enter stages the selections, and Esc cancels the picker. Ctrl+S stages the current picker selections and requests exit.
+
+Esc or Ctrl+S exits edit mode to view mode. When changes exist, choose **Save Changes**, **Discard Changes**, or **Continue Editing** with Up/Down and Enter; Esc continues editing. Failed saves preserve the draft and display the error. Saving actual changes resets the entry's learning statistics, as described below.
+
 ## Language preset attributes
 
 Japanese, English, German, Chinese, Korean, Spanish, and French workbooks automatically include Example Sentence 1–5, Common Collocations, and Similar Words. Japanese also includes 読み方 (kana). All preset fields start active and hidden from list columns.
