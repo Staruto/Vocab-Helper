@@ -1679,20 +1679,20 @@ function EntryDetails({ workbook, entry, tagTypes, width, showVocabulary = false
   const fields = [...sections.meanings, ...sections.attributes, ...statusFields];
   const labels = [...fields.map((field) => field.key), ...(showVocabulary ? [workbook.vocabularyLabel] : []), ...(editor ? tagTypes.map((type) => type.name) : [])];
   const reviewKeyWidth = Math.max(...statusFields.map((field) => displayWidth(`${field.key}:`)));
-  const keyWidth = Math.min(Math.max(12, ...labels.map((label) => displayWidth(`${editor ? "*" : ""}${label}:`))), Math.max(1, Math.min(width - 2, Math.max(reviewKeyWidth, Math.floor(width * 0.4)))));
+  const keyWidth = Math.min(Math.max(12, ...labels.map((label) => displayWidth(`${editor ? "> *" : ""}${label}:`))), Math.max(1, Math.min(width - 2, Math.max(reviewKeyWidth, Math.floor(width * 0.4)))));
   const lines: Array<{ id: string; element: JSX.Element; selected?: boolean }> = [];
   function line(id: string, element: JSX.Element, selected = false): void { lines.push({ id, element, selected }); }
   function blank(id: string): void { line(id, <Text>{padLine("", width)}</Text>); }
   function heading(id: string, label: string): void { blank(`${id}-space`); line(id, <Text color="cyan" bold>{padLine(label, width)}</Text>); }
   function fieldLines(id: string, field: DetailField, row?: DetailEditRow, valueColor = "white"): void {
     const changed = Boolean(editor && row && detailRowChanged(editor, row, tagTypes));
-    const keyColor = changed ? YELLOW_TIER_COLOR : AUXILIARY_TEXT_COLOR;
-    const label = `${editor && row ? changed ? "*" : " " : ""}${field.key}`;
     const selected = Boolean(editor && row && row.id === selectedRow?.id);
+    const keyColor = selected ? SELECTED_TEXT_COLOR : changed ? YELLOW_TIER_COLOR : AUXILIARY_TEXT_COLOR;
+    const label = `${editor && row ? `${selected ? "> " : "  "}${changed ? "*" : " "}` : ""}${field.key}`;
     if (selected && row && row.kind !== "tags" && editor && onChange) {
-      line(id, <CaretInputLine prefix={`${padLine(`${label}:`, keyWidth)} `} value={detailRowValue(editor, row)} onChange={onChange} width={width} color="black" backgroundColor="white" prefixColor={changed ? YELLOW_TIER_COLOR : "black"} inputKey={`${entry.id}-${row.id}`} />, true);
+      line(id, <CaretInputLine prefix={`${padLine(`${label}:`, keyWidth)} `} value={detailRowValue(editor, row)} onChange={onChange} width={width} color={SELECTED_TEXT_COLOR} prefixColor={SELECTED_TEXT_COLOR} inputKey={`${entry.id}-${row.id}`} />, true);
     } else if (selected) {
-      line(id, <Text color="black" backgroundColor="white"><Text color={changed ? YELLOW_TIER_COLOR : "black"}>{padLine(`${label}:`, keyWidth)}</Text>{" "}{padLine(truncate(field.value, Math.max(1, width - keyWidth - 1)), Math.max(1, width - keyWidth - 1))}</Text>, true);
+      line(id, <Text color={SELECTED_TEXT_COLOR}>{padLine(`${label}:`, keyWidth)}{" "}{padLine(truncate(field.value, Math.max(1, width - keyWidth - 1)), Math.max(1, width - keyWidth - 1))}</Text>, true);
     } else {
       detailFieldLines({ ...field, key: label }, width, keyWidth, valueColor, keyColor).forEach((element, index) => line(`${id}-${index}`, element));
     }

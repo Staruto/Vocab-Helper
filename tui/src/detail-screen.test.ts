@@ -68,6 +68,20 @@ test("detail page keyboard flow preserves carets and drafts, owns navigation, an
   const key = async (input: string, expected: RegExp): Promise<string> => {
     output = ""; stdin.write(input); return frame(expected);
   };
+  function attributeLine(rendered: string, label: string): string {
+    const line = rendered.split("\n").find((line) => stripVTControlCharacters(line).includes(`${label}:`));
+    assert.ok(line, `Missing attribute row ${label}`);
+    return line;
+  }
+  function assertSelectedRow(rendered: string, label: string, editable: boolean): void {
+    const line = attributeLine(rendered, label);
+    assert.match(stripVTControlCharacters(line), /^> /);
+    assert.match(line, /38;2;206;168;255m/);
+    assert.doesNotMatch(line, /38;2;229;198;95m/);
+    assert.doesNotMatch(line, /\x1b\[40m/);
+    // A text row has only the standard white block caret; tag rows have no background.
+    assert.equal((line.match(/\x1b\[47m/g) ?? []).length, editable ? 1 : 0);
+  }
   const down = "\x1b[B"; const up = "\x1b[A";
   try {
     await frame(/Selected: Detail keyboard test/);
@@ -77,12 +91,16 @@ test("detail page keyboard flow preserves carets and drafts, owns navigation, an
     await key(String(entry.id), /\/edit 1/);
     let rendered = await key("\r", /rows.*caret/);
     assert.match(stripVTControlCharacters(rendered), /Word:\s+猫/);
-    assert.match(rendered, /\x1b\[47m/);
+    assertSelectedRow(rendered, "Word", true);
     rendered = await key("X", /Word:\s+猫X/);
-    assert.match(rendered, /38;2;229;198;95m/);
-    assert.match(rendered, /\x1b\[40m/); // Caret contrasts against the selected white row.
+    assertSelectedRow(rendered, "Word", true);
+    assert.match(stripVTControlCharacters(attributeLine(rendered, "Word")), /^> \*Word:/);
     await key("\x1b[D", /rows.*caret/);
-    await key(down, /Meaning:\s+primary/);
+    rendered = await key(down, /Meaning:\s+primary/);
+    assertSelectedRow(rendered, "Meaning", true);
+    assert.match(attributeLine(rendered, "Word"), /38;2;229;198;95m/);
+    assert.match(stripVTControlCharacters(attributeLine(rendered, "Word")), /^  \*Word:/);
+    assert.equal(stripVTControlCharacters(attributeLine(rendered, "Word")).indexOf("猫"), stripVTControlCharacters(attributeLine(rendered, "Meaning")).indexOf("primary"));
     await key("Z", /Meaning:\s+primaryZ/);
     await key(up, /Word:\s+猫X/);
     await key("!", /Word:\s+猫X!/); // Revisiting resets the caret to the end.
@@ -108,7 +126,7 @@ test("detail page keyboard flow preserves carets and drafts, owns navigation, an
     assert.match(stripVTControlCharacters(rendered), /Empty:/);
     output = ""; child.send({ width: 34, height: 12 });
     rendered = await frame(/Hidden:/);
-    assert.match(rendered, /\x1b\[47m/);
+    assertSelectedRow(rendered, "Hidden", false);
     assert.ok(stripVTControlCharacters(rendered).split("\n").length <= 13);
     await key("\r", /Select tags/);
     await key(" ", /\[ \] secret/);
@@ -116,8 +134,11 @@ test("detail page keyboard flow preserves carets and drafts, owns navigation, an
     await key("\r", /Select tags/);
     await key(" ", /\[ \] secret/);
     await key("\x13", /Unsaved vocabulary changes/); // Pending picker selection participates in exit.
-    await key("\x1b", /\*Hidden:/);
-    await key(down, /Empty:/);
+    rendered = await key("\x1b", /\*Hidden:/);
+    assertSelectedRow(rendered, "Hidden", false);
+    rendered = await key(down, /Empty:/);
+    assertSelectedRow(rendered, "Empty", false);
+    assert.match(attributeLine(rendered, "Hidden"), /38;2;229;198;95m/);
     await key("\r", /No tags configured/);
     await key("\r", /Empty:/);
     await key("\x13", /Unsaved vocabulary changes/);
