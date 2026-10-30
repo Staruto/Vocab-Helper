@@ -37,7 +37,7 @@ npm run start
 
 Japanese, English, German, Chinese, Korean, Spanish, and French workbooks automatically include Example Sentence 1–5, Common Collocations, and Similar Words. Japanese also includes 読み方 (kana). All preset fields start active and hidden from list columns.
 
-During creation, choose which exclusive attributes are active. Later, open `/setting` → **Attributes** → **Language Preset Attributes**, between Meanings and Optional Attributes. Use Up/Down to select, **T** to toggle activation, **Space** to toggle list visibility, and **Ctrl+R** to rename. The selected field uses the selected color; other fields are white. Labels show active/inactive status. While renaming, T types normally. Preset fields cannot be added or removed. Settings changes use the existing save/discard prompt.
+During creation, choose which exclusive attributes are active. Later, open `/setting` → **Attributes** → **Language Preset Attributes**, between Meanings and Optional Attributes. Use Up/Down to select, **T** to toggle activation, **Space** to toggle list visibility, and **Ctrl+R** to rename. The selected field uses the selected color; other fields are white. Inactive preset names are crossed out; visibility labels remain separate. While renaming, T types normally. Preset fields cannot be added or removed. Settings changes use the existing save/discard prompt.
 
 Inactive fields are omitted from entry prompts, details, list columns, search, and import destinations. Their stored values and visibility preferences survive edits and imports and become available again when reactivated. Active fields still follow their separate visibility setting for list columns and search.
 

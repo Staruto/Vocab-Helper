@@ -58,8 +58,8 @@ type LanguagePreset = { code: string; label: string };
 
 const PAGE_SIZE = 20;
 const TITLE = "VocabHelper 3.5.0";
-const AUXILIARY_TEXT_COLOR = "#878787";
-const GRAY_TIER_COLOR = "#777777";
+const AUXILIARY_TEXT_COLOR = "#8a8a8a"; // light gray
+const GRAY_TIER_COLOR = "#777777"; // medium gray
 const SELECTED_TEXT_COLOR = "#cea8ff";
 const TAG_BADGE_COLOR = "#5fd7d7";
 const YELLOW_TIER_COLOR = "#e5c65f";
@@ -197,6 +197,12 @@ function truncate(text: string, width: number): string {
 function padLine(text: string, width: number): string {
   const clipped = truncate(text, width);
   return `${clipped}${" ".repeat(Math.max(0, width - displayWidth(clipped)))}`;
+}
+
+function AttributeRowText({ text, inactiveLabel }: { text: string; inactiveLabel?: string }): JSX.Element {
+  if (inactiveLabel === undefined) return <>{text}</>;
+  const labelEnd = Math.min(text.length, 2 + inactiveLabel.length);
+  return <>{text.slice(0, 2)}<Text strikethrough dimColor>{text.slice(2, labelEnd)}</Text>{text.slice(labelEnd)}</>;
 }
 
 function centerLine(text: string, width: number): string {
@@ -1148,7 +1154,7 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
     {stage === "name" ? <CaretInputLine key="workbook-name" prefix="Workbook name: " value={name} onChange={(value) => { setName(value); setError(""); }} width={width} inputKey="workbook-name" /> : null}
     {stage === "type" ? existingWorkbook ? <Text color={SELECTED_TEXT_COLOR}>{padLine(selectedType.label, width)}</Text> : VOCABULARY_TYPES.map((item, index) => <Text key={item.label} color={index === typeIndex ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${index === typeIndex ? ">" : " "} ${item.label}`, width)}</Text>) : null}
     {stage === "label" ? <CaretInputLine key="vocabulary-label" prefix="Vocabulary label: " value={vocabularyLabel} onChange={(value) => { setVocabularyLabel(value); setError(""); }} width={width} inputKey="vocabulary-label" /> : null}
-    {stage === "preset" ? <>{presetAttributes.map((field, index) => <Text key={field.key} color={index === selected ? SELECTED_TEXT_COLOR : "white"}>{padLine(`${index === selected ? ">" : " "} ${field.label} [${isActiveAttribute(field) ? "active" : "inactive"}] [${field.visible ? "shown" : "hidden"}]`, width)}</Text>)}{editAction === "rename" ? <CaretInputLine prefix="Rename: " value={editBuffer} onChange={setEditBuffer} width={width} inputKey={`preset-rename-${selected}`} /> : null}</> : null}
+    {stage === "preset" ? <>{presetAttributes.map((field, index) => <Text key={field.key} color={index === selected ? SELECTED_TEXT_COLOR : "white"}><AttributeRowText text={padLine(`${index === selected ? ">" : " "} ${field.label} [${field.visible ? "shown" : "hidden"}]`, width)} inactiveLabel={isActiveAttribute(field) ? undefined : field.label} /></Text>)}{editAction === "rename" ? <CaretInputLine prefix="Rename: " value={editBuffer} onChange={setEditBuffer} width={width} inputKey={`preset-rename-${selected}`} /> : null}</> : null}
     {stage === "pos" ? <><Text color={addPosType ? "green" : AUXILIARY_TEXT_COLOR}>{padLine(`Add Part of Speech: ${addPosType ? "Yes" : "No"}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine((presetDefinition?.partOfSpeechTags ?? []).length ? `Preset tags: ${(presetDefinition?.partOfSpeechTags ?? []).join(", ")}` : "No preset tags are currently defined for this language.", width)}</Text></> : null}
     {stage === "meaning-count" ? <Text>{padLine(`Meaning attributes: ${meaningCount}`, width)}</Text> : null}
     {stage === "meaning" ? <><CaretInputLine key={`meaning-${meaningIndex}`} prefix={`Meaning ${meaningIndex + 1}/${meaningCount}: `} value={meanings[meaningIndex]?.label ?? ""} onChange={(value) => { setMeaningPalette(null); setMeanings((items) => items.map((item, index) => index === meaningIndex ? { ...item, label: value, languageCode: null } : item)); setError(""); }} width={width} inputKey={`meaning-${meaningIndex}`} />{meaningPalette !== null ? LANGUAGE_PRESETS.map((item, index) => <Text key={item.code} color={index === meaningPalette ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{padLine(`${index === meaningPalette ? ">" : " "} ${item.label} (${item.code})`, width)}</Text>) : null}</> : null}
@@ -1482,11 +1488,11 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
 
   const meaningFooter = meanings[0] === selectedField ? "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Esc leave" : `↑↓ navigate | Ctrl+A add | Ctrl+R rename${selectedField?.id === undefined ? "" : " | Ctrl+P make primary"} | Space show/hide | Del remove | Esc leave`;
   const footer = editAction !== "none" ? "Enter confirm | Esc cancel edit" : selected.section === "vocabulary" ? "↑↓ navigate | Ctrl+R rename | Esc leave" : selected.section === "meaning" ? meaningFooter : selected.section === "preset" ? "↑↓ select | T active/inactive | Ctrl+R rename | Space show/hide | Esc leave" : "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Space show/hide | Del remove | Esc leave";
-  const lines: Array<{ text: string; color?: string; borderColor?: string; bold?: boolean; selected?: boolean }> = [];
+  const lines: Array<{ text: string; color?: string; borderColor?: string; bold?: boolean; selected?: boolean; inactiveLabel?: string }> = [];
   function group(section: AttributeSection, title: string, description: string, members: Array<{ field: MetadataAttribute; index: number }>): void {
     const borderColor = selected.section === section ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR;
     const innerWidth = Math.max(1, width - 4);
-    const line = (text: string, color?: string, bold?: boolean, focused = false) => lines.push({ text: padLine(text, innerWidth), color, borderColor, bold, selected: focused });
+    const line = (text: string, color?: string, bold?: boolean, focused = false, inactiveLabel?: string) => lines.push({ text: padLine(text, innerWidth), color, borderColor, bold, selected: focused, inactiveLabel });
     lines.push({ text: `┌${"─".repeat(Math.max(1, width - 2))}┐`, color: borderColor });
     line(title, borderColor, true);
     line(description, AUXILIARY_TEXT_COLOR);
@@ -1494,9 +1500,8 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
     else if (!members.length) line(`${selected.section === section ? ">" : " "} No optional attributes`, AUXILIARY_TEXT_COLOR, false, selected.section === section);
     else for (const { field, index } of members) {
       const focused = selected.fieldIndex === index;
-      const activation = field.presetKey ? ` [${isActiveAttribute(field) ? "active" : "inactive"}]` : "";
       const color = focused ? SELECTED_TEXT_COLOR : "white";
-      line(`${focused ? ">" : " "} ${field.label}${activation} [${field.visible ? "shown" : "hidden"}]${meanings[0] === field ? " (primary, required)" : ""}`, color, false, focused);
+      line(`${focused ? ">" : " "} ${field.label} [${field.visible ? "shown" : "hidden"}]${meanings[0] === field ? " (primary, required)" : ""}`, color, false, focused, isActiveAttribute(field) ? undefined : field.label);
     }
     lines.push({ text: `└${"─".repeat(Math.max(1, width - 2))}┘`, color: borderColor });
   }
@@ -1509,7 +1514,7 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
   const focusedLine = Math.max(0, lines.findIndex((line) => line.selected));
   const firstLine = Math.max(0, Math.min(lines.length - viewportSize, focusedLine - Math.floor(viewportSize / 2)));
   return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Attributes - ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Configure field names, activation, and visibility. Changes are staged.", width)}</Text><Text color={message ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text>
-    {lines.slice(firstLine, firstLine + viewportSize).map((line, index) => <Text key={firstLine + index} color={line.borderColor ?? line.color}>{line.borderColor ? <>{"│ "}<Text color={line.color} bold={line.bold}>{line.text}</Text>{" │"}</> : line.text}</Text>)}
+    {lines.slice(firstLine, firstLine + viewportSize).map((line, index) => <Text key={firstLine + index} color={line.borderColor ?? line.color}>{line.borderColor ? <>{"│ "}<Text color={line.color} bold={line.bold}><AttributeRowText text={line.text} inactiveLabel={line.inactiveLabel} /></Text>{" │"}</> : line.text}</Text>)}
     {editAction !== "none" ? <CaretInputLine key={`${editAction}-${selectedIndex}`} prefix={`${editAction === "add" ? "New attribute" : "Display name"}: `} value={buffer} onChange={(value) => { setBuffer(value); setMessage(""); }} width={width} color="cyan" inputKey={`${editAction}-${selectedIndex}`} /> : null}
     <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`${firstLine > 0 ? "↑ more above" : ""}${firstLine + viewportSize < lines.length ? "  ↓ more below" : ""}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footer, width)}</Text></Box>;
 }
