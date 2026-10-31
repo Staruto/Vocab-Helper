@@ -816,7 +816,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
             return <Box key={type.id} flexDirection="column" borderStyle="single" borderColor={active ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}>
               <Text bold color={active ? SELECTED_TEXT_COLOR : undefined}>{type.name}</Text>
               {type.tags.map((tag) => <Text key={tag.id} color={selectedTag?.id === tag.id ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>
-                {`${selectedTag?.id === tag.id ? ">" : " "} [${mode.selectedTagIds.includes(tag.id) ? "x" : " "}] ${tag.name}`}
+                {`${selectedTag?.id === tag.id ? ">" : " "} [${mode.selectedTagIds.includes(tag.id) ? "●" : " "}] ${tag.name}`}
               </Text>)}
             </Box>;
           })}
@@ -1320,7 +1320,7 @@ function AppearanceSettingsScreen({ onCancel, onQuit }: { onCancel: () => void; 
   const { stdout } = useStdout(); const [width, setWidth] = useState(() => stdout?.columns ?? 80); const [enabled, setEnabled] = useState(() => backend.getTierColorsEnabled());
   useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => { stdout.off("resize", f); }; }, [stdout]);
   useInput((input, key) => { if (key.ctrl && input === "c") onQuit(); else if (key.escape) onCancel(); else if (input === " ") { const next = !enabled; backend.setTierColorsEnabled(next); setEnabled(next); } });
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Appearance", width)}</Text><Text>{padLine("", width)}</Text><Text color={enabled ? "green" : AUXILIARY_TEXT_COLOR}>{padLine(`[${enabled ? "x" : " "}] Tier colors`, width)}</Text><Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Space toggles | Esc back", width)}</Text></Box>;
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Appearance", width)}</Text><Text>{padLine("", width)}</Text><Text color={enabled ? "green" : AUXILIARY_TEXT_COLOR}>{padLine(`[${enabled ? "●" : " "}] Tier colors`, width)}</Text><Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Space toggles | Esc back", width)}</Text></Box>;
 }
 
 type AttributeSection = "vocabulary" | "meaning" | "preset" | "optional";
@@ -1796,15 +1796,15 @@ function EntryViewScreen({ workbook, entryId, editing = false, onNavigate, onCan
       <Text color="cyan" bold>{centerLine(`${entry.vocabulary} — ${type.name}`, width)}</Text>
       <Text color={AUXILIARY_TEXT_COLOR}>{padLine("Select tags. Changes remain staged until saved.", width)}</Text>
       <Text>{padLine("", width)}</Text>
-      {type.tags.length ? type.tags.slice(first, first + viewport).map((tag, index) => <Text key={tag.id} color={first + index === picker.cursor ? "black" : AUXILIARY_TEXT_COLOR} backgroundColor={first + index === picker.cursor ? "white" : undefined}>{padLine(`${first + index === picker.cursor ? ">" : " "} [${picker.tagIds.includes(tag.id) ? "x" : " "}] ${tag.name}`, width)}</Text>) : <Text color={AUXILIARY_TEXT_COLOR}>{padLine("No tags configured for this type.", width)}</Text>}
+      {type.tags.length ? type.tags.slice(first, first + viewport).map((tag, index) => <Text key={tag.id} color={first + index === picker.cursor ? "black" : "white"} backgroundColor={first + index === picker.cursor ? "white" : undefined}>{padLine(`${first + index === picker.cursor ? ">" : " "} [${picker.tagIds.includes(tag.id) ? "●" : " "}] ${tag.name}`, width)}</Text>) : <Text color={AUXILIARY_TEXT_COLOR}>{padLine("No tags configured for this type.", width)}</Text>}
       <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`${first > 0 ? "↑ more above" : ""}${first + viewport < type.tags.length ? "  ↓ more below" : ""}`, width)}</Text>
-      <Text color={AUXILIARY_TEXT_COLOR}>{padLine("↑↓ select | Space toggle | Enter stage | Esc cancel | Ctrl+S exit", width)}</Text>
+      <Text color={AUXILIARY_TEXT_COLOR} italic>{padLine("↑↓ select | Space toggle | Enter stage | Esc cancel | Ctrl+S exit", width)}</Text>
     </Box>;
   }
   if (editor.mode === "edit") return <Box flexDirection="column">
     <EntryDetails workbook={workbook} entry={entry} tagTypes={tagTypes} width={width} showVocabulary editor={editor} onChange={(value) => dispatch({ type: "change", value })} viewportHeight={Math.max(1, height - 4)} />
     <Text color="red">{padLine(editor.error, width)}</Text>
-    <Text color={AUXILIARY_TEXT_COLOR}>{padLine("↑↓ rows | ←→ caret | Enter edit tags | Esc / Ctrl+S exit", width)}</Text>
+    <Text color={AUXILIARY_TEXT_COLOR} italic>{padLine("↑↓ rows | Enter edit tags | Esc / Ctrl+S exit", width)}</Text>
   </Box>;
   const currentIndex = entries.findIndex((item) => item.id === entry.id);
   const previousEntry = currentIndex > 0 ? entries[currentIndex - 1] : null;
@@ -1815,7 +1815,7 @@ function EntryViewScreen({ workbook, entryId, editing = false, onNavigate, onCan
   return <Box flexDirection="column">
     <EntryDetails workbook={workbook} entry={entry} tagTypes={tagTypes} width={width} showVocabulary />
     {boundaryMessage ? <Text color={AUXILIARY_TEXT_COLOR}>{padLine(boundaryMessage, width)}</Text> : null}
-    <Text color={AUXILIARY_TEXT_COLOR}>{centerLine("Ctrl+E edit | Esc returns to the vocabulary list", width)}</Text>
+    <Text color={AUXILIARY_TEXT_COLOR} italic>{centerLine("Ctrl+E edit | Esc returns to the vocabulary list", width)}</Text>
     <Box width={width} justifyContent="space-between"><Text>{previousLabel}</Text><Text>{nextLabel}</Text></Box>
   </Box>;
 }

@@ -90,7 +90,7 @@ test("detail page keyboard flow preserves carets and drafts, owns navigation, an
     await key("/edit", /\/edit/);
     await key("\r", /Enter id for \/edit/);
     await key(String(entry.id), /\/edit 1/);
-    let rendered = await key("\r", /rows.*caret/);
+    let rendered = await key("\r", /↑↓ rows/);
     assert.match(stripVTControlCharacters(rendered), /\nVocabulary\s*\n>\s+Word:/);
     const vocabularyHeading = rendered.split("\n").find((line) => stripVTControlCharacters(line).trim() === "Vocabulary")!;
     assert.match(vocabularyHeading, /\x1b\[1m/);
@@ -100,7 +100,7 @@ test("detail page keyboard flow preserves carets and drafts, owns navigation, an
     rendered = await key("X", /Word:\s+猫X/);
     assertSelectedRow(rendered, "Word", true);
     assert.match(stripVTControlCharacters(attributeLine(rendered, "Word")), /^> \*Word:/);
-    await key("\x1b[D", /rows.*caret/);
+    await key("\x1b[D", /↑↓ rows/);
     rendered = await key(down, /Meaning:\s+primary/);
     assertSelectedRow(rendered, "Meaning", true);
     assert.match(attributeLine(rendered, "Word"), /38;2;229;198;95m/);
@@ -120,16 +120,16 @@ test("detail page keyboard flow preserves carets and drafts, owns navigation, an
     await key(down, /> Discard Changes/);
     rendered = await key("\r", /Ctrl\+E edit/);
     assert.match(stripVTControlCharacters(rendered), /\nVocabulary\s*\nWord:/);
-    await key("\x05", /rows.*caret/);
+    await key("\x05", /↑↓ rows/);
     await key("\x1b", /Ctrl\+E edit/); // An unchanged exit skips confirmation.
     await key("\x1b[C", /Word:\s+second/);
     await key("\x1b[D", /Word:\s+猫/);
     await key("\x1b", /Page 1\/1/);
     await key("/view 1", /\/view 1/);
     await key("\r", /Ctrl\+E edit/);
-    await key("\x05", /rows.*caret/);
+    await key("\x05", /↑↓ rows/);
     await key("!", /Word:\s+猫!/);
-    for (let index = 0; index < 7; index++) await key(down, /rows.*caret/);
+    for (let index = 0; index < 7; index++) await key(down, /↑↓ rows/);
     rendered = output;
     assert.match(stripVTControlCharacters(rendered), /Hidden:\s+\[secret\]/);
     assert.match(stripVTControlCharacters(rendered), /Empty:/);
@@ -158,7 +158,7 @@ test("detail page keyboard flow preserves carets and drafts, owns navigation, an
     assert.match(stripVTControlCharacters(rendered), /Last tested:\s+2026-10-30/);
     assert.match(stripVTControlCharacters(rendered), /Next deadline:\s+2026-11-06/);
     assert.doesNotMatch(stripVTControlCharacters(output), /Hidden:/);
-    await key("\x05", /rows.*caret/);
+    await key("\x05", /↑↓ rows/);
     await key("?", /Word:\s+猫!\?/);
     await key("\x13", /Unsaved vocabulary changes/);
     await key(down, /> Save Changes \(Reset Test Data\)/);
