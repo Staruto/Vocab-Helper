@@ -38,10 +38,6 @@ export async function executeEffect(effect: Effect, state: OrchestrationState, c
       const workbook = capabilities.import.saveWorkbookImportPath(effect.workbookId, effect.path);
       return { type: "importPathSaved", path: workbook.importFilePath };
     }
-    case "addEntry": {
-      const entry = capabilities.writes.addEntry(effect.workbookId, effect.vocabulary, effect.meanings[0] ?? "", effect.meanings, effect.attributes, effect.tagIds);
-      return { type: "entriesLoaded", entries: [...state.entries, entry], message: `Added #${entry.id}.` };
-    }
     case "deleteEntry":
       capabilities.writes.deleteEntry(effect.entryId);
       return { type: "entriesLoaded", entries: state.entries.filter((entry) => entry.id !== effect.entryId), message: "Entry deleted." };

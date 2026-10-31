@@ -2,7 +2,7 @@ import { EntryRow, TagType } from "./db.js";
 
 export type VisibleTagGroup = { typeId: number; typeName: string; tagNames: string[] };
 
-export function visibleAssignedTagGroups(entry: EntryRow, tagTypes: TagType[]): VisibleTagGroup[] {
+export function visibleAssignedTagGroups(entry: Pick<EntryRow, "tags">, tagTypes: TagType[]): VisibleTagGroup[] {
   const assignedIds = new Set(entry.tags.map((tag) => tag.id));
   return tagTypes.flatMap((type) => {
     if (!type.visible) return [];

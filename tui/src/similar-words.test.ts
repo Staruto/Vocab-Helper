@@ -4,8 +4,7 @@ import { parseSimilarWords, similarWordLines } from "./similar-words.js";
 import { VocabularyRepository } from "./db.js";
 import { buildDetailSections } from "./detail-display.js";
 import { parseLabeledTextImport } from "./import.js";
-import { createDetailEditor, detailEditRows, saveDetailEditor, updateDetailEditor } from "./detail-editor.js";
-import { createInitialState, update } from "./orchestration.js";
+import { createAddDetailEditor, createDetailEditor, detailEditRows, saveDetailEditor, updateDetailEditor } from "./detail-editor.js";
 
 test("similar words support optional explanations, separators, and punctuation within items", () => {
   assert.deepEqual(parseSimilarWords(" { near by } ( short distance, usually (physical) ) , {close} {隣} () "), [
@@ -71,12 +70,15 @@ test("add, edit, and labeled imports preserve the source and share formatted det
       fields: workbook.metadataAttributes.filter((field) => field.role !== "vocabulary").map((field) => field.presetKey ? { ...field, active: field.presetKey === "similar_words", label: field.presetKey === "similar_words" ? "Related" : field.label } : field),
     });
     const value = "{near} (short distance), {close}";
-    let state = update(createInitialState(workbook), { type: "commandSubmitted", raw: "/add" }).state;
-    for (const input of ["nearby", "not far"]) state = update(state, { type: "addFieldSubmitted", value: input }).state;
-    const add = update(state, { type: "addFieldSubmitted", value }).effects[0];
-    assert.equal(add.type, "addEntry");
-    if (add.type !== "addEntry") throw new Error("Expected add effect");
-    const entry = repository.addEntry(add.workbookId, add.vocabulary, add.meanings[0], add.meanings, add.attributes, add.tagIds);
+    let state = createAddDetailEditor(workbook);
+    for (const input of ["nearby", "not far", value]) {
+      state = updateDetailEditor(state, { type: "change", value: input }, workbook, []);
+      state = updateDetailEditor(state, { type: "move", delta: 1 }, workbook, []);
+    }
+    state = updateDetailEditor(state, { type: "exit" }, workbook, []);
+    state = saveDetailEditor(state, workbook, (draft) => repository.addEntry(workbook.id, draft.vocabulary, draft.meanings[0], draft.meanings, draft.attributes, draft.tagIds));
+    assert.ok(state.original);
+    const entry = state.original;
     assert.equal(entry.attributes.similar_words, value);
     const expected = buildDetailSections(workbook, entry, []).attributes;
     let editor = createDetailEditor(entry, true);
@@ -88,6 +90,7 @@ test("add, edit, and labeled imports preserve the source and share formatted det
     editor = saveDetailEditor(editor, workbook, (draft, options) => repository.updateEntry(entry.id, draft.vocabulary, draft.meanings[0], draft.meanings, draft.attributes, draft.tagIds, options));
     assert.equal(editor.mode, "view");
     const edited = editor.original;
+    assert.ok(edited);
     assert.deepEqual(buildDetailSections(workbook, edited, []).attributes, expected);
     const preview = parseLabeledTextImport(`Word: nearby\nPrimary Meaning: not far\nRelated: ${value}`, workbook, [], [entry.vocabulary]);
     assert.deepEqual(preview.diagnostics.map((item) => item.kind), ["duplicate"]);

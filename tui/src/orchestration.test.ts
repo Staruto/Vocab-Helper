@@ -6,27 +6,11 @@ import { createInitialState, update } from "./orchestration.js";
 const workbook: WorkbookRow = { id: 1, name: "Demo", wordCount: 0, createdAt: "", vocabularyLabel: "Vocabulary", vocabularyLanguageCode: "EN", vocabularyKind: "preset_language", importFilePath: null, dailyGoal: null, todayPracticeCount: 0, meaningAttributes: [{ position: 1, label: "Primary Meaning", languageCode: null }, { position: 2, label: "Secondary Meaning", languageCode: null }], metadataAttributes: [{ key: "note", role: "optional", label: "Note", languageCode: null, required: false, visible: true, displayOrder: 1 }] };
 const entry = (id: number, vocabulary: string): EntryRow => ({ id, workbookId: 1, vocabulary, meaning: "meaning", meanings: ["meaning", ""], kanaText: null, attributes: {}, tags: [], createdAt: "", updatedAt: "", testCount: 0, errorCount: 0, tier: "gray", lastTested: null, nextTestDeadline: null });
 
-test("command transitions enter add mode and search resets page", () => {
-  let state = createInitialState(workbook, [entry(1, "alpha")]);
-  let transition = update(state, { type: "commandSubmitted", raw: "/add" });
-  assert.equal(transition.state.mode.kind, "add");
-  state = { ...transition.state, pageIndex: 4 };
-  transition = update(state, { type: "searchChanged", query: "alp" });
+test("search resets page", () => {
+  const state = { ...createInitialState(workbook, [entry(1, "alpha")]), pageIndex: 4 };
+  const transition = update(state, { type: "searchChanged", query: "alp" });
   assert.equal(transition.state.activeSearchQuery, "alp");
   assert.equal(transition.state.pageIndex, 0);
-});
-
-test("add flow advances through meaning and optional metadata", () => {
-  let state = update(createInitialState(workbook), { type: "commandSubmitted", raw: "/add" }).state;
-  state = update(state, { type: "addFieldSubmitted", value: "alpha" }).state;
-  state = update(state, { type: "addFieldSubmitted", value: "first" }).state;
-  assert.equal(state.mode.kind, "add");
-  assert.equal(state.mode.stage, "meaning");
-  state = update(state, { type: "addFieldSubmitted", value: "second" }).state;
-  assert.equal(state.mode.kind, "add");
-  assert.equal(state.mode.stage, "metadata");
-  const transition = update(state, { type: "addFieldSubmitted", value: "memo" });
-  assert.equal(transition.effects[0]?.type, "addEntry");
 });
 
 test("delete requires yes confirmation", () => {

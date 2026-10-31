@@ -8,6 +8,16 @@ export const DETAIL_EXIT_CHOICES = [
   { label: "Continue Editing", action: "continue" },
 ] as const;
 
+const ADD_EXIT_CHOICES = [
+  { label: "Save Changes", action: "save", preserveTestData: false },
+  { label: "Discard Changes", action: "discard" },
+  { label: "Continue Editing", action: "continue" },
+] as const;
+
+export function detailExitChoices(state: DetailEditorState) {
+  return state.original ? DETAIL_EXIT_CHOICES : ADD_EXIT_CHOICES;
+}
+
 export type DetailEditRow =
   | { id: "vocabulary"; kind: "vocabulary"; label: string }
   | { id: string; kind: "meaning"; label: string; index: number }
@@ -15,8 +25,8 @@ export type DetailEditRow =
   | { id: string; kind: "tags"; label: string; typeId: number };
 
 export type DetailEditorState = {
-  mode: "view" | "edit" | "tags" | "confirm";
-  original: EntryRow;
+  mode: "view" | "edit" | "tags" | "confirm" | "cancelled";
+  original: EntryRow | null;
   draft: ImportEntryInput;
   selected: number;
   exitChoice: number;
@@ -54,6 +64,18 @@ export function createDetailEditor(entry: EntryRow, editing = false): DetailEdit
   };
 }
 
+export function createAddDetailEditor(workbook: WorkbookRow): DetailEditorState {
+  return {
+    mode: "edit", original: null,
+    draft: { vocabulary: "", meanings: workbook.meaningAttributes.map(() => ""), attributes: Object.fromEntries(entryAttributes(workbook.metadataAttributes).map((field) => [field.key, ""])), tagIds: [] },
+    selected: 0, exitChoice: 0, picker: null, error: "",
+  };
+}
+
+function leaveEditor(state: DetailEditorState): DetailEditorState {
+  return state.original ? createDetailEditor(state.original) : { ...state, mode: "cancelled", picker: null };
+}
+
 export function detailRowValue(state: DetailEditorState, row: DetailEditRow): string {
   if (row.kind === "vocabulary") return state.draft.vocabulary;
   if (row.kind === "meaning") return state.draft.meanings[row.index] ?? "";
@@ -67,11 +89,11 @@ function sameIds(first: number[], second: number[]): boolean {
 }
 
 export function detailRowChanged(state: DetailEditorState, row: DetailEditRow, tagTypes: TagType[]): boolean {
-  if (row.kind === "vocabulary") return state.draft.vocabulary !== state.original.vocabulary;
-  if (row.kind === "meaning") return detailRowValue(state, row) !== (state.original.meanings[row.index] ?? "");
-  if (row.kind === "attribute") return detailRowValue(state, row) !== (state.original.attributes[row.key] ?? "");
+  if (row.kind === "vocabulary") return state.draft.vocabulary !== (state.original?.vocabulary ?? "");
+  if (row.kind === "meaning") return detailRowValue(state, row) !== (state.original?.meanings[row.index] ?? "");
+  if (row.kind === "attribute") return detailRowValue(state, row) !== (state.original?.attributes[row.key] ?? "");
   const ids = new Set(tagTypes.find((type) => type.id === row.typeId)?.tags.map((tag) => tag.id));
-  return !sameIds(state.draft.tagIds.filter((id) => ids.has(id)), state.original.tags.filter((tag) => ids.has(tag.id)).map((tag) => tag.id));
+  return !sameIds(state.draft.tagIds.filter((id) => ids.has(id)), (state.original?.tags ?? []).filter((tag) => ids.has(tag.id)).map((tag) => tag.id));
 }
 
 export function detailHasChanges(state: DetailEditorState, workbook: WorkbookRow, tagTypes: TagType[]): boolean {
@@ -87,13 +109,13 @@ function acceptTags(state: DetailEditorState, tagTypes: TagType[]): DetailEditor
 
 export function updateDetailEditor(state: DetailEditorState, action: DetailEditorAction, workbook: WorkbookRow, tagTypes: TagType[]): DetailEditorState {
   const rows = detailEditRows(workbook, tagTypes);
-  if (action.type === "begin" && state.mode === "view") return createDetailEditor(state.original, true);
+  if (action.type === "begin" && state.mode === "view" && state.original) return createDetailEditor(state.original, true);
   if (action.type === "continue" && state.mode === "confirm") return { ...state, mode: "edit", error: "" };
-  if (action.type === "discard" && state.mode === "confirm") return createDetailEditor(state.original);
-  if (action.type === "moveChoice" && state.mode === "confirm") return { ...state, exitChoice: (state.exitChoice + action.delta + DETAIL_EXIT_CHOICES.length) % DETAIL_EXIT_CHOICES.length };
+  if (action.type === "discard" && state.mode === "confirm") return leaveEditor(state);
+  if (action.type === "moveChoice" && state.mode === "confirm") return { ...state, exitChoice: (state.exitChoice + action.delta + detailExitChoices(state).length) % detailExitChoices(state).length };
   if (action.type === "exit" && (state.mode === "edit" || state.mode === "tags")) {
     const staged = state.mode === "tags" ? acceptTags(state, tagTypes) : state;
-    return detailHasChanges(staged, workbook, tagTypes) ? { ...staged, mode: "confirm", exitChoice: 0, error: "" } : createDetailEditor(state.original);
+    return detailHasChanges(staged, workbook, tagTypes) ? { ...staged, mode: "confirm", exitChoice: 0, error: "" } : leaveEditor(state);
   }
   if (state.mode === "tags" && state.picker) {
     const picker = state.picker;
@@ -126,7 +148,7 @@ export function updateDetailEditor(state: DetailEditorState, action: DetailEdito
 
 // The only persistence boundary: a draft cannot be written before exit confirmation.
 export function saveDetailEditor(state: DetailEditorState, workbook: WorkbookRow, write: (draft: ImportEntryInput, options: EntryUpdateOptions) => EntryRow): DetailEditorState {
-  const choice = DETAIL_EXIT_CHOICES[state.exitChoice];
+  const choice = detailExitChoices(state)[state.exitChoice];
   if (state.mode !== "confirm" || choice?.action !== "save") return state;
   try {
     const vocabulary = state.draft.vocabulary.trim();
@@ -144,6 +166,7 @@ export function saveDetailEditor(state: DetailEditorState, workbook: WorkbookRow
 type DetailKey = { ctrl?: boolean; escape?: boolean; upArrow?: boolean; downArrow?: boolean; leftArrow?: boolean; rightArrow?: boolean; return?: boolean };
 
 export function detailEditorKeyAction(mode: DetailEditorState["mode"], input: string, key: DetailKey): DetailEditorAction | "confirmChoice" | null {
+  if (mode === "cancelled") return null;
   if (mode === "view") return key.ctrl && input.toLowerCase() === "e" ? { type: "begin" } : null;
   if (mode === "confirm") {
     if (key.escape) return { type: "continue" };

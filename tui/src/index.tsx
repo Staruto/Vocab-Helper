@@ -8,7 +8,7 @@ import { adjacentEntryId, buildDetailSections, buildReviewFields, detailNavigati
 import { similarWordLines } from "./similar-words.js";
 import { wrapStyledText } from "./styled-text.js";
 import { formatImportPreviewFilter, formatImportPreviewRecord, importPreviewPageSize, ImportPreview, ImportPreviewFilter, loadLabeledTextFile, paginateImportPreview } from "./import.js";
-import { createDetailEditor, DETAIL_EXIT_CHOICES, detailEditRows, detailEditorKeyAction, detailRowChanged, detailRowValue, saveDetailEditor, updateDetailEditor, DetailEditRow, DetailEditorState } from "./detail-editor.js";
+import { createAddDetailEditor, createDetailEditor, detailExitChoices, detailEditRows, detailEditorKeyAction, detailRowChanged, detailRowValue, saveDetailEditor, updateDetailEditor, DetailEditRow, DetailEditorState } from "./detail-editor.js";
 import { CaretInputLine } from "./text-input.js";
 import { filterEntriesForSearch } from "./search.js";
 import { localCalendarDay } from "./calendar.js";
@@ -32,6 +32,7 @@ type AppScreen =
   | { kind: "settings-goal"; workbook: WorkbookRow }
   | { kind: "settings-appearance"; workbook: WorkbookRow }
   | { kind: "tags"; workbook: WorkbookRow; returnTo?: "vocab" | "settings" }
+  | { kind: "add"; workbook: WorkbookRow }
   | { kind: "view"; workbook: WorkbookRow; entryId: number; editing?: boolean }
   | { kind: "profile"; workbook: WorkbookRow }
   | { kind: "practice"; workbook: WorkbookRow; count: number }
@@ -44,6 +45,7 @@ type VocabularyScreenProps = {
   onOpenSettings: () => void;
   onOpenTags: () => void;
   onOpenProfile: () => void;
+  onAddEntry: () => void;
   onViewEntry: (entryId: number, editing?: boolean) => void;
   onStartPractice: (count?: number) => void;
 };
@@ -342,7 +344,7 @@ function buildSuggestionLines(suggestions: CommandSpec[], selectedIndex: number,
   }
   return rows;
 }
-function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOpenTags, onOpenProfile, onViewEntry, onStartPractice }: VocabularyScreenProps): JSX.Element {
+function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOpenTags, onOpenProfile, onAddEntry, onViewEntry, onStartPractice }: VocabularyScreenProps): JSX.Element {
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
   const [rows, setRows] = useState(() => stdout?.rows ?? 24);
@@ -359,14 +361,10 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   const [statusLines, setStatusLines] = useState<string[]>(() => buildStatusLines("/ for commands, Esc to exit."));
   const [tierColorsEnabled, setTierColorsEnabled] = useState(() => backend.getTierColorsEnabled());
   const [savedImportFilePath, setSavedImportFilePath] = useState(workbook.importFilePath);
-  const activeMetadata = entryAttributes(workbook.metadataAttributes);
   const tagTypes = orchestration.tagTypes;
   const visibleEntries = useMemo(() => filterEntriesForSearch(entries, workbook, tagTypes, activeSearchQuery), [entries, workbook, tagTypes, activeSearchQuery]);
-  const selectableTags = tagTypes.flatMap((type) => type.tags);
-  const textInputActive = (mode.kind === "command" && inputFocus === "command") || mode.kind === "commandArg" || mode.kind === "delete" || mode.kind === "importPath" || (mode.kind === "add" && mode.stage !== "tags");
-  const textInputKey = mode.kind === "add"
-    ? `${mode.kind}-${mode.stage}-${mode.meaningIndex}-${mode.metadataIndex}`
-    : mode.kind;
+  const textInputActive = (mode.kind === "command" && inputFocus === "command") || mode.kind === "commandArg" || mode.kind === "delete" || mode.kind === "importPath";
+  const textInputKey = mode.kind;
 
   useEffect(() => {
     if (!stdout) {
@@ -536,7 +534,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     }
 
     if (lower === "add") {
-      dispatchIntent({ type: "commandSubmitted", raw: "/add" });
+      onAddEntry();
       return;
     }
 
@@ -583,7 +581,6 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     if (mode.kind === "importPreview") { dispatchIntent({ type: "importConfirmed" }); return; }
     if (mode.kind === "importLoading") return;
     if (mode.kind === "importSaveDefault") { dispatchIntent({ type: "importSavePathDecision", save: mode.save }); return; }
-    if (mode.kind === "add") { dispatchIntent({ type: "addFieldSubmitted", value }); return; }
     if (mode.kind === "delete") { dispatchIntent({ type: "deleteConfirmationSubmitted", value: text }); }
   }
   useInput((input, key) => {
@@ -603,12 +600,6 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
         onBackToMenu();
       }
       return;
-    }
-
-    if (mode.kind === "add" && mode.stage === "tags" && selectableTags.length > 0) {
-      if (key.upArrow) { dispatchIntent({ type: "tagCursorMoved", delta: -1 }); return; }
-      if (key.downArrow) { dispatchIntent({ type: "tagCursorMoved", delta: 1 }); return; }
-      if (input === " " ) { const id = selectableTags[mode.tagIndex].id; dispatchIntent({ type: "tagSelectionToggled", tagId: id }); return; }
     }
 
     if (mode.kind === "importSaveDefault") {
@@ -807,22 +798,6 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       <Text>{padLine("", width)}</Text>
       <Text>{padLine("", width)}</Text>
       <CaretInputLine key={textInputKey} prefix="> " value={buffer} onChange={setBuffer} width={width} focus={textInputActive} inputKey={textInputKey} />
-      {mode.kind === "add" && mode.stage === "tags" ? (
-        <>
-          <Text>{padLine("", width)}</Text>
-          {tagTypes.filter((type) => type.tags.length > 0).map((type) => {
-            const selectedTag = selectableTags[mode.tagIndex];
-            const active = selectedTag?.tagTypeId === type.id;
-            return <Box key={type.id} flexDirection="column" borderStyle="single" borderColor={active ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}>
-              <Text bold color={active ? SELECTED_TEXT_COLOR : undefined}>{type.name}</Text>
-              {type.tags.map((tag) => <Text key={tag.id} color={selectedTag?.id === tag.id ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>
-                {`${selectedTag?.id === tag.id ? ">" : " "} [${mode.selectedTagIds.includes(tag.id) ? "●" : " "}] ${tag.name}`}
-              </Text>)}
-            </Box>;
-          })}
-          <Text color={AUXILIARY_TEXT_COLOR}>{padLine("Space selects | ↑↓ moves | Enter confirms", width)}</Text>
-        </>
-      ) : null}
       <Text>{padLine("", width)}</Text>
       {commandPaletteActive
         ? suggestionLines.map((line, index) => (
@@ -1665,13 +1640,14 @@ function detailFieldLines(field: DetailField, width: number, keyWidth: number, v
 }
 
 function EntryDetails({ workbook, entry, tagTypes, width, showVocabulary = false, editor, onChange, viewportHeight }: {
-  workbook: WorkbookRow; entry: EntryRow; tagTypes: TagType[]; width: number;
+  workbook: WorkbookRow; entry: EntryRow | null; tagTypes: TagType[]; width: number;
   showVocabulary?: boolean; editor?: DetailEditorState; onChange?: (value: string) => void; viewportHeight?: number;
 }): JSX.Element {
   const displayedEntry = editor ? {
     ...entry, vocabulary: editor.draft.vocabulary, meanings: editor.draft.meanings, attributes: editor.draft.attributes,
     tags: tagTypes.flatMap((type) => type.tags).filter((tag) => editor.draft.tagIds.includes(tag.id)),
   } : entry;
+  if (!displayedEntry) return <Box />;
   const sections = buildDetailSections(workbook, displayedEntry, tagTypes);
   const statusFields = buildReviewFields(entry);
   const editRows = detailEditRows(workbook, tagTypes);
@@ -1690,14 +1666,14 @@ function EntryDetails({ workbook, entry, tagTypes, width, showVocabulary = false
     const keyColor = selected ? SELECTED_TEXT_COLOR : changed ? YELLOW_TIER_COLOR : AUXILIARY_TEXT_COLOR;
     const label = `${editor && row ? `${selected ? "> " : "  "}${changed ? "*" : " "}` : ""}${field.key}`;
     if (selected && row && row.kind !== "tags" && editor && onChange) {
-      line(id, <CaretInputLine prefix={`${padLine(`${label}:`, keyWidth)} `} value={detailRowValue(editor, row)} onChange={onChange} width={width} color={SELECTED_TEXT_COLOR} prefixColor={SELECTED_TEXT_COLOR} inputKey={`${entry.id}-${row.id}`} />, true);
+      line(id, <CaretInputLine prefix={`${padLine(`${label}:`, keyWidth)} `} value={detailRowValue(editor, row)} onChange={onChange} width={width} color={SELECTED_TEXT_COLOR} prefixColor={SELECTED_TEXT_COLOR} inputKey={`${entry?.id ?? "new"}-${row.id}`} />, true);
     } else if (selected) {
       line(id, <Text color={SELECTED_TEXT_COLOR}>{padLine(`${label}:`, keyWidth)}{" "}{padLine(truncate(field.value, Math.max(1, width - keyWidth - 1)), Math.max(1, width - keyWidth - 1))}</Text>, true);
     } else {
       detailFieldLines({ ...field, key: label }, width, keyWidth, valueColor, keyColor).forEach((element, index) => line(`${id}-${index}`, element));
     }
   }
-  wrapDetailText(entry.vocabulary, Math.max(1, width - 2)).forEach((text, index) => line(`title-${index}`, <Text color="cyan" bold>{centerLine(text, width)}</Text>));
+  wrapDetailText(entry?.vocabulary ?? "New Vocabulary", Math.max(1, width - 2)).forEach((text, index) => line(`title-${index}`, <Text color="cyan" bold>{centerLine(text, width)}</Text>));
   blank("title-space");
   if (showVocabulary) {
     line("vocabulary-heading", <Text color="cyan" bold>{padLine("Vocabulary", width)}</Text>);
@@ -1719,7 +1695,7 @@ function EntryDetails({ workbook, entry, tagTypes, width, showVocabulary = false
     tagGroups.forEach((group) => fieldLines(`tags-${group.typeId}`, { key: group.typeName, value: group.tagNames.map((name) => `[${name}]`).join(" ") || "—" }, editRows.find((row) => row.kind === "tags" && row.typeId === group.typeId), TAG_BADGE_COLOR));
   }
   heading("review", "Review");
-  statusFields.forEach((field, index) => fieldLines(`review-${index}`, field, undefined, field.key === "Tier" ? tierColor(entry.tier) : "white"));
+  statusFields.forEach((field, index) => fieldLines(`review-${index}`, field, undefined, field.key === "Tier" ? tierColor(entry?.tier ?? "gray") : "white"));
   blank("end-space");
   const viewport = Math.max(1, viewportHeight ?? lines.length);
   const focusedLine = Math.max(0, lines.findIndex((item) => item.selected));
@@ -1730,7 +1706,7 @@ function EntryDetails({ workbook, entry, tagTypes, width, showVocabulary = false
   </Box>;
 }
 
-function EntryViewScreen({ workbook, entryId, editing = false, onNavigate, onCancel, onQuit }: { workbook: WorkbookRow; entryId: number; editing?: boolean; onNavigate: (entryId: number) => void; onCancel: () => void; onQuit: () => void }): JSX.Element {
+function EntryViewScreen({ workbook, entryId, editing = false, onCreated, onNavigate, onCancel, onQuit }: { workbook: WorkbookRow; entryId: number | null; editing?: boolean; onCreated: (entryId: number) => void; onNavigate: (entryId: number) => void; onCancel: () => void; onQuit: () => void }): JSX.Element {
   const { stdout } = useStdout();
   const [size, setSize] = useState(() => ({ width: stdout?.columns ?? 80, height: stdout?.rows ?? 24 }));
   const { width, height } = size;
@@ -1738,11 +1714,12 @@ function EntryViewScreen({ workbook, entryId, editing = false, onNavigate, onCan
   const [entries, setEntries] = useState(() => backend.listEntries(workbook.id));
   const [tagTypes] = useState(() => backend.listTagTypes(workbook.id));
   const [editor, setEditor] = useState(() => {
+    if (entryId === null) return createAddDetailEditor(workbook);
     const entry = backend.getEntry(entryId);
     return entry && entry.workbookId === workbook.id ? createDetailEditor(entry, editing) : null;
   });
   const editorRef = useRef(editor);
-  function replaceEditor(next: DetailEditorState): void { editorRef.current = next; setEditor(next); }
+  function replaceEditor(next: DetailEditorState): void { editorRef.current = next; setEditor(next); if (next.mode === "cancelled") onCancel(); }
   function dispatch(action: import("./detail-editor.js").DetailEditorAction): void {
     if (editorRef.current) replaceEditor(updateDetailEditor(editorRef.current, action, workbook, tagTypes));
   }
@@ -1757,16 +1734,21 @@ function EntryViewScreen({ workbook, entryId, editing = false, onNavigate, onCan
     if (!current) { if (key.escape) onCancel(); return; }
     const action = detailEditorKeyAction(current.mode, input, key);
     if (action === "confirmChoice") {
-      const choice = DETAIL_EXIT_CHOICES[current.exitChoice];
+      const choice = detailExitChoices(current)[current.exitChoice];
       if (choice.action === "save") {
-        const saved = saveDetailEditor(current, workbook, (draft, options) => backend.updateEntry(entryId, draft.vocabulary, draft.meanings[0], draft.meanings, draft.attributes, draft.tagIds, options));
+        const saved = saveDetailEditor(current, workbook, (draft, options) => current.original
+          ? backend.updateEntry(current.original.id, draft.vocabulary, draft.meanings[0], draft.meanings, draft.attributes, draft.tagIds, options)
+          : backend.addEntry(workbook.id, draft.vocabulary, draft.meanings[0], draft.meanings, draft.attributes, draft.tagIds));
         replaceEditor(saved);
-        if (saved.mode === "view") setEntries((items) => items.map((item) => item.id === saved.original.id ? saved.original : item));
+        if (saved.mode === "view" && saved.original) {
+          setEntries(backend.listEntries(workbook.id));
+          if (!current.original) onCreated(saved.original.id);
+        }
       } else dispatch({ type: choice.action });
       return;
     }
     if (action) { setBoundaryMessage(""); dispatch(action); return; }
-    if (current.mode !== "view") return;
+    if (current.mode !== "view" || entryId === null) return;
     if (key.escape) { onCancel(); return; }
     if (key.leftArrow || key.rightArrow) {
       const direction = key.leftArrow ? "previous" : "next";
@@ -1782,7 +1764,7 @@ function EntryViewScreen({ workbook, entryId, editing = false, onNavigate, onCan
       <Text color="cyan" bold>{centerLine("Unsaved vocabulary changes", width)}</Text>
       <Text color={AUXILIARY_TEXT_COLOR}>{padLine("Choose what to do with your staged changes.", width)}</Text>
       <Text>{padLine("", width)}</Text>
-      {DETAIL_EXIT_CHOICES.map((choice, index) => <Text key={choice.label} color={index === editor.exitChoice ? "black" : "white"} backgroundColor={index === editor.exitChoice ? "white" : undefined}>{padLine(`${index === editor.exitChoice ? ">" : " "} ${choice.label}`, width)}</Text>)}
+      {detailExitChoices(editor).map((choice, index) => <Text key={choice.label} color={index === editor.exitChoice ? "black" : "white"} backgroundColor={index === editor.exitChoice ? "white" : undefined}>{padLine(`${index === editor.exitChoice ? ">" : " "} ${choice.label}`, width)}</Text>)}
       <Text>{padLine("", width)}</Text>
       <Text color={AUXILIARY_TEXT_COLOR}>{padLine("↑↓ select | Enter confirm | Esc continue editing", width)}</Text>
     </Box>;
@@ -1793,7 +1775,7 @@ function EntryViewScreen({ workbook, entryId, editing = false, onNavigate, onCan
     const viewport = Math.max(1, height - 6);
     const first = Math.max(0, Math.min(type.tags.length - viewport, picker.cursor - Math.floor(viewport / 2)));
     return <Box flexDirection="column">
-      <Text color="cyan" bold>{centerLine(`${entry.vocabulary} — ${type.name}`, width)}</Text>
+      <Text color="cyan" bold>{centerLine(`${entry?.vocabulary ?? "New Vocabulary"} — ${type.name}`, width)}</Text>
       <Text color={AUXILIARY_TEXT_COLOR}>{padLine("Select tags. Changes remain staged until saved.", width)}</Text>
       <Text>{padLine("", width)}</Text>
       {type.tags.length ? type.tags.slice(first, first + viewport).map((tag, index) => <Text key={tag.id} color={first + index === picker.cursor ? "black" : "white"} backgroundColor={first + index === picker.cursor ? "white" : undefined}>{padLine(`${first + index === picker.cursor ? ">" : " "} [${picker.tagIds.includes(tag.id) ? "●" : " "}] ${tag.name}`, width)}</Text>) : <Text color={AUXILIARY_TEXT_COLOR}>{padLine("No tags configured for this type.", width)}</Text>}
@@ -1806,6 +1788,7 @@ function EntryViewScreen({ workbook, entryId, editing = false, onNavigate, onCan
     <Text color="red">{padLine(editor.error, width)}</Text>
     <Text color={AUXILIARY_TEXT_COLOR} italic>{padLine("↑↓ rows | Enter edit tags | Esc / Ctrl+S exit", width)}</Text>
   </Box>;
+  if (!entry) return <Box />;
   const currentIndex = entries.findIndex((item) => item.id === entry.id);
   const previousEntry = currentIndex > 0 ? entries[currentIndex - 1] : null;
   const nextEntry = currentIndex >= 0 && currentIndex + 1 < entries.length ? entries[currentIndex + 1] : null;
@@ -2031,7 +2014,7 @@ function App(): JSX.Element {
   }
 
   if (screen.kind === "vocab") {
-    return <VocabularyScreen workbook={screen.workbook} onBackToMenu={backToMenu} onQuit={quit} onOpenSettings={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onOpenTags={() => setScreen({ kind: "tags", workbook: refreshWorkbook(screen.workbook.id) })} onOpenProfile={() => setScreen({ kind: "profile", workbook: refreshWorkbook(screen.workbook.id) })} onViewEntry={(entryId, editing) => setScreen({ kind: "view", workbook: screen.workbook, entryId, editing })} onStartPractice={(count) => { const n = count ?? 15; setScreen({ kind: "practice", workbook: refreshWorkbook(screen.workbook.id), count: Math.min(n, backend.countEntries(screen.workbook.id)) }); }} />;
+    return <VocabularyScreen workbook={screen.workbook} onBackToMenu={backToMenu} onQuit={quit} onOpenSettings={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onOpenTags={() => setScreen({ kind: "tags", workbook: refreshWorkbook(screen.workbook.id) })} onOpenProfile={() => setScreen({ kind: "profile", workbook: refreshWorkbook(screen.workbook.id) })} onAddEntry={() => setScreen({ kind: "add", workbook: screen.workbook })} onViewEntry={(entryId, editing) => setScreen({ kind: "view", workbook: screen.workbook, entryId, editing })} onStartPractice={(count) => { const n = count ?? 15; setScreen({ kind: "practice", workbook: refreshWorkbook(screen.workbook.id), count: Math.min(n, backend.countEntries(screen.workbook.id)) }); }} />;
   }
 
   if (screen.kind === "profile") return <PracticeProfileScreen workbook={screen.workbook} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
@@ -2044,7 +2027,7 @@ function App(): JSX.Element {
   if (screen.kind === "settings-import") return <ImportSettingsScreen workbook={screen.workbook} onSave={(updated) => setScreen({ kind: "settings", workbook: updated })} onCancel={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
   if (screen.kind === "settings-appearance") return <AppearanceSettingsScreen onCancel={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
   if (screen.kind === "tags") return <TagSettingsScreen workbook={screen.workbook} onSave={(draft, confirmDataLoss) => { backend.updateWorkbookTags(screen.workbook.id, draft, confirmDataLoss); setScreen(screen.returnTo === "settings" ? { kind: "settings", workbook: refreshWorkbook(screen.workbook.id) } : { kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) }); }} onCancel={() => setScreen(screen.returnTo === "settings" ? { kind: "settings", workbook: refreshWorkbook(screen.workbook.id) } : { kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
-  if (screen.kind === "view") return <EntryViewScreen key={screen.entryId} workbook={screen.workbook} entryId={screen.entryId} editing={screen.editing} onNavigate={(entryId) => setScreen({ ...screen, entryId, editing: false })} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
+  if (screen.kind === "view" || screen.kind === "add") return <EntryViewScreen key={screen.kind === "add" ? "new" : screen.entryId} workbook={screen.workbook} entryId={screen.kind === "add" ? null : screen.entryId} editing={screen.kind === "view" && screen.editing} onCreated={(entryId) => setScreen({ kind: "view", workbook: screen.workbook, entryId })} onNavigate={(entryId) => setScreen({ kind: "view", workbook: screen.workbook, entryId, editing: false })} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
 
   if (screen.kind === "create-workbook") {
     return <WorkbookWizard onSave={(input) => handleCreateWorkbook(input)} onCancel={backToMenu} onQuit={quit} />;

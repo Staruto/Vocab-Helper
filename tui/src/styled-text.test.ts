@@ -4,8 +4,7 @@ import { parseExampleSentence, wrapStyledText } from "./styled-text.js";
 import { VocabularyRepository } from "./db.js";
 import { buildDetailSections } from "./detail-display.js";
 import { parseLabeledTextImport } from "./import.js";
-import { createDetailEditor, detailEditRows, saveDetailEditor, updateDetailEditor } from "./detail-editor.js";
-import { createInitialState, update } from "./orchestration.js";
+import { createAddDetailEditor, createDetailEditor, detailEditRows, saveDetailEditor, updateDetailEditor } from "./detail-editor.js";
 
 test("sentence highlighting preserves surrounding text, whitespace, and adjacent pairs", () => {
   assert.deepEqual(parseExampleSentence("She lives {near the station}."), [
@@ -76,13 +75,16 @@ test("add, edit, and import keep sentence braces in storage and produce the same
       vocabularyLabel: workbook.vocabularyLabel,
       fields: workbook.metadataAttributes.filter((field) => field.role !== "vocabulary").map((field) => field.presetKey ? { ...field, active: /^example_sentence_[1-5]$/.test(field.presetKey), label: field.presetKey === "example_sentence_1" ? "Usage" : field.label } : field),
     });
-    let state = update(createInitialState(workbook), { type: "commandSubmitted", raw: "/add" }).state;
     const original = "She lives {near the station}.";
-    for (const value of ["near", "not far", ...Array(4).fill(original)]) state = update(state, { type: "addFieldSubmitted", value }).state;
-    const add = update(state, { type: "addFieldSubmitted", value: original }).effects[0];
-    assert.equal(add.type, "addEntry");
-    if (add.type !== "addEntry") throw new Error("Expected add effect");
-    const entry = repository.addEntry(add.workbookId, add.vocabulary, add.meanings[0], add.meanings, add.attributes, add.tagIds);
+    let state = createAddDetailEditor(workbook);
+    for (const value of ["near", "not far", ...Array(5).fill(original)]) {
+      state = updateDetailEditor(state, { type: "change", value }, workbook, []);
+      state = updateDetailEditor(state, { type: "move", delta: 1 }, workbook, []);
+    }
+    state = updateDetailEditor(state, { type: "exit" }, workbook, []);
+    state = saveDetailEditor(state, workbook, (draft) => repository.addEntry(workbook.id, draft.vocabulary, draft.meanings[0], draft.meanings, draft.attributes, draft.tagIds));
+    assert.ok(state.original);
+    const entry = state.original;
     for (let index = 1; index <= 5; index++) assert.equal(entry.attributes[`example_sentence_${index}`], original);
     let editor = createDetailEditor(entry, true);
     assert.equal(editor.draft.attributes.example_sentence_1, original);
@@ -96,6 +98,7 @@ test("add, edit, and import keep sentence braces in storage and produce the same
     editor = saveDetailEditor(editor, workbook, (draft, options) => repository.updateEntry(entry.id, draft.vocabulary, draft.meanings[0], draft.meanings, draft.attributes, draft.tagIds, options));
     assert.equal(editor.mode, "view");
     const edited = editor.original;
+    assert.ok(edited);
     for (let index = 1; index <= 5; index++) assert.equal(edited.attributes[`example_sentence_${index}`], changed);
     const expected = buildDetailSections(workbook, edited, []).attributes;
     assert.ok(expected.every((field) => field.spans?.some((span) => span.highlight)));

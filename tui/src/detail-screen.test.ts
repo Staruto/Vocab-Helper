@@ -165,6 +165,56 @@ test("detail page keyboard flow preserves carets and drafts, owns navigation, an
     rendered = await key("\r", /Ctrl\+E edit/);
     assert.match(stripVTControlCharacters(rendered), /Tests:\s+0/);
     assert.match(stripVTControlCharacters(rendered), /Tier:\s+Gray/);
+    // Creation uses the same editor and does not insert on blank exit or discard.
+    await key("\x1b", /Page 1\/1/);
+    output = ""; child.send({ width: 80, height: 40 });
+    await frame(/Page 1\/1/);
+    await key("/add", /\/add/);
+    rendered = await key("\r", /New Vocabulary/);
+    assertSelectedRow(rendered, "Word", true);
+    assert.match(stripVTControlCharacters(rendered), /Tests:\s+0/);
+    assert.match(stripVTControlCharacters(rendered), /Last tested:\s+Never/);
+    await key("\x1b", /Page 1\/1/);
+    await key("/add", /\/add/);
+    await key("\r", /New Vocabulary/);
+    await key("discarded", /Word:\s+discarded/);
+    rendered = await key("\x13", /Unsaved vocabulary changes/);
+    assert.doesNotMatch(stripVTControlCharacters(rendered), /Test Data/);
+    assert.equal((stripVTControlCharacters(rendered).match(/Changes/g) ?? []).length, 2);
+    await key(down, /> Discard Changes/);
+    await key("\r", /Page 1\/1/);
+    await key("/add", /\/add/);
+    await key("\r", /New Vocabulary/);
+    await key("created", /Word:\s+created/);
+    stdin.write("\x1b[C"); await delay(70); // Entry navigation stays disabled without repainting.
+    await key("\x13", /Unsaved vocabulary changes/);
+    rendered = await key("\r", /Meaning is required/);
+    assertSelectedRow(rendered, "Meaning", true);
+    await key("new meaning", /Meaning:\s+new meaning/);
+    await key(down, /Other meaning:/);
+    await key("alternate", /Other meaning:\s+alternate/);
+    await key(up, /Meaning:\s+new meaning/);
+    await key("!", /Meaning:\s+new meaning!/);
+    for (let index = 0; index < 5; index++) await key(down, /rows/);
+    await key("\r", /Select tags/);
+    await key(" ", /one/);
+    await key("\x13", /Unsaved vocabulary changes/);
+    await key(down, /> Discard Changes/);
+    await key(down, /> Continue Editing/);
+    rendered = await key("\r", /Labels:\s+\[one\]/);
+    assertSelectedRow(rendered, "Labels", false);
+    await key("\x13", /Unsaved vocabulary changes/);
+    rendered = await key("\r", /Ctrl\+E edit/);
+    assert.match(stripVTControlCharacters(rendered), /Word:\s+created/);
+    assert.match(stripVTControlCharacters(rendered), /Other meaning:\s+alternate/);
+    await key("\x05", /rows/);
+    await key("!", /Word:\s+created!/);
+    rendered = await key("\x13", /Unsaved vocabulary changes/);
+    assert.match(stripVTControlCharacters(rendered), /Save Changes \(Preserve Test Data\)/);
+    await key("\r", /Ctrl\+E edit/); // The created entry is updated rather than inserted again.
+    await key("\x1b[D", /Word:\s+second/);
+    await key("\x1b[C", /Word:\s+created!/);
+    await key("\x1b", /Page 1\/1/);
     assert.equal(stderr, "");
     const verify = new VocabularyRepository(path);
     try {
@@ -176,6 +226,10 @@ test("detail page keyboard flow preserves carets and drafts, owns navigation, an
       assert.equal(saved.tier, "gray");
       assert.equal(verify.listEntries(workbook.id)[1].vocabulary, "second");
       assert.deepEqual(verify.listDailyPractice(workbook.id), historyBefore);
+      assert.equal(verify.listEntries(workbook.id).length, 3);
+      const created = verify.listEntries(workbook.id).find((item) => item.vocabulary === "created!")!;
+      assert.deepEqual(created.meanings, ["new meaning!", "alternate"]);
+      assert.deepEqual(created.tags.map((tag) => tag.id), [types[0].tags[0].id]);
     } finally { verify.close(); }
   } finally {
     if (child.exitCode === null && child.signalCode === null) {

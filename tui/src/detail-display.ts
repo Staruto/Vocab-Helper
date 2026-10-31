@@ -7,7 +7,8 @@ import { parseExampleSentence, StyledTextSpan } from "./styled-text.js";
 
 export type DetailField = { key: string; value: string; similarWords?: SimilarWord[]; spans?: StyledTextSpan[] };
 
-export function buildReviewFields(entry: EntryRow): DetailField[] {
+export function buildReviewFields(savedEntry: Pick<EntryRow, "testCount" | "errorCount" | "tier" | "lastTested" | "nextTestDeadline"> | null): DetailField[] {
+  const entry = savedEntry ?? { testCount: 0, errorCount: 0, tier: "gray", lastTested: null, nextTestDeadline: null };
   return [
     { key: "Tests", value: String(entry.testCount) },
     { key: "Errors", value: String(entry.errorCount) },
@@ -23,7 +24,7 @@ export type DetailSections = {
   tags: VisibleTagGroup[];
 };
 
-export function buildDetailSections(workbook: WorkbookRow, entry: EntryRow, tagTypes: TagType[]): DetailSections {
+export function buildDetailSections(workbook: WorkbookRow, entry: Pick<EntryRow, "meanings" | "attributes" | "tags">, tagTypes: TagType[]): DetailSections {
   const meanings = entry.meanings.map((value, index) => ({
     key: workbook.meaningAttributes[index]?.label ?? `Meaning ${index + 1}`,
     value: value.trim() || "—",

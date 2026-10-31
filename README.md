@@ -33,7 +33,9 @@ npm run build
 npm run start
 ```
 
-## Viewing and editing entries
+## Adding, viewing, and editing entries
+
+Use `/add` to open a blank **New Vocabulary** draft in the detail editor, starting on the vocabulary row. Fill in the vocabulary and primary meaning; other meanings, active optional attributes, and tags are optional. Nothing is written until you confirm saving. Esc or Ctrl+S offers **Save Changes**, **Discard Changes**, or **Continue Editing** when the draft has changes. An unchanged blank draft or discarded draft returns to the vocabulary list. Saving opens the new entry in detail view; validation or save errors keep the draft available for correction.
 
 Use `/view <id>` to open entry details. The vocabulary appears as both the title and the first labeled row under a Vocabulary section heading. Left/Right opens the previous/next entry; Ctrl+E enters edit mode. `/edit <id>` opens details directly in edit mode; `/edit` prompts for an ID.
 

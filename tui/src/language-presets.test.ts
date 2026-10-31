@@ -1,3 +1,4 @@
+import { createAddDetailEditor, detailEditRows, saveDetailEditor, updateDetailEditor } from "./detail-editor.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -11,7 +12,6 @@ import { assertDatabaseIntegrity, runSchemaMigrations, SCHEMA_MIGRATIONS } from 
 import { buildDetailSections } from "./detail-display.js";
 import { filterEntriesForSearch } from "./search.js";
 import { parseLabeledTextImport } from "./import.js";
-import { createInitialState, update } from "./orchestration.js";
 
 function configuration(workbook: WorkbookRow): WorkbookConfigurationInput {
   return {
@@ -107,13 +107,16 @@ test("inactive presets leave prompts, detail, visible search, and import while a
     assert.equal(preview.entries[0].attributes.kana, undefined);
     assert.equal(preview.entries[0].attributes.example_sentence_1, "imported");
     assert.equal(preview.diagnostics.filter((diagnostic) => diagnostic.kind === "ignored-field").length, 1);
-    let state = update(createInitialState(workbook), { type: "commandSubmitted", raw: "/add" }).state;
-    state = update(state, { type: "addFieldSubmitted", value: "猫" }).state;
-    state = update(state, { type: "addFieldSubmitted", value: "cat" }).state;
-    assert.equal(state.mode.kind, "add");
-    assert.match(state.statusLines.join(" "), /Example Sentence 1/);
-    const transition = update(state, { type: "addFieldSubmitted", value: "example" });
-    assert.equal(transition.effects[0]?.type, "addEntry");
+    let state = createAddDetailEditor(workbook);
+    assert.deepEqual(detailEditRows(workbook, []).filter((row) => row.kind === "attribute").map((row) => row.label), ["Example Sentence 1"]);
+    for (const value of ["new word", "cat", "example"]) {
+      state = updateDetailEditor(state, { type: "change", value }, workbook, []);
+      state = updateDetailEditor(state, { type: "move", delta: 1 }, workbook, []);
+    }
+    state = updateDetailEditor(state, { type: "exit" }, workbook, []);
+    state = saveDetailEditor(state, workbook, (draft) => repository.addEntry(workbook.id, draft.vocabulary, draft.meanings[0], draft.meanings, draft.attributes, draft.tagIds));
+    assert.ok(state.original);
+    assert.equal(state.original.attributes.example_sentence_1, "example");
   } finally { repository.close(); }
 });
 

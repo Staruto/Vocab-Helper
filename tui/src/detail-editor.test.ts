@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { VocabularyRepository } from "./db.js";
 import type { EntryRow, EntryUpdateOptions, TagType, WorkbookRow } from "./db.js";
-import { createDetailEditor, detailEditRows, detailEditorKeyAction, detailHasChanges, detailRowChanged, detailRowValue, saveDetailEditor, updateDetailEditor } from "./detail-editor.js";
+import { createAddDetailEditor, detailExitChoices, createDetailEditor, detailEditRows, detailEditorKeyAction, detailHasChanges, detailRowChanged, detailRowValue, saveDetailEditor, updateDetailEditor } from "./detail-editor.js";
 import type { DetailEditorAction, DetailEditorState } from "./detail-editor.js";
 
 const workbook: WorkbookRow = {
@@ -24,6 +24,105 @@ const entry: EntryRow = {
 };
 const rows = detailEditRows(workbook, tagTypes);
 const act = (state: DetailEditorState, action: DetailEditorAction) => updateDetailEditor(state, action, workbook, tagTypes);
+
+test("new drafts start blank, expose active rows, and leave without saving when empty or discarded", () => {
+  let state = createAddDetailEditor(workbook);
+  assert.equal(state.mode, "edit");
+  assert.equal(state.original, null);
+  assert.equal(state.selected, 0);
+  assert.deepEqual(state.draft, { vocabulary: "", meanings: ["", ""], attributes: { usage: "" }, tagIds: [] });
+  assert.deepEqual(detailExitChoices(state).map((choice) => choice.label), ["Save Changes", "Discard Changes", "Continue Editing"]);
+  assert.equal(detailExitChoices(createDetailEditor(entry)).length, 4);
+  assert.equal(detailHasChanges(state, workbook, tagTypes), false);
+  assert.equal(act(state, { type: "exit" }).mode, "cancelled");
+  state = act(state, { type: "change", value: "new" });
+  assert.ok(detailRowChanged(state, rows[0], tagTypes));
+  const confirmation = act(state, { type: "exit" });
+  assert.equal(confirmation.mode, "confirm");
+  assert.equal(act(confirmation, { type: "moveChoice", delta: -1 }).exitChoice, 2);
+  assert.equal(act(confirmation, { type: "discard" }).mode, "cancelled");
+  assert.equal(act(confirmation, { type: "continue" }).draft.vocabulary, "new");
+  state = act(state, { type: "change", value: "" });
+  assert.equal(detailHasChanges(state, workbook, tagTypes), false);
+});
+
+test("creation validates required rows and preserves drafts on failure for retry", () => {
+  let state = act(createAddDetailEditor(workbook), { type: "move", delta: 1 });
+  state = act(state, { type: "change", value: "meaning" });
+  let writes = 0;
+  const fail = () => { writes++; throw new Error("Save failed"); };
+  state = saveDetailEditor(act(state, { type: "exit" }), workbook, fail);
+  assert.equal(state.selected, 0);
+  assert.match(state.error, /Vocabulary is required/);
+  assert.equal(writes, 0);
+  state = act(state, { type: "change", value: "word" });
+  state = act(state, { type: "move", delta: 1 });
+  state = act(state, { type: "change", value: "" });
+  state = saveDetailEditor(act(state, { type: "exit" }), workbook, fail);
+  assert.equal(state.selected, 1);
+  assert.match(state.error, /Meaning is required/);
+  assert.equal(writes, 0);
+  state = act(state, { type: "change", value: "meaning" });
+  state = saveDetailEditor(act(state, { type: "exit" }), workbook, fail);
+  assert.equal(writes, 1);
+  assert.equal(state.mode, "edit");
+  assert.equal(state.draft.vocabulary, "word");
+  assert.equal(state.draft.meanings[0], "meaning");
+  assert.equal(state.error, "Save failed");
+  state = saveDetailEditor(act(state, { type: "exit" }), workbook, (draft) => ({ ...entry, ...draft, tags: [] }));
+  assert.equal(state.mode, "view");
+  assert.ok(state.original);
+});
+
+test("new drafts stage tags and insert only on confirmation, then become existing-entry editors", () => {
+  const repository = new VocabularyRepository(":memory:");
+  try {
+    const workbook = repository.createConfiguredWorkbook({
+      name: "Empty", vocabularyKind: "non_language", vocabularyLabel: "Word", vocabularyLanguageCode: null,
+      meaningAttributes: [{ position: 1, label: "Meaning", languageCode: null }],
+      optionalAttributes: [], presetAttributes: [],
+      tagTypes: [{ name: "Labels", visible: true, tags: [{ name: "one" }] }],
+    });
+    const types = repository.listTagTypes(workbook.id);
+    const update = (state: DetailEditorState, action: DetailEditorAction) => updateDetailEditor(state, action, workbook, types);
+    let state = createAddDetailEditor(workbook);
+    let writes = 0;
+    const insert = (draft: DetailEditorState["draft"]) => {
+      writes++;
+      return repository.addEntry(workbook.id, draft.vocabulary, draft.meanings[0], draft.meanings, draft.attributes, draft.tagIds);
+    };
+    state = update(state, { type: "change", value: " word " });
+    state = update(state, { type: "move", delta: 1 });
+    state = update(state, { type: "change", value: " meaning " });
+    state = update(state, { type: "move", delta: 1 });
+    state = update(state, { type: "openTags" });
+    state = update(state, { type: "toggleTag" });
+    assert.equal(repository.listEntries(workbook.id).length, 0);
+    assert.equal(saveDetailEditor(state, workbook, insert), state);
+    state = update(state, { type: "exit" });
+    assert.deepEqual(state.draft.tagIds, [types[0].tags[0].id]);
+    state = saveDetailEditor(state, workbook, insert);
+    assert.equal(state.mode, "view");
+    assert.ok(state.original);
+    assert.equal(state.original.vocabulary, "word");
+    assert.equal(state.original.meaning, "meaning");
+    assert.equal(state.original.testCount, 0);
+    assert.equal(state.original.tier, "gray");
+    assert.equal(state.original.lastTested, null);
+    assert.equal(state.original.nextTestDeadline, null);
+    assert.equal(saveDetailEditor(state, workbook, insert), state);
+    assert.equal(writes, 1);
+    const id = state.original.id;
+    state = update(state, { type: "begin" });
+    assert.equal(detailExitChoices(state).length, 4);
+    state = update(state, { type: "change", value: "updated" });
+    state = saveDetailEditor(update(state, { type: "exit" }), workbook, (draft, options) =>
+      repository.updateEntry(id, draft.vocabulary, draft.meanings[0], draft.meanings, draft.attributes, draft.tagIds, options));
+    assert.equal(repository.listEntries(workbook.id).length, 1);
+    assert.equal(state.original?.id, id);
+    assert.equal(state.original?.vocabulary, "updated");
+  } finally { repository.close(); }
+});
 
 test("editing starts on vocabulary, includes hidden and empty tag types, and never selects Review or inactive attributes", () => {
   const initial = createDetailEditor(entry);
@@ -173,6 +272,7 @@ for (const preserveTestData of [true, false]) {
       if (!preserveTestData) state = update(state, { type: "moveChoice", delta: 1 });
       state = saveDetailEditor(state, workbook, write);
       assert.equal(state.mode, "view");
+      assert.ok(state.original);
       assert.equal(state.original.vocabulary, "changed");
       assert.equal(state.original.tier, preserveTestData ? original.tier : "gray");
       assert.equal(state.original.testCount, preserveTestData ? original.testCount : 0);
