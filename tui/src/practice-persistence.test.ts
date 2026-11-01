@@ -45,10 +45,12 @@ test("real practice stages answers, discards cancellation, and saves on the comp
     assert.deepEqual(repository.getEntry(first.id), first);
     await dispatch({ type: "practiceStarted", candidates: [first, second] });
     await dispatch({ type: "practiceAnswerSubmitted", answer: "wrong" });
+    await dispatch({ type: "practiceDetailRequested" });
     await dispatch({ type: "practiceDetailContinued" });
     await dispatch({ type: "practiceAnswerSubmitted", answer: "second" });
     await dispatch({ type: "practiceRetryAdvanced" });
     await dispatch({ type: "practiceAnswerSubmitted", answer: "wrong" });
+    await dispatch({ type: "practiceDetailRequested" });
     await dispatch({ type: "practiceDetailContinued" });
     await dispatch({ type: "practiceAnswerSubmitted", answer: "first" });
     assert.deepEqual(repository.getEntry(first.id), first);

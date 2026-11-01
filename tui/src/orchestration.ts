@@ -85,6 +85,7 @@ export type Intent =
   | { type: "practiceMeaningCycled" }
   | { type: "practiceAnswerChanged"; answer: string }
   | { type: "practiceAnswerSubmitted"; answer: string }
+  | { type: "practiceAnswerRetried" }
   | { type: "practiceRetryAdvanced" }
   | { type: "practiceDetailRequested" }
   | { type: "practiceDetailContinued" }
@@ -209,15 +210,25 @@ export function update(state: OrchestrationState, intent: Intent): Transition {
     const existing = p.results.find((result) => result.entryId === p.currentEntry!.id);
     const result = { entryId: p.currentEntry.id, answers: [...(existing?.answers ?? []), isCorrect] };
     const results = existing ? p.results.map((item) => item.entryId === result.entryId ? result : item) : [...p.results, result];
-    return { state: { ...state, commandBuffer: isCorrect ? intent.answer : "", practice: {
-      ...p, results, phase: isCorrect ? p.phase : "detail", detailSourcePhase: p.phase,
-      feedback: isCorrect ? "Correct!" : null,
+    return { state: { ...state, commandBuffer: intent.answer, practice: {
+      ...p, results,
+      feedback: isCorrect ? "Correct!" : "Incorrect!",
       score: p.score + (p.phase === "initial" && isCorrect ? 1 : 0),
     } }, effects: [] };
   }
+  if (intent.type === "practiceAnswerRetried") {
+    const p = state.practice;
+    if ((p.phase !== "initial" && p.phase !== "retry") || p.feedback !== "Incorrect!" || !p.currentEntry) return { state, effects: [] };
+    const results = p.results.flatMap((result) => {
+      if (result.entryId !== p.currentEntry!.id) return [result];
+      const answers = result.answers.slice(0, -1);
+      return answers.length ? [{ ...result, answers }] : [];
+    });
+    return { state: { ...state, commandBuffer: "", practice: { ...p, results, feedback: null } }, effects: [] };
+  }
   if (intent.type === "practiceDetailRequested") {
     const p = state.practice;
-    if ((p.phase !== "initial" && p.phase !== "retry") || p.feedback !== "Correct!" || !p.currentEntry) return { state, effects: [] };
+    if ((p.phase !== "initial" && p.phase !== "retry") || p.feedback === null || !p.currentEntry) return { state, effects: [] };
     return { state: { ...state, practice: { ...p, phase: "detail", detailSourcePhase: p.phase } }, effects: [] };
   }
   if (intent.type === "practiceSaveRetried") {

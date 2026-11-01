@@ -69,6 +69,7 @@ function session(count: number, sessionWorkbook = workbook) {
       await dispatch({ type: "practiceAnswerSubmitted", answer: value });
     },
     async continue() {
+      if (state.practice.feedback === "Incorrect!" && state.practice.phase !== "detail") await dispatch({ type: "practiceDetailRequested" });
       await dispatch({ type: state.practice.phase === "detail" ? "practiceDetailContinued" : "practiceRetryAdvanced" });
     },
   };
@@ -130,7 +131,8 @@ test("a mistake on the final initial question starts a retry that terminates", a
   await s.answer("word1");
   await s.continue();
   await s.answer("wrong");
-  assert.equal(s.state.practice.phase, "detail");
+  assert.equal(s.state.practice.phase, "initial");
+  assert.equal(s.state.practice.feedback, "Incorrect!");
   assert.equal(s.state.practice.currentEntry?.id, 2);
   await s.continue();
   assert.deepEqual(s.state.practice.retryRound.map((item) => item.id), [2]);
@@ -166,7 +168,8 @@ test("answers are exact after trimming surrounding whitespace", async () => {
   assert.equal(s.state.practice.feedback, "Correct!");
   await s.continue();
   await s.answer("Word2");
-  assert.equal(s.state.practice.phase, "detail");
+  assert.equal(s.state.practice.phase, "initial");
+  assert.equal(s.state.practice.feedback, "Incorrect!");
   assert.equal(s.state.practice.score, 1);
 });
 
@@ -221,14 +224,67 @@ for (const round of ["initial", "retry"] as const) {
   });
 }
 
-test("detail requests are ignored outside correct feedback", () => {
+test("detail requests are ignored outside answer feedback", () => {
   const initial = update(createInitialState(workbook), { type: "practiceStarted", candidates: [entry(1)] }).state;
-  const incorrect = update(initial, { type: "practiceAnswerSubmitted", answer: "wrong" }).state;
-  for (const state of [initial, incorrect, ...(["loading", "empty", "saving", "saveFailed", "done"] as const).map((phase) => ({ ...initial, practice: { ...initial.practice, phase } }))]) {
+  for (const state of [initial, ...(["loading", "empty", "detail", "saving", "saveFailed", "done"] as const).map((phase) => ({ ...initial, practice: { ...initial.practice, phase } }))]) {
     const transition = update(state, { type: "practiceDetailRequested" });
     assert.equal(transition.state, state);
     assert.deepEqual(transition.effects, []);
   }
+});
+
+for (const round of ["initial", "retry"] as const) {
+  test(`wrong ${round} answers can be replaced repeatedly without changing accepted history`, async () => {
+    const s = session(1, multipleMeaningsWorkbook);
+    await s.start();
+    if (round === "retry") { await s.answer("wrong"); await s.continue(); }
+    await s.dispatch({ type: "practiceMeaningCycled" });
+    const before = s.state;
+    for (let i = 0; i < 3; i++) {
+      await s.answer("mistake");
+      assert.equal(s.state.practice.phase, round);
+      assert.equal(s.state.practice.feedback, "Incorrect!");
+      assert.equal(s.state.commandBuffer, "mistake");
+      const feedback = s.state;
+      for (const intent of [
+        { type: "practiceAnswerChanged", answer: "edited" },
+        { type: "practiceAnswerSubmitted", answer: "word1" },
+        { type: "practiceMeaningCycled" },
+        { type: "practiceRetryAdvanced" },
+        { type: "practiceDetailContinued" },
+      ] satisfies Intent[]) {
+        await s.dispatch(intent);
+        assert.equal(s.state, feedback);
+      }
+      await s.dispatch({ type: "practiceAnswerRetried" });
+      assert.deepEqual(s.state, { ...before, commandBuffer: "" });
+      assert.equal(s.saves, 0);
+    }
+    await s.answer("word1");
+    assert.equal(s.state.practice.score, round === "initial" ? 1 : 0);
+    assert.deepEqual(s.state.practice.results, [{ entryId: 1, answers: round === "initial" ? [true] : [false, true] }]);
+    await s.continue();
+    assert.equal(s.state.practice.phase, "done");
+    assert.equal(s.saves, 1);
+    assert.equal(s.entries[0].testCount, round === "initial" ? 1 : 2);
+    assert.equal(s.entries[0].errorCount, round === "initial" ? 1 : 3);
+  });
+}
+
+test("answer retry is ignored outside incorrect feedback", async () => {
+  const s = session(1);
+  await s.start();
+  const unanswered = s.state;
+  await s.dispatch({ type: "practiceAnswerRetried" });
+  assert.equal(s.state, unanswered);
+  await s.answer("word1");
+  const correct = s.state;
+  await s.dispatch({ type: "practiceAnswerRetried" });
+  assert.equal(s.state, correct);
+  await s.dispatch({ type: "practiceDetailRequested" });
+  const detail = s.state;
+  await s.dispatch({ type: "practiceAnswerRetried" });
+  assert.equal(s.state, detail);
 });
 
 test("empty candidates stay empty and ignore answer/advance intents", async () => {
