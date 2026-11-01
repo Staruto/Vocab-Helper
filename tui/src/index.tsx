@@ -1843,11 +1843,11 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
     const latest = controller.current?.getState();
     if (latest?.practice.phase === "saving") return;
     if (key.ctrl && input === "c") return leave(onQuit);
-    if (key.escape) return leave(onCancel);
     if (latest?.practice.phase === "detail") {
-      if (key.return) dispatch({ type: "practiceDetailContinued" });
+      if (key.return || key.escape) dispatch({ type: "practiceDetailContinued" });
       return;
     }
+    if (key.escape) return leave(onCancel);
     if (!latest) return;
     const p = latest.practice;
     if (p.phase === "loading") return;
@@ -1864,7 +1864,7 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
   if (practice.phase === "done") return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice - ${workbook.name}`, width)}</Text><Text>{padLine("", width)}</Text><Text color="green">{padLine(`Final initial-round score: ${practice.score}/${practice.candidates.length}`, width)}</Text><Text>{padLine("Press Enter to return.", width)}</Text></Box>;
   if (practice.phase === "detail" && current) return <Box flexDirection="column">
     <EntryDetails workbook={workbook} entry={current} tagTypes={tagTypes} width={width} />
-    <Text color={AUXILIARY_TEXT_COLOR}>{centerLine("Enter returns to practice | Esc cancels", width)}</Text>
+    <Text color={AUXILIARY_TEXT_COLOR}>{centerLine("Enter / Esc returns to practice", width)}</Text>
   </Box>;
   const roundLabel = practice.phase === "retry" ? `Retry round ${practice.retryNumber} - Question ${practice.index + 1}/${practice.retryRound.length}` : `Question ${practice.index + 1}/${practice.candidates.length}`;
   const visibleTagGroups = current ? visibleAssignedTagGroups(current, tagTypes) : [];
