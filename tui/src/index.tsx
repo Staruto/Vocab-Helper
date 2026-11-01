@@ -60,7 +60,7 @@ type ParameterizedCommand = "edit" | "delete";
 type LanguagePreset = { code: string; label: string };
 
 const PAGE_SIZE = 20;
-const TITLE = "VocabHelper 3.6.0";
+const TITLE = "VocabHelper 3.7.0";
 const AUXILIARY_TEXT_COLOR = "#8a8a8a"; // light gray
 const GRAY_TIER_COLOR = "#777777"; // medium gray
 const SELECTED_TEXT_COLOR = "#cea8ff";
@@ -793,7 +793,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
         <Box width={searchBoxWidth} borderStyle="single" borderColor={inputFocus === "search" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}>
           <CaretInputLine prefix="Search: " value={searchDraft} onChange={setSearchDraft} width={Math.max(1, searchBoxWidth - 4)} color="white" focus={mode.kind === "command" && inputFocus === "search"} inputKey="workbook-search" />
         </Box>
-        <Box width={footerRightWidth}><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footerHint, footerRightWidth)}</Text></Box>
+        <Box width={footerRightWidth}><Text color={AUXILIARY_TEXT_COLOR} italic>{rightLine(footerHint, footerRightWidth)}</Text></Box>
       </Box>
       <Text>{padLine("", width)}</Text>
       <Text>{padLine("", width)}</Text>
@@ -1780,7 +1780,7 @@ function EntryViewScreen({ workbook, entryId, editing = false, onCreated, onNavi
       <Text>{padLine("", width)}</Text>
       {type.tags.length ? type.tags.slice(first, first + viewport).map((tag, index) => <Text key={tag.id} color={first + index === picker.cursor ? "black" : "white"} backgroundColor={first + index === picker.cursor ? "white" : undefined}>{padLine(`${first + index === picker.cursor ? ">" : " "} [${picker.tagIds.includes(tag.id) ? "●" : " "}] ${tag.name}`, width)}</Text>) : <Text color={AUXILIARY_TEXT_COLOR}>{padLine("No tags configured for this type.", width)}</Text>}
       <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`${first > 0 ? "↑ more above" : ""}${first + viewport < type.tags.length ? "  ↓ more below" : ""}`, width)}</Text>
-      <Text color={AUXILIARY_TEXT_COLOR} italic>{padLine("↑↓ select | Space toggle | Enter stage | Esc cancel | Ctrl+S exit", width)}</Text>
+      <Text color={AUXILIARY_TEXT_COLOR} italic>{padLine("↑↓ select | Space toggle | Enter stage and back | Esc cancel | Ctrl+S exit", width)}</Text>
     </Box>;
   }
   if (editor.mode === "edit") return <Box flexDirection="column">
