@@ -190,6 +190,47 @@ for (const round of ["initial", "retry"] as const) {
   });
 }
 
+for (const round of ["initial", "retry"] as const) {
+  test(`correct ${round} answers can open details and advance without extra retries or answers`, async () => {
+    const s = session(2);
+    await s.start();
+    if (round === "retry") {
+      for (let i = 0; i < 2; i++) { await s.answer("wrong"); await s.continue(); }
+    }
+    for (let id = 1; id <= 2; id++) {
+      await s.answer(`word${id}`);
+      const before = s.state;
+      await s.dispatch({ type: "practiceDetailRequested" });
+      assert.deepEqual(s.state, { ...before, practice: { ...before.practice, phase: "detail", detailSourcePhase: round } });
+      assert.equal(s.saves, 0);
+      await s.dispatch({ type: "practiceDetailRequested" });
+      await s.answer("wrong");
+      assert.deepEqual(s.state.practice.results, before.practice.results);
+      await s.continue();
+      if (id === 1) {
+        assert.equal(s.state.practice.phase, round);
+        assert.equal(s.state.practice.currentEntry?.id, 2);
+        assert.equal(s.state.commandBuffer, "");
+        assert.deepEqual(s.state.practice.nextRetryRound, []);
+      }
+    }
+    assert.equal(s.state.practice.phase, "done");
+    assert.equal(s.state.practice.score, round === "initial" ? 2 : 0);
+    assert.equal(s.saves, 1);
+    assert.equal(s.records.length, round === "initial" ? 2 : 4);
+  });
+}
+
+test("detail requests are ignored outside correct feedback", () => {
+  const initial = update(createInitialState(workbook), { type: "practiceStarted", candidates: [entry(1)] }).state;
+  const incorrect = update(initial, { type: "practiceAnswerSubmitted", answer: "wrong" }).state;
+  for (const state of [initial, incorrect, ...(["loading", "empty", "saving", "saveFailed", "done"] as const).map((phase) => ({ ...initial, practice: { ...initial.practice, phase } }))]) {
+    const transition = update(state, { type: "practiceDetailRequested" });
+    assert.equal(transition.state, state);
+    assert.deepEqual(transition.effects, []);
+  }
+});
+
 test("empty candidates stay empty and ignore answer/advance intents", async () => {
   const s = session(0);
   await s.start();

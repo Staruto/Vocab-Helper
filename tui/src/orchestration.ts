@@ -86,6 +86,7 @@ export type Intent =
   | { type: "practiceAnswerChanged"; answer: string }
   | { type: "practiceAnswerSubmitted"; answer: string }
   | { type: "practiceRetryAdvanced" }
+  | { type: "practiceDetailRequested" }
   | { type: "practiceDetailContinued" }
   | { type: "practiceSaveRetried" }
   | { type: "practiceSessionSaved"; requestId: number; entries: EntryRow[] }
@@ -214,6 +215,11 @@ export function update(state: OrchestrationState, intent: Intent): Transition {
       score: p.score + (p.phase === "initial" && isCorrect ? 1 : 0),
     } }, effects: [] };
   }
+  if (intent.type === "practiceDetailRequested") {
+    const p = state.practice;
+    if ((p.phase !== "initial" && p.phase !== "retry") || p.feedback !== "Correct!" || !p.currentEntry) return { state, effects: [] };
+    return { state: { ...state, practice: { ...p, phase: "detail", detailSourcePhase: p.phase } }, effects: [] };
+  }
   if (intent.type === "practiceSaveRetried") {
     return state.practice.phase === "saveFailed" ? savePracticeSession(state) : { state, effects: [] };
   }
@@ -226,9 +232,10 @@ export function update(state: OrchestrationState, intent: Intent): Transition {
   if (intent.type === "practiceDetailContinued" || intent.type === "practiceRetryAdvanced") {
     const p = state.practice;
     if (!p.currentEntry) return { state, effects: [] };
-    const incorrect = intent.type === "practiceDetailContinued";
-    if (incorrect ? p.phase !== "detail" : ((p.phase !== "initial" && p.phase !== "retry") || p.feedback !== "Correct!")) return { state, effects: [] };
-    const source = incorrect ? p.detailSourcePhase : p.phase === "retry" ? "retry" : "initial";
+    const fromDetail = intent.type === "practiceDetailContinued";
+    if (fromDetail ? p.phase !== "detail" : ((p.phase !== "initial" && p.phase !== "retry") || p.feedback !== "Correct!")) return { state, effects: [] };
+    const source = fromDetail ? p.detailSourcePhase : p.phase === "retry" ? "retry" : "initial";
+    const incorrect = fromDetail && p.feedback !== "Correct!";
     // Only the incorrect-answer detail screen adds an entry to the next round.
     const queued = incorrect ? [...p.nextRetryRound, p.currentEntry] : p.nextRetryRound;
     const round = source === "initial" ? p.candidates : p.retryRound;

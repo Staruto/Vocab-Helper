@@ -1854,7 +1854,11 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
     if (p.phase === "saveFailed") { if (key.return) dispatch({ type: "practiceSaveRetried" }); return; }
     if (p.phase === "empty") { if (key.return) leave(onCancel); return; }
     if (p.phase === "done") { if (key.return) leave(() => onDone(p.score, p.candidates.length)); return; }
-    if (p.feedback !== null) { if (key.return) dispatch({ type: "practiceRetryAdvanced" }); return; }
+    if (p.feedback !== null) {
+      if (key.return) dispatch({ type: "practiceRetryAdvanced" });
+      else if (key.tab && !key.shift) dispatch({ type: "practiceDetailRequested" });
+      return;
+    }
     if (key.tab) { if (!key.shift) dispatch({ type: "practiceMeaningCycled" }); return; }
     if (key.return) dispatch({ type: "practiceAnswerSubmitted", answer: latest.commandBuffer });
   });
@@ -1868,7 +1872,8 @@ function PracticeScreen({ workbook, count, onCancel, onQuit, onDone }: { workboo
   </Box>;
   const roundLabel = practice.phase === "retry" ? `Retry round ${practice.retryNumber} - Question ${practice.index + 1}/${practice.retryRound.length}` : `Question ${practice.index + 1}/${practice.candidates.length}`;
   const visibleTagGroups = current ? visibleAssignedTagGroups(current, tagTypes) : [];
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice - ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(roundLabel, width)}</Text><Text>{padLine("", width)}</Text><Text>{padLine(`${workbook.meaningAttributes[practice.meaningIndex]?.label ?? "Primary Meaning"}: ${current?.meanings[practice.meaningIndex] || "-"}`, width)}</Text>{visibleTagGroups.map((group) => <PracticeTagLine key={group.typeId} typeName={group.typeName} tagNames={group.tagNames} width={width} />)}<Text>{padLine("", width)}</Text><CaretInputLine key={`${practice.phase}-${practice.index}-${practice.retryNumber}`} prefix="Answer: " value={orchestration.commandBuffer} onChange={(answer) => dispatch({ type: "practiceAnswerChanged", answer })} width={width} focus={practice.feedback === null} inputKey={`${practice.phase}-${practice.index}-${practice.retryNumber}`} /><Text>{padLine("", width)}</Text><Text color={practice.error ? "red" : "green"}>{padLine(practice.error ?? practice.feedback ?? "", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Tab cycle meanings | Enter submits | Esc cancels", width)}</Text></Box>;
+  const practiceHint = practice.feedback === "Correct!" ? "Tab view details | Enter continues | Esc cancels" : "Tab cycle meanings | Enter submits | Esc cancels";
+  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Practice - ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine(roundLabel, width)}</Text><Text>{padLine("", width)}</Text><Text>{padLine(`${workbook.meaningAttributes[practice.meaningIndex]?.label ?? "Primary Meaning"}: ${current?.meanings[practice.meaningIndex] || "-"}`, width)}</Text>{visibleTagGroups.map((group) => <PracticeTagLine key={group.typeId} typeName={group.typeName} tagNames={group.tagNames} width={width} />)}<Text>{padLine("", width)}</Text><CaretInputLine key={`${practice.phase}-${practice.index}-${practice.retryNumber}`} prefix="Answer: " value={orchestration.commandBuffer} onChange={(answer) => dispatch({ type: "practiceAnswerChanged", answer })} width={width} focus={practice.feedback === null} inputKey={`${practice.phase}-${practice.index}-${practice.retryNumber}`} /><Text>{padLine("", width)}</Text><Text color={practice.error ? "red" : "green"}>{padLine(practice.error ?? practice.feedback ?? "", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(practiceHint, width)}</Text></Box>;
 }
 
 function PracticeProfileScreen({ workbook, onCancel, onQuit }: { workbook: WorkbookRow; onCancel: () => void; onQuit: () => void }): JSX.Element {
