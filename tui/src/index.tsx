@@ -800,15 +800,21 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       <CaretInputLine key={textInputKey} prefix="> " value={buffer} onChange={setBuffer} width={width} focus={textInputActive} inputKey={textInputKey} />
       <Text>{padLine("", width)}</Text>
       {commandPaletteActive
-        ? suggestionLines.map((line, index) => (
-            <Text
-              key={`suggestion-${index}-${line.commandText}-${line.hintText}`}
-              color={index + commandSuggestionScrollOffset === commandSuggestionIndex ? SELECTED_TEXT_COLOR : undefined}
-            >
-              <Text color={index + commandSuggestionScrollOffset === commandSuggestionIndex ? SELECTED_TEXT_COLOR : "white"}>{index + commandSuggestionScrollOffset === commandSuggestionIndex ? "> " : "  "}{line.commandText}</Text>
-              <Text color={index + commandSuggestionScrollOffset === commandSuggestionIndex ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}> {line.hintText}</Text>
+        ? suggestionLines.map((line, index) => {
+          const isActive = index + commandSuggestionScrollOffset === commandSuggestionIndex;
+          return (
+            <Text key={`suggestion-${index}-${line.commandText}-${line.hintText}`} inverse={isActive}>
+              <Text bold color={isActive ? undefined : "white"}>
+                {isActive ? "> " : "  "}
+                {line.commandText}
+              </Text>
+              <Text color={isActive ? undefined : AUXILIARY_TEXT_COLOR}>
+                {" "}
+                {line.hintText}
+              </Text>
             </Text>
-          ))
+          );
+        })
         : null}
       {commandPaletteActive ? <Text>{padLine("", width)}</Text> : null}
       {!commandPaletteActive
