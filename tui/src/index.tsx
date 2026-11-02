@@ -1,4 +1,4 @@
-import { entryAttributes, isActiveAttribute, createPresetAttributes, isPresetActivationInput } from "./attributes.js";
+import { isActiveAttribute, createPresetAttributes } from "./attributes.js";
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, render, useApp, useInput, useStdout } from "ink";
 import { CreateWorkbookInput, EntryRow, LANGUAGE_PRESET_DEFINITIONS, MeaningAttribute, MetadataAttribute, TagDataLossError, TagType, TagTypeDraft, VocabularyKind, WorkbookAttributesDraft, WorkbookConfigurationInput, WorkbookDataLossError, WorkbookRow, WorkbookTagsDraft } from "./db.js";
@@ -1094,12 +1094,12 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
     if (!existingWorkbook && stage === "type" && (key.upArrow || key.downArrow)) { setTypeIndex((value) => key.upArrow ? (value <= 0 ? VOCABULARY_TYPES.length - 1 : value - 1) : (value + 1) % VOCABULARY_TYPES.length); return; }
     if (stage === "preset") {
       if (key.upArrow || key.downArrow) { setSelected((value) => Math.max(0, Math.min(presetAttributes.length - 1, value + (key.upArrow ? -1 : 1)))); return; }
-      if (isPresetActivationInput(input, key) || input === " ") {
-        const activation = isPresetActivationInput(input, key);
+      if (key.tab || input === " ") {
+        const activation = key.tab;
         setPresetAttributes((items) => items.map((field, index) => index !== selected ? field : activation ? { ...field, active: !isActiveAttribute(field) } : { ...field, visible: !field.visible })); return;
       }
       if (key.ctrl && input.toLowerCase() === "r" && presetAttributes[selected]) { setEditAction("rename"); setEditBuffer(presetAttributes[selected].label); return; }
-      if ((key.ctrl && input.toLowerCase() === "a") || key.delete) { setError("Preset attributes are fixed. T toggles activation."); return; }
+      if ((key.ctrl && input.toLowerCase() === "a") || key.delete) { setError("Preset attributes are fixed. Tab toggles activation."); return; }
     }
     if (stage === "pos" && (key.upArrow || key.downArrow || input === " ")) { setAddPosType((value) => !value); return; }
     if (stage === "meaning-count" && (key.upArrow || key.downArrow)) { setMeaningCount((value) => key.upArrow ? Math.min(5, value + 1) : Math.max(1, value - 1)); return; }
@@ -1127,7 +1127,7 @@ function WorkbookWizard({ existingWorkbook, onSave, onCancel, onQuit }: { existi
   let footer = "Enter next | Esc cancel";
   if (stage === "type") { description = existingWorkbook ? "The vocabulary type is fixed after workbook creation." : "Choose a vocabulary type with ↑↓. This selection is required."; footer = existingWorkbook ? "←/→ navigate questions | Esc cancel" : "↑↓ choose type | ←/→ navigate questions | Esc cancel"; }
   if (stage === "label") { description = "Choose the label users will see for vocabulary entries. You can edit the default."; footer = "←/→ to navigate questions | Enter next | Esc cancel"; }
-  if (stage === "preset") { description = "Select exclusive attributes to be active or inactive. You can change them later in Settings."; footer = "↑↓ select | T active/inactive | Space show/hide | Ctrl+R rename | → next"; }
+  if (stage === "preset") { description = "Select exclusive attributes to be active or inactive. You can change them later in Settings."; footer = "↑↓ select | Tab active/inactive | Space show/hide | Ctrl+R rename | → next"; }
   if (stage === "pos") { description = "Choose whether to add the Part of Speech tag type and its preset tags. After creation, manage it in Settings."; footer = "↑↓/Space toggle | ←/→ to navigate questions | Esc cancel"; }
   if (stage === "tags") { description = "Review and customize the Part of Speech tags for this workbook."; footer = "↑↓ select | Ctrl+A add | Ctrl+R rename | Del delete | ←/→ navigate"; }
   if (stage === "meaning-count") { description = "Choose how many meaning fields each vocabulary entry will have."; footer = "↑↓ choose number | ←/→ to navigate questions | Esc cancel"; }
@@ -1448,14 +1448,14 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
     if (key.ctrl && input.toLowerCase() === "p") { promoteSelectedMeaning(); return; }
     if (key.ctrl && input.toLowerCase() === "a") { beginAdd(); return; }
     if (key.ctrl && input.toLowerCase() === "r") { beginRename(); return; }
-    if (isPresetActivationInput(input, key)) { togglePreset(); return; }
+    if (key.tab) { togglePreset(); return; }
     if (input === " ") {
       if (selected.section === "vocabulary" || (selected.section === "meaning" && meanings[0] === selectedField)) { setMessage(selected.section === "vocabulary" ? "Vocabulary is always shown." : "The Primary Meaning is required and always shown."); return; }
       if (selectedField) setFields((current) => current.map((field) => field === selectedField ? { ...field, visible: !field.visible } : field));
       return;
     }
     if (key.delete) {
-      if (selected.section === "preset") { setMessage("Preset attributes cannot be removed. T toggles activation."); return; }
+      if (selected.section === "preset") { setMessage("Preset attributes cannot be removed. Tab toggles activation."); return; }
       if (selected.section === "vocabulary") { setMessage("Vocabulary cannot be deleted."); return; }
       if (!selectedField) return;
       if (selected.section === "meaning" && meanings[0] === selectedField) { setMessage("The Primary Meaning cannot be deleted."); return; }
@@ -1472,7 +1472,7 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
   }
 
   const meaningFooter = meanings[0] === selectedField ? "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Esc leave" : `↑↓ navigate | Ctrl+A add | Ctrl+R rename${selectedField?.id === undefined ? "" : " | Ctrl+P make primary"} | Space show/hide | Del remove | Esc leave`;
-  const footer = editAction !== "none" ? "Enter confirm | Esc cancel edit" : selected.section === "vocabulary" ? "↑↓ navigate | Ctrl+R rename | Esc leave" : selected.section === "meaning" ? meaningFooter : selected.section === "preset" ? "↑↓ select | T active/inactive | Ctrl+R rename | Space show/hide | Esc leave" : "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Space show/hide | Del remove | Esc leave";
+  const footer = editAction !== "none" ? "Enter confirm | Esc cancel edit" : selected.section === "vocabulary" ? "↑↓ navigate | Ctrl+R rename | Esc leave" : selected.section === "meaning" ? meaningFooter : selected.section === "preset" ? "↑↓ select | Tab active/inactive | Ctrl+R rename | Space show/hide | Esc leave" : "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Space show/hide | Del remove | Esc leave";
   const lines: Array<{ text: string; color?: string; borderColor?: string; bold?: boolean; selected?: boolean; inactiveLabel?: string }> = [];
   function group(section: AttributeSection, title: string, description: string, members: Array<{ field: MetadataAttribute; index: number }>): void {
     const borderColor = selected.section === section ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR;
