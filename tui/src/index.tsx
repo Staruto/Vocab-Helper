@@ -60,7 +60,7 @@ type ParameterizedCommand = "edit" | "delete";
 type LanguagePreset = { code: string; label: string };
 
 const PAGE_SIZE = 20;
-const TITLE = "VocabHelper 3.7.0";
+const TITLE = "VocabHelper 3.7.1";
 const AUXILIARY_TEXT_COLOR = "#8a8a8a"; // light gray
 const GRAY_TIER_COLOR = "#777777"; // medium gray
 const SELECTED_TEXT_COLOR = "#cea8ff";
@@ -801,11 +801,12 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       <Text>{padLine("", width)}</Text>
       {commandPaletteActive
         ? suggestionLines.map((line, index) => {
-          const isActive = index + commandSuggestionScrollOffset === commandSuggestionIndex;
+          const hasCommands = commandSuggestions.length > 0;
+          const isActive = hasCommands && index + commandSuggestionScrollOffset === commandSuggestionIndex;
           return (
             <Text key={`suggestion-${index}-${line.commandText}-${line.hintText}`} inverse={isActive}>
-              <Text bold color={isActive ? undefined : "white"}>
-                {isActive ? "> " : "  "}
+              <Text bold={hasCommands} color={!hasCommands ? AUXILIARY_TEXT_COLOR : isActive ? undefined : "white"}>
+                {hasCommands ? (isActive ? "> " : "  ") : ""}
                 {line.commandText}
               </Text>
               <Text color={isActive ? undefined : AUXILIARY_TEXT_COLOR}>
