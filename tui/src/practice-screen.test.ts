@@ -57,12 +57,14 @@ test("Tab opens correct-answer details and Esc or Enter continues initial and re
         await key("\r", /Enter \/ Esc returns to practice/);
         await key("\r", /Retry round 1/);
       }
-      await key("mistake", /Answer:.*mistake/);
-      await key("\r", /Tab retry/);
-      assert.match(stripVTControlCharacters(output), /Answer:.*mistake/);
-      assert.doesNotMatch(stripVTControlCharacters(output), /Review/);
-      await key("\t", /Tab cycle meanings/);
-      assert.doesNotMatch(stripVTControlCharacters(output), /mistake|Incorrect!/);
+      for (const retryKey of ["\t", "\b", "\x7f"]) {
+        await key("mistake", /Answer:.*mistake/);
+        await key("\r", /Tab \/ Backspace retry/);
+        assert.match(stripVTControlCharacters(output), /Answer:.*mistake/);
+        assert.doesNotMatch(stripVTControlCharacters(output), /Review/);
+        await key(retryKey, /Tab cycle meanings/);
+        assert.doesNotMatch(stripVTControlCharacters(output), /mistake|Incorrect!/);
+      }
       await key("word", /Answer:.*word/);
       await key("\r", /Tab view details/);
       await key("\t", /Enter \/ Esc returns to practice/);
