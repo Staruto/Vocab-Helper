@@ -7,7 +7,7 @@ import { fitTagBadges, visibleAssignedTagGroups } from "./tag-display.js";
 import { adjacentEntryId, buildDetailSections, buildReviewFields, detailNavigationLabel, DetailField } from "./detail-display.js";
 import { similarWordLines } from "./similar-words.js";
 import { wrapStyledText } from "./styled-text.js";
-import { formatImportPreviewFilter, formatImportPreviewRecord, importPreviewPageSize, ImportPreview, ImportPreviewFilter, loadLabeledTextFile, paginateImportPreview } from "./import.js";
+import { formatImportPreviewFilter, formatImportPreviewRecord, importPreviewPageSize, importPreviewWordCount, IMPORT_EXIT_CHOICES, ImportPreview, ImportPreviewFilter, loadLabeledTextFile, paginateImportPreview } from "./import.js";
 import { createAddDetailEditor, createDetailEditor, detailExitChoices, detailEditRows, detailEditorKeyAction, detailRowChanged, detailRowValue, saveDetailEditor, updateDetailEditor, DetailEditRow, DetailEditorState } from "./detail-editor.js";
 import { CaretInputLine } from "./text-input.js";
 import { filterEntriesForSearch } from "./search.js";
@@ -399,8 +399,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     syncOrchestration(transition.state);
     void runTransitionEffects(transition.effects, transition.state, orchestrationCapabilities).then((results) => {
       for (const result of results) {
-        const next = updateOrchestration(orchestrationRef.current, result).state;
-        syncOrchestration(next);
+        dispatchIntent(result);
         if (result.type === "importPathSaved") setSavedImportFilePath(result.path);
       }
     });
@@ -589,6 +588,14 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       return;
     }
 
+    if (mode.kind === "importPending") return;
+    if (mode.kind === "importConfirm") {
+      if (key.escape) dispatchIntent({ type: "importPreviewReturned" });
+      else if (key.upArrow || key.downArrow) dispatchIntent({ type: "importChoiceMoved", delta: key.upArrow ? -1 : 1 });
+      else if (key.return) dispatchIntent({ type: "importChoiceConfirmed" });
+      return;
+    }
+
     if (key.escape) {
       if (mode.kind === "importSaveDefault") {
         continueImportAfterSaveChoice({ ...mode, save: false });
@@ -712,6 +719,21 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   const footerRightWidth = Math.max(0, width - searchBoxWidth - footerLeftWidth);
   const footerHint = activeSearchQuery ? "↑↓ focus | ←/→ pages | Esc clears" : "↑↓ focus | ←/→ pages | Esc menu";
 
+  if (mode.kind === "importPending") {
+    return <Text color={AUXILIARY_TEXT_COLOR}>{mode.phase === "checking" ? "Checking import updates..." : "Importing entries..."}</Text>;
+  }
+
+  if (mode.kind === "importConfirm") {
+    return <Box flexDirection="column">
+      <Text color="cyan" bold>{centerLine("Unsaved import changes", width)}</Text>
+      <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`${mode.updated} existing ${mode.updated === 1 ? "vocabulary will" : "vocabularies will"} change. This choice applies to all updates.`, width)}</Text>
+      <Text>{padLine("", width)}</Text>
+      {IMPORT_EXIT_CHOICES.map((choice, index) => <Text key={choice} color={index === mode.choice ? "black" : "white"} backgroundColor={index === mode.choice ? "white" : undefined}>{padLine(`${index === mode.choice ? ">" : " "} ${choice}`, width)}</Text>)}
+      <Text>{padLine("", width)}</Text>
+      <Text color={AUXILIARY_TEXT_COLOR}>{padLine("↑↓ select | Enter confirm | Esc return to preview", width)}</Text>
+    </Box>;
+  }
+
   if (mode.kind === "importSaveDefault") {
     return (
       <Box flexDirection="column">
@@ -730,11 +752,11 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
 
   if (mode.kind === "importPreview") {
     const visibleRows = importPreviewPageSize(rows, Boolean(mode.error));
-    const filters: Array<{ key: ImportPreviewFilter; label: string; count: number }> = [
-      { key: "records", label: "All", count: mode.preview.totalRecords },
-      { key: "ready", label: "Ready", count: mode.preview.records.filter((record) => record.status === "ready").length },
-      { key: "invalid", label: "Invalid", count: mode.preview.skippedInvalid },
-      { key: "duplicates", label: "Duplicates", count: mode.preview.skippedDuplicates },
+    const filters: Array<{ key: ImportPreviewFilter; label: string }> = [
+      { key: "records", label: "All" },
+      { key: "ready", label: "Ready" },
+      { key: "invalid", label: "Invalid" },
+      { key: "duplicates", label: "Duplicates" },
     ];
     const statusColor = (status: "ready" | "invalid" | "duplicate") => status === "ready" ? "green" : status === "invalid" ? "red" : GRAY_TIER_COLOR;
     const { records: pageRecords, pageIndex: safePageIndex, pageCount } = paginateImportPreview(mode.preview, mode.filter, mode.pageIndex, visibleRows);
@@ -754,11 +776,15 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
         <Text color={mode.focus === "filters" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{"─".repeat(width)}</Text>
         <Box flexDirection="row" gap={3}>
           <Text color={mode.focus === "filters" ? SELECTED_TEXT_COLOR : "white"} bold={true}>Filters</Text>
-          {filters.map((item) => <Text key={item.key} color={item.key === mode.filter && mode.focus === "filters" ? SELECTED_TEXT_COLOR : "white"} bold={item.key === mode.filter}>{formatImportPreviewFilter(item.label, item.count, item.key === mode.filter)}</Text>)}
+          {filters.map((item) => <Text key={item.key} color={item.key === mode.filter && mode.focus === "filters" ? SELECTED_TEXT_COLOR : "white"} bold={item.key === mode.filter}>{formatImportPreviewFilter(item.label, item.key === mode.filter)}</Text>)}
         </Box>
         <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Ignored fields: ${mode.preview.diagnostics.filter((item) => item.kind === "ignored-field").length} | Ignored tags: ${mode.preview.diagnostics.filter((item) => item.kind === "ignored-tag").length}`, width)}</Text>
         <Text>{padLine("", width)}</Text>
         <Box flexDirection="column" borderStyle="single" borderColor={mode.focus === "records" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}>
+          <Box justifyContent="space-between">
+            <Text color={mode.focus === "records" ? SELECTED_TEXT_COLOR : "white"}>Preview</Text>
+            <Text color={mode.focus === "records" ? SELECTED_TEXT_COLOR : "white"}>{importPreviewWordCount(mode.preview, mode.filter)}</Text>
+          </Box>
           {pageRecords.length === 0 ? <Text color={AUXILIARY_TEXT_COLOR}>{padLine("No records in this category.", Math.max(1, width - 4))}</Text> : pageRecords.map((record) => <Text key={record.recordNumber} color={statusColor(record.status)}>{padLine(formatImportPreviewRecord(record), Math.max(1, width - 4))}</Text>)}
           {Array.from({ length: Math.max(0, visibleRows - Math.max(1, pageRecords.length)) }, (_, index) => <Text key={`blank-${index}`}>{padLine("", Math.max(1, width - 4))}</Text>)}
           <Text color={mode.focus === "records" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{rightLine(`Page ${safePageIndex + 1}/${pageCount}`, Math.max(1, width - 4))}</Text>

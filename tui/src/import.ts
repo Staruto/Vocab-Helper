@@ -160,9 +160,20 @@ export function importPreviewRecords(preview: ImportPreview, filter: ImportPrevi
   return preview.records.filter((record) => record.status === status);
 }
 
-export function formatImportPreviewFilter(label: string, count: number, selected: boolean): string {
-  const text = `${label}: ${count}`;
-  return selected ? `[${text}]` : text;
+export const IMPORT_EXIT_CHOICES = [
+  "Save Changes (Preserve Test Data)",
+  "Save Changes (Reset Test Data)",
+  "Discard Changes",
+  "Return to Preview",
+] as const;
+
+export function formatImportPreviewFilter(label: string, selected: boolean): string {
+  return selected ? `[${label}]` : label;
+}
+
+export function importPreviewWordCount(preview: ImportPreview, filter: ImportPreviewFilter): string {
+  const count = importPreviewRecords(preview, filter).length;
+  return `${count} ${count === 1 ? "word" : "words"}`;
 }
 
 export function paginateImportPreview(preview: ImportPreview, filter: ImportPreviewFilter, requestedPage: number, pageSize: number): { records: ImportPreviewRecord[]; pageIndex: number; pageCount: number } {
@@ -175,7 +186,7 @@ export function paginateImportPreview(preview: ImportPreview, filter: ImportPrev
 
 export function importPreviewPageSize(terminalRows: number, hasError: boolean): number {
   // Leave room below the output so Ink can erase the preview correctly when the screen changes.
-  return Math.max(1, terminalRows - (hasError ? 16 : 15));
+  return Math.max(1, terminalRows - (hasError ? 17 : 16));
 }
 
 export function shouldPromptToSaveImportPath(importedPath: string, savedPath: string | null): boolean {

@@ -34,7 +34,9 @@ test("import request ids ignore stale results and commit refreshes", () => {
   const current = update(state, { type: "importPreviewLoaded", requestId: state.importRequestId, path: "two.txt", preview: { totalRecords: 1, entries: [{ recordNumber: 1, vocabulary: "two", meanings: ["x"], attributes: {}, tagIds: [] }], skippedInvalid: 0, skippedDuplicates: 0, diagnostics: [], records: [] } });
   assert.equal(current.state.mode.kind, "importPreview");
   const commit = update(current.state, { type: "importConfirmed" });
-  assert.equal(commit.effects[0]?.type, "commitImport");
+  assert.equal(commit.effects[0]?.type, "checkImportUpdates");
+  const checked = update(commit.state, { type: "importUpdatesChecked", updated: 0 });
+  assert.equal(checked.effects[0]?.type, "commitImport");
 });
 
 test("practice initial scoring and empty candidates are explicit", () => {
@@ -57,4 +59,31 @@ test("practice candidate loading is an effect and commit failures stay visible",
   transition = update(state, { type: "importCommitFailed", error: "Import failed; no entries were written." });
   assert.equal(transition.state.mode.kind, "importPreview");
   assert.equal(transition.state.mode.error, "Import failed; no entries were written.");
+});
+
+test("import checking and saving block duplicate inputs and failures restore the preview", () => {
+  const preview = { totalRecords: 1, entries: [{ recordNumber: 1, vocabulary: "word", meanings: ["new"], attributes: {}, tagIds: [] }], skippedInvalid: 0, skippedDuplicates: 0, diagnostics: [], records: [] };
+  const initial = { ...createInitialState(workbook), mode: {
+    kind: "importPreview" as const, path: "words.txt", pathBuffer: "draft.txt", preview, filter: "records" as const, pageIndex: 2, focus: "records" as const,
+  } };
+  let state = update(initial, { type: "importConfirmed" }).state;
+  for (const intent of [{ type: "importConfirmed" }, { type: "modeCancelled" }, { type: "commandSubmitted", raw: "/import" }] as const) {
+    assert.deepEqual(update(state, intent), { state, effects: [] });
+  }
+  const failedCheck = update(state, { type: "importCommitFailed", error: "Check failed" }).state;
+  assert.deepEqual(failedCheck.mode, { ...initial.mode, error: "Check failed" });
+  state = update(state, { type: "importUpdatesChecked", updated: 1 }).state;
+  state = update(state, { type: "importChoiceMoved", delta: -1 }).state;
+  assert.ok(state.mode.kind === "importConfirm");
+  assert.equal(state.mode.choice, 3);
+  state = update(state, { type: "importChoiceMoved", delta: 1 }).state;
+  const saving = update(state, { type: "importChoiceConfirmed" });
+  assert.equal(saving.effects[0]?.type, "commitImport");
+  assert.ok(saving.effects[0]?.type === "commitImport");
+  assert.deepEqual(saving.effects[0].options, { preserveTestData: true });
+  assert.deepEqual(update(saving.state, { type: "importChoiceConfirmed" }).effects, []);
+  assert.deepEqual(update(saving.state, { type: "importConfirmed" }).effects, []);
+  const failedSave = update(saving.state, { type: "importCommitFailed", error: "Write failed" }).state;
+  assert.deepEqual(failedSave.mode, { ...initial.mode, error: "Write failed" });
+  assert.equal(update(failedSave, { type: "importConfirmed" }).effects[0]?.type, "checkImportUpdates");
 });

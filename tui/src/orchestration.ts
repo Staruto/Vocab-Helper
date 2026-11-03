@@ -1,10 +1,12 @@
 import { localCalendarDay } from "./calendar.js";
 import type { PracticeSessionResult, EntryRow, EntryUpdateOptions, ImportEntryInput, ImportResult, TagType, WorkbookRow } from "./db.js";
 import type { ImportPreview, ImportPreviewFilter, ImportDiagnostic } from "./import.js";
+import { IMPORT_EXIT_CHOICES } from "./import.js";
 
 export type { ImportPreview, ImportPreviewFilter, ImportDiagnostic };
 export type ImportPreviewFocus = "path" | "filters" | "records";
 export type ParameterizedCommand = "edit" | "delete";
+export type ImportPreviewMode = { kind: "importPreview"; path: string; pathBuffer: string; preview: ImportPreview; pageIndex: number; filter: ImportPreviewFilter; focus: ImportPreviewFocus; loading?: boolean; error?: string };
 
 export type UiMode =
   | { kind: "command" }
@@ -13,7 +15,9 @@ export type UiMode =
   | { kind: "importPath"; alternate: boolean }
   | { kind: "importLoading"; path: string; alternate: boolean; requestId?: number }
   | { kind: "importSaveDefault"; path: string; save: boolean; resultMessage: string }
-  | { kind: "importPreview"; path: string; pathBuffer: string; preview: ImportPreview; pageIndex: number; filter: ImportPreviewFilter; focus: ImportPreviewFocus; loading?: boolean; error?: string };
+  | { kind: "importPending"; phase: "checking" | "saving"; previous: ImportPreviewMode }
+  | { kind: "importConfirm"; previous: ImportPreviewMode; updated: number; choice: number }
+  | ImportPreviewMode;
 
 export type PracticePhase = "loading" | "empty" | "initial" | "retry" | "detail" | "saving" | "saveFailed" | "done";
 export type PracticeState = {
@@ -52,7 +56,7 @@ export type OrchestrationState = {
 export type OrchestrationCapabilities = {
   reads: { listEntries(workbookId: number): EntryRow[]; getEntry(entryId: number): EntryRow | null; listTagTypes(workbookId: number): TagType[]; getWorkbook(workbookId: number): WorkbookRow | null };
   writes: { addEntry(workbookId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, tagIds?: number[]): EntryRow; updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, tagIds?: number[], options?: EntryUpdateOptions): EntryRow; deleteEntry(entryId: number): void };
-  import: { readLabeledTextFile(path: string): Promise<{ path: string; text: string }>; importEntries(workbookId: number, entries: ImportEntryInput[]): ImportResult; readWorkbookImportPath(workbookId: number): string | null; saveWorkbookImportPath(workbookId: number, path: string | null): WorkbookRow };
+  import: { readLabeledTextFile(path: string): Promise<{ path: string; text: string }>; previewImportUpdates(workbookId: number, entries: ImportEntryInput[]): number; importEntries(workbookId: number, entries: ImportEntryInput[], options?: EntryUpdateOptions): ImportResult; readWorkbookImportPath(workbookId: number): string | null; saveWorkbookImportPath(workbookId: number, path: string | null): WorkbookRow };
   practice: { selectPracticeCandidates(workbookId: number, count: number): EntryRow[]; completePracticeSession(workbookId: number, results: PracticeSessionResult[], completedDay: string): EntryRow[] };
 };
 
@@ -69,6 +73,10 @@ export type Intent =
   | { type: "importPreviewPageChanged"; delta: number }
   | { type: "importPathBufferChanged"; path: string }
   | { type: "importConfirmed" }
+  | { type: "importUpdatesChecked"; updated: number }
+  | { type: "importChoiceMoved"; delta: number }
+  | { type: "importChoiceConfirmed" }
+  | { type: "importPreviewReturned" }
   | { type: "importSavePathDecision"; save: boolean }
   | { type: "importSavePathToggled" }
   | { type: "importPreviewFocusChanged"; focus: ImportPreviewFocus }
@@ -97,7 +105,8 @@ export type Effect =
   | { type: "loadEntries"; workbookId: number }
   | { type: "loadPracticeCandidates"; workbookId: number; count: number; requestId: number }
   | { type: "loadImportPreview"; workbookId: number; path: string; requestId: number }
-  | { type: "commitImport"; workbookId: number; path: string; entries: ImportEntryInput[] }
+  | { type: "checkImportUpdates"; workbookId: number; entries: ImportEntryInput[] }
+  | { type: "commitImport"; workbookId: number; path: string; entries: ImportEntryInput[]; options: EntryUpdateOptions }
   | { type: "saveImportPath"; workbookId: number; path: string | null }
   | { type: "deleteEntry"; entryId: number }
   | { type: "completePracticeSession"; requestId: number; workbookId: number; results: PracticeSessionResult[]; completedDay: string };
@@ -124,9 +133,18 @@ function savePracticeSession(state: OrchestrationState): Transition {
   };
 }
 
+function commitImport(state: OrchestrationState, previous: ImportPreviewMode, preserveTestData: boolean): Transition {
+  return {
+    state: { ...state, mode: { kind: "importPending", phase: "saving", previous }, statusLines: status("Importing entries...") },
+    effects: [{ type: "commitImport", workbookId: state.workbook.id, path: previous.path,
+      entries: previous.preview.entries.map(({ recordNumber: _recordNumber, ...entry }) => entry), options: { preserveTestData } }],
+  };
+}
+
 export function update(state: OrchestrationState, intent: Intent): Transition {
   let next = state;
   const effects: Effect[] = [];
+  if (state.mode.kind === "importPending" && !["importUpdatesChecked", "importCommitFailed", "importCommitted"].includes(intent.type)) return { state, effects: [] };
   if (intent.type === "modeCancelled") return { state: { ...state, importRequestId: state.importRequestId + 1, mode: { kind: "command" }, commandBuffer: "", statusLines: status(intent.message ?? "Cancelled.") }, effects: [] };
   if (intent.type === "inputFocusChanged") return { state: { ...state, inputFocus: intent.focus }, effects: [] };
   if (intent.type === "practiceCandidatesRequested") {
@@ -158,13 +176,40 @@ export function update(state: OrchestrationState, intent: Intent): Transition {
   if (intent.type === "importPathLoadRequested") { const requestId = state.importRequestId + 1; const path = intent.path.trim(); if (!path) return { state: { ...state, statusLines: status("A file path is required.") }, effects: [] }; return { state: { ...state, importRequestId: requestId, mode: { kind: "importLoading", path, alternate: Boolean(intent.alternate), requestId }, statusLines: status("Reading and validating import file...") }, effects: [{ type: "loadImportPreview", workbookId: state.workbook.id, path, requestId }] }; }
   if (intent.type === "importPreviewLoaded") { if (intent.requestId !== state.importRequestId) return { state, effects: [] }; return { state: { ...state, mode: { kind: "importPreview", path: intent.path, pathBuffer: intent.path, preview: intent.preview, pageIndex: 0, filter: "records", focus: "filters" }, statusLines: status("Import preview ready.") }, effects: [] }; }
   if (intent.type === "importLoadFailed") { if (intent.requestId !== state.importRequestId) return { state, effects: [] }; return { state: { ...state, mode: { kind: "importPath", alternate: true }, commandBuffer: intent.path, statusLines: status(`Could not load '${intent.path}': ${intent.error}`), importError: intent.error }, effects: [] }; }
-  if (intent.type === "importCommitFailed") { const mode = state.mode; return mode.kind === "importPreview" ? { state: { ...state, mode: { ...mode, error: intent.error }, statusLines: status(intent.error) }, effects: [] } : { state, effects: [] }; }
+  if (intent.type === "importCommitFailed") {
+    const mode = state.mode;
+    const previous = mode.kind === "importPending" ? mode.previous : mode.kind === "importPreview" ? mode : null;
+    return previous ? { state: { ...state, mode: { ...previous, error: intent.error }, statusLines: status(intent.error) }, effects: [] } : { state, effects: [] };
+  }
   if (intent.type === "importPathBufferChanged") { const mode = state.mode; return mode.kind === "importPreview" ? { state: { ...state, mode: { ...mode, pathBuffer: intent.path, error: undefined } }, effects: [] } : { state: { ...state, commandBuffer: intent.path }, effects: [] }; }
   if (intent.type === "importPreviewFilterChanged") { const mode = state.mode; return mode.kind === "importPreview" ? { state: { ...state, mode: { ...mode, filter: intent.filter, pageIndex: 0 } }, effects: [] } : { state, effects: [] }; }
   if (intent.type === "importSavePathToggled") { const mode = state.mode; return mode.kind === "importSaveDefault" ? { state: { ...state, mode: { ...mode, save: !mode.save } }, effects: [] } : { state, effects: [] }; }
   if (intent.type === "importPreviewFocusChanged") { const mode = state.mode; return mode.kind === "importPreview" ? { state: { ...state, mode: { ...mode, focus: intent.focus } }, effects: [] } : { state, effects: [] }; }
   if (intent.type === "importPreviewPageChanged") { const mode = state.mode; return mode.kind === "importPreview" ? { state: { ...state, mode: { ...mode, pageIndex: Math.max(0, mode.pageIndex + intent.delta) } }, effects: [] } : { state, effects: [] }; }
-  if (intent.type === "importConfirmed") { const mode = state.mode; if (mode.kind !== "importPreview" || mode.preview.entries.length === 0) return { state, effects: [] }; return { state: { ...state, statusLines: status("Importing entries...") }, effects: [{ type: "commitImport", workbookId: state.workbook.id, path: mode.path, entries: mode.preview.entries.map(({ recordNumber: _recordNumber, ...entry }) => entry) }] }; }
+  if (intent.type === "importConfirmed") {
+    const mode = state.mode;
+    if (mode.kind !== "importPreview" || mode.preview.entries.length === 0) return { state, effects: [] };
+    return { state: { ...state, mode: { kind: "importPending", phase: "checking", previous: { ...mode, error: undefined } } },
+      effects: [{ type: "checkImportUpdates", workbookId: state.workbook.id, entries: mode.preview.entries.map(({ recordNumber: _recordNumber, ...entry }) => entry) }] };
+  }
+  if (intent.type === "importUpdatesChecked") {
+    const mode = state.mode;
+    if (mode.kind !== "importPending" || mode.phase !== "checking") return { state, effects: [] };
+    return intent.updated > 0
+      ? { state: { ...state, mode: { kind: "importConfirm", previous: mode.previous, updated: intent.updated, choice: 0 } }, effects: [] }
+      : commitImport(state, mode.previous, true);
+  }
+  if (intent.type === "importPreviewReturned") return state.mode.kind === "importConfirm"
+    ? { state: { ...state, mode: state.mode.previous }, effects: [] } : { state, effects: [] };
+  if (intent.type === "importChoiceMoved") return state.mode.kind === "importConfirm"
+    ? { state: { ...state, mode: { ...state.mode, choice: (state.mode.choice + intent.delta + IMPORT_EXIT_CHOICES.length) % IMPORT_EXIT_CHOICES.length } }, effects: [] } : { state, effects: [] };
+  if (intent.type === "importChoiceConfirmed") {
+    const mode = state.mode;
+    if (mode.kind !== "importConfirm") return { state, effects: [] };
+    if (mode.choice === 3) return update(state, { type: "importPreviewReturned" });
+    if (mode.choice === 2) return update(state, { type: "modeCancelled", message: "Import discarded. No entries were written." });
+    return commitImport(state, mode.previous, mode.choice === 0);
+  }
   if (intent.type === "importCommitted") { const save = state.workbook.importFilePath !== intent.path; return { state: { ...state, mode: save ? { kind: "importSaveDefault", path: intent.path, save: false, resultMessage: intent.resultMessage } : { kind: "command" }, commandBuffer: "", statusLines: status(intent.resultMessage) }, effects: save ? [] : [{ type: "loadEntries", workbookId: state.workbook.id }] }; }
   if (intent.type === "importSavePathDecision") { const mode = state.mode; if (mode.kind !== "importSaveDefault") return { state, effects: [] }; return { state: { ...state, mode: { kind: "command" }, commandBuffer: "" }, effects: intent.save ? [{ type: "saveImportPath", workbookId: state.workbook.id, path: mode.path }, { type: "loadEntries", workbookId: state.workbook.id }] : [{ type: "loadEntries", workbookId: state.workbook.id }] }; }
   if (intent.type === "importPathSaved") return { state: { ...state, workbook: { ...state.workbook, importFilePath: intent.path }, statusLines: status("Import path saved.") }, effects: [] };

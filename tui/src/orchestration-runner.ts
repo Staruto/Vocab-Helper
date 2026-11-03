@@ -21,11 +21,18 @@ export async function executeEffect(effect: Effect, state: OrchestrationState, c
         return { type: "importLoadFailed", requestId: effect.requestId, path: effect.path, error: error instanceof Error ? error.message : "Could not read the import file." };
       }
     }
+    case "checkImportUpdates": {
+      try {
+        return { type: "importUpdatesChecked", updated: capabilities.import.previewImportUpdates(effect.workbookId, effect.entries) };
+      } catch (error) {
+        return { type: "importCommitFailed", error: error instanceof Error ? error.message : "Could not check import updates." };
+      }
+    }
     case "commitImport": {
       try {
-        const result = capabilities.import.importEntries(effect.workbookId, effect.entries);
+        const result = capabilities.import.importEntries(effect.workbookId, effect.entries, effect.options);
         const previewPath = effect.path;
-        const preview = state.mode.kind === "importPreview" ? state.mode.preview : null;
+        const preview = state.mode.kind === "importPending" ? state.mode.previous.preview : null;
         const ignoredFields = preview?.diagnostics.filter((item) => item.kind === "ignored-field").length ?? 0;
         const ignoredTags = preview?.diagnostics.filter((item) => item.kind === "ignored-tag").length ?? 0;
         const resultMessage = `Added ${result.added}; Updated ${result.updated}; Unchanged ${result.unchanged}; Invalid ${preview?.skippedInvalid ?? 0}; ignored fields ${ignoredFields}; ignored tags ${ignoredTags}.`;
@@ -55,7 +62,8 @@ export async function executeEffect(effect: Effect, state: OrchestrationState, c
 export function createOrchestrationCapabilities(backend: {
   listEntries(workbookId: number): EntryRow[]; getEntry(entryId: number): EntryRow | null; listTagTypes(workbookId: number): import("./db.js").TagType[]; getWorkbook(workbookId: number): WorkbookRow | null;
   addEntry(workbookId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, tagIds?: number[]): EntryRow; updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, tagIds?: number[], options?: EntryUpdateOptions): EntryRow; deleteEntry(entryId: number): void;
-  importEntries(workbookId: number, entries: import("./db.js").ImportEntryInput[]): import("./db.js").ImportResult; setWorkbookImportFilePath(workbookId: number, path: string | null): WorkbookRow; selectPracticeCandidates(workbookId: number, count: number): EntryRow[]; completePracticeSession(workbookId: number, results: PracticeSessionResult[], completedDay: string): EntryRow[];
+  previewImportUpdates(workbookId: number, entries: import("./db.js").ImportEntryInput[]): number;
+  importEntries(workbookId: number, entries: import("./db.js").ImportEntryInput[], options?: EntryUpdateOptions): import("./db.js").ImportResult; setWorkbookImportFilePath(workbookId: number, path: string | null): WorkbookRow; selectPracticeCandidates(workbookId: number, count: number): EntryRow[]; completePracticeSession(workbookId: number, results: PracticeSessionResult[], completedDay: string): EntryRow[];
 }): OrchestrationCapabilities {
-  return { reads: { listEntries: (id) => backend.listEntries(id), getEntry: (id) => backend.getEntry(id), listTagTypes: (id) => backend.listTagTypes(id), getWorkbook: (id) => backend.getWorkbook(id) }, writes: { addEntry: (...args) => backend.addEntry(...args), updateEntry: (...args) => backend.updateEntry(...args), deleteEntry: (id) => backend.deleteEntry(id) }, import: { readLabeledTextFile: loadLabeledTextFile, importEntries: (id, entries) => backend.importEntries(id, entries), readWorkbookImportPath: (id) => backend.getWorkbook(id)?.importFilePath ?? null, saveWorkbookImportPath: (id, path) => backend.setWorkbookImportFilePath(id, path) }, practice: { selectPracticeCandidates: (id, count) => backend.selectPracticeCandidates(id, count), completePracticeSession: (id, results, day) => backend.completePracticeSession(id, results, day) } };
+  return { reads: { listEntries: (id) => backend.listEntries(id), getEntry: (id) => backend.getEntry(id), listTagTypes: (id) => backend.listTagTypes(id), getWorkbook: (id) => backend.getWorkbook(id) }, writes: { addEntry: (...args) => backend.addEntry(...args), updateEntry: (...args) => backend.updateEntry(...args), deleteEntry: (id) => backend.deleteEntry(id) }, import: { readLabeledTextFile: loadLabeledTextFile, previewImportUpdates: (id, entries) => backend.previewImportUpdates(id, entries), importEntries: (id, entries, options) => backend.importEntries(id, entries, options), readWorkbookImportPath: (id) => backend.getWorkbook(id)?.importFilePath ?? null, saveWorkbookImportPath: (id, path) => backend.setWorkbookImportFilePath(id, path) }, practice: { selectPracticeCandidates: (id, count) => backend.selectPracticeCandidates(id, count), completePracticeSession: (id, results, day) => backend.completePracticeSession(id, results, day) } };
 }

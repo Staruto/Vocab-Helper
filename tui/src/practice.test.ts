@@ -30,7 +30,7 @@ function session(count: number, sessionWorkbook = workbook) {
   const capabilities: OrchestrationCapabilities = {
     reads: { listEntries: unexpected, getEntry: unexpected, listTagTypes: unexpected, getWorkbook: unexpected },
     writes: { addEntry: unexpected, updateEntry: unexpected, deleteEntry: unexpected },
-    import: { readLabeledTextFile: unexpected, importEntries: unexpected, readWorkbookImportPath: unexpected, saveWorkbookImportPath: unexpected },
+    import: { readLabeledTextFile: unexpected, previewImportUpdates: unexpected, importEntries: unexpected, readWorkbookImportPath: unexpected, saveWorkbookImportPath: unexpected },
     practice: {
       selectPracticeCandidates: (workbookId, requested) => {
         assert.equal(workbookId, workbook.id);

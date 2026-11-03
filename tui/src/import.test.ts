@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { TagType, WorkbookRow } from "./db.js";
-import { buildImportPreviewLines, formatImportPreviewFilter, importFilePathsEqual, importPreviewPageSize, loadLabeledTextFile, paginateImportPreview, parseLabeledTextImport, shouldPromptToSaveImportPath } from "./import.js";
+import { buildImportPreviewLines, formatImportPreviewFilter, importFilePathsEqual, importPreviewPageSize, importPreviewWordCount, loadLabeledTextFile, paginateImportPreview, parseLabeledTextImport, shouldPromptToSaveImportPath } from "./import.js";
 
 const workbook: WorkbookRow = {
   id: 1, name: "Japanese", wordCount: 0, createdAt: "2026-01-01",
@@ -83,8 +83,12 @@ Japanese: 魚`, workbook, tagTypes, ["猫"]);
   ]);
   assert.match(buildImportPreviewLines(preview).join("\n"), /\+1 ignored field, \+1 ignored tag/);
   assert.doesNotMatch(buildImportPreviewLines(preview).join("\n"), /Record 1:/);
-  assert.equal(formatImportPreviewFilter("Record", preview.totalRecords, true), "[Record: 5]");
-  assert.equal(formatImportPreviewFilter("Ready", preview.records.filter((record) => record.status === "ready").length, false), "Ready: 1");
+  assert.equal(formatImportPreviewFilter("All", true), "[All]");
+  assert.equal(formatImportPreviewFilter("Ready", false), "Ready");
+  assert.equal(importPreviewWordCount(preview, "records"), "5 words");
+  assert.equal(importPreviewWordCount(preview, "ready"), "1 word");
+  assert.equal(importPreviewWordCount(preview, "duplicates"), "2 words");
+  assert.equal(importPreviewWordCount(preview, "invalid"), "2 words");
   assert.deepEqual(paginateImportPreview(preview, "duplicates", 1, 1).records.map((record) => record.vocabulary), ["犬"]);
   assert.equal(paginateImportPreview(preview, "ready", 99, 10).pageIndex, 0);
 });
@@ -127,11 +131,12 @@ test("empty files produce an empty, non-importable preview", () => {
   const preview = parseLabeledTextImport(" \r\n\r\n ", workbook, tagTypes, []);
   assert.equal(preview.totalRecords, 0);
   assert.deepEqual(preview.entries, []);
+  assert.equal(importPreviewWordCount(preview, "records"), "0 words");
 });
 
 test("import preview page sizing stays below the terminal repaint boundary", () => {
-  assert.equal(importPreviewPageSize(24, false), 9);
-  assert.equal(importPreviewPageSize(24, true), 8);
+  assert.equal(importPreviewPageSize(24, false), 8);
+  assert.equal(importPreviewPageSize(24, true), 7);
   assert.equal(importPreviewPageSize(10, false), 1);
 });
 

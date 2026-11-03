@@ -51,6 +51,7 @@ export type DailyPracticeRow = { day: string; practiceCount: number; goalSnapsho
 export type ImportEntryInput = { vocabulary: string; meanings: string[]; attributes: Record<string, string>; tagIds: number[] };
 export type EntryUpdateOptions = { preserveTestData?: boolean };
 export type ImportResult = { added: number; updated: number; unchanged: number; entries: EntryRow[] };
+type EntryContent = Pick<EntryRow, "vocabulary" | "meanings" | "attributes"> & { tags: Array<{ id: number }> };
 export class WorkbookDataLossError extends Error {
   constructor(readonly impact: WorkbookUpdateImpact) {
     super("This change removes populated workbook fields and requires confirmation.");
@@ -288,14 +289,37 @@ export class VocabularyRepository {
     });
     return this.getEntry(id)!;
   }
-  importEntries(workbookId: number, entries: ImportEntryInput[]): ImportResult {
-    const workbook = this.requireWorkbook(workbookId);
-    const normalized = entries.map((entry) => {
+  private normalizeImportEntries(workbook: WorkbookRow, entries: ImportEntryInput[]): ImportEntryInput[] {
+    return entries.map((entry) => {
       const vocabulary = trimRequired(entry.vocabulary, "Vocabulary");
       const meanings = this.normalizeEntryMeanings(workbook, entry.meanings);
-      this.validateEntryAssociations(workbookId, entry.attributes, entry.tagIds);
+      this.validateEntryAssociations(workbook.id, entry.attributes, entry.tagIds);
       return { ...entry, vocabulary, meanings, tagIds: [...new Set(entry.tagIds)] };
     });
+  }
+  previewImportUpdates(workbookId: number, entries: ImportEntryInput[]): number {
+    const workbook = this.requireWorkbook(workbookId);
+    const normalized = this.normalizeImportEntries(workbook, entries);
+    const existing = new Map<string, EntryContent & { id: number }>();
+    for (const entry of this.listEntries(workbookId)) {
+      const first = existing.get(entry.vocabulary);
+      if (!first || entry.id < first.id) existing.set(entry.vocabulary, entry);
+    }
+    const changed = new Set<number>();
+    for (const input of normalized) {
+      const current = existing.get(input.vocabulary);
+      // New words have no previous test data, including repeated records in this file.
+      if (!current) continue;
+      const attributes = this.preserveInactiveAttributes(workbook, input.attributes, current);
+      if (!this.entryContentMatches(current, { ...input, attributes })) changed.add(current.id);
+      existing.set(input.vocabulary, { ...current, ...input, attributes,
+        tags: input.tagIds.map((id) => ({ id })) });
+    }
+    return changed.size;
+  }
+  importEntries(workbookId: number, entries: ImportEntryInput[], options: EntryUpdateOptions = {}): ImportResult {
+    const workbook = this.requireWorkbook(workbookId);
+    const normalized = this.normalizeImportEntries(workbook, entries);
     return transaction(this.db, () => {
       const ids = new Map<string, number>();
       for (const row of this.db.prepare("SELECT vocabulary, MIN(id) AS id FROM entries WHERE workbook_id = ? GROUP BY vocabulary").all(workbookId) as Array<{ vocabulary: string; id: number }>) ids.set(String(row.vocabulary), Number(row.id));
@@ -319,7 +343,7 @@ export class VocabularyRepository {
         const candidateTime = Date.now();
         const updatedAt = new Date(Math.max(candidateTime, Number.isNaN(currentTime) ? candidateTime : currentTime + 1)).toISOString();
         this.db.prepare("UPDATE entries SET updated_at = ? WHERE id = ?").run(updatedAt, existingId);
-        this.resetEntryStats(existingId);
+        if (!options.preserveTestData) this.resetEntryStats(existingId);
         updated++; touched.push(existingId);
       }
       return { added, updated, unchanged, entries: [...new Set(touched)].map((id) => this.getEntry(id)!) };
@@ -606,7 +630,7 @@ export class VocabularyRepository {
       && !originals.some((original) => original.key === field.key && original.label.trim().toLocaleLowerCase() === labels[index]));
     if (introducesDuplicate) throw new ValidationError(`${section} attribute labels must be unique.`);
   }
-  private preserveInactiveAttributes(workbook: WorkbookRow, attributes: Record<string, string>, current?: EntryRow): Record<string, string> {
+  private preserveInactiveAttributes(workbook: WorkbookRow, attributes: Record<string, string>, current?: Pick<EntryRow, "attributes">): Record<string, string> {
     return Object.fromEntries(workbook.metadataAttributes.filter((field) => field.role === "optional").map((field) => [field.key,
       isActiveAttribute(field) ? attributes[field.key] ?? "" : current?.attributes[field.key] ?? "",
     ]));
@@ -739,7 +763,7 @@ export class VocabularyRepository {
       for (const tag of type.tags) addTag.run(typeId, workbookId, tag.name);
     }
   }
-  private entryContentMatches(current: EntryRow, input: ImportEntryInput): boolean {
+  private entryContentMatches(current: EntryContent, input: ImportEntryInput): boolean {
     const tagIds = new Set(input.tagIds);
     return current.vocabulary === input.vocabulary
       && current.meanings.length === input.meanings.length

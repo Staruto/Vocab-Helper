@@ -210,7 +210,8 @@ function seedTestRecord(repository: VocabularyRepository, entryId: number): Entr
 
 function saveEntryThrough(repository: VocabularyRepository, mode: "edit" | "import", current: EntryRow, input: ImportEntryInput, preserveTestData = false): EntryRow {
   if (mode === "edit") return repository.updateEntry(current.id, input.vocabulary, input.meanings[0], input.meanings, input.attributes, input.tagIds, preserveTestData ? { preserveTestData: true } : undefined);
-  const result = repository.importEntries(current.workbookId, [input]);
+  assert.equal(repository.previewImportUpdates(current.workbookId, [input]), 1);
+  const result = repository.importEntries(current.workbookId, [input], { preserveTestData });
   assert.equal(result.added, 0);
   assert.equal(result.updated, 1);
   assert.equal(result.unchanged, 0);
@@ -220,7 +221,7 @@ function saveEntryThrough(repository: VocabularyRepository, mode: "edit" | "impo
 for (const mode of ["edit", "import"] as const) {
   const changes = ["primary meaning", "secondary meaning", "optional field", "cleared optional field", "tags", ...(mode === "edit" ? ["vocabulary"] : [])];
   for (const change of changes) {
-    for (const preserveTestData of mode === "edit" ? [false, true] : [false]) {
+    for (const preserveTestData of [false, true]) {
       test(`${mode} ${preserveTestData ? "preserves" : "resets"} the complete test record when ${change} changes`, () => {
         const temp = temporaryDatabase();
         let repository = new VocabularyRepository(temp.path);
@@ -278,6 +279,7 @@ for (const mode of ["edit", "import"] as const) {
           assert.deepEqual(repository.updateEntry(current.id, input.vocabulary, input.meanings[0], input.meanings, input.attributes, input.tagIds, { preserveTestData }), current);
         }
       } else {
+        assert.equal(repository.previewImportUpdates(workbook.id, [input]), 0);
         const result = repository.importEntries(workbook.id, [input]);
         assert.equal(result.updated, 0);
         assert.equal(result.unchanged, 1);
@@ -332,6 +334,11 @@ test("preserving test data rolls back content and assignments when saving fails"
         BEGIN SELECT RAISE(ABORT, 'assignment write failed'); END`);
     } finally { db.close(); }
     assert.throws(() => repository.updateEntry(current.id, "changed", "changed meaning", ["changed meaning"], { kana: "changed reading" }, [tag.id], { preserveTestData: true }), /assignment write failed/);
+    assert.throws(() => repository.importEntries(workbook.id, [
+      { vocabulary: "new", meanings: ["new meaning"], attributes: {}, tagIds: [] },
+      { vocabulary: "word", meanings: ["changed meaning"], attributes: { kana: "changed reading" }, tagIds: [] },
+    ], { preserveTestData: true }), /assignment write failed/);
+    assert.equal(repository.countEntries(workbook.id), 1);
     assert.deepEqual(repository.getEntry(current.id), current);
     assert.deepEqual(repository.listDailyPractice(workbook.id), historyBefore);
   } finally { repository.close(); temp.cleanup(); }

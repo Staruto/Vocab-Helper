@@ -81,8 +81,12 @@ export class VocabularyBackend {
     return this.repository.addEntry(workbookId, vocabulary, meaning, meanings, attributes, tagIds);
   }
 
-  importEntries(workbookId: number, entries: ImportEntryInput[]): ImportResult {
-    return this.repository.importEntries(workbookId, entries);
+  previewImportUpdates(workbookId: number, entries: ImportEntryInput[]): number {
+    return this.repository.previewImportUpdates(workbookId, entries);
+  }
+
+  importEntries(workbookId: number, entries: ImportEntryInput[], options?: EntryUpdateOptions): ImportResult {
+    return this.repository.importEntries(workbookId, entries, options);
   }
 
   updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, tagIds?: number[], options?: EntryUpdateOptions): EntryRow {
