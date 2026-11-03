@@ -51,26 +51,43 @@ test("import keyboard confirmation stages writes and preview header follows filt
   async function key(input: string, expected: RegExp): Promise<string> {
     output = ""; child.stdin.write(input); return frame(expected);
   }
+  function assertSelectedFilter(rendered: string, label: string, focused: boolean): void {
+    const line = rendered.split("\n").find((item) => stripVTControlCharacters(item).startsWith("Filters"));
+    assert.ok(line, "Missing filters row");
+    assert.doesNotMatch(stripVTControlCharacters(line), /[\[\]]/);
+    assert.match(line, new RegExp(`\\x1b\\[7m(?:\\x1b\\[[\\d;]*m)* ${label} (?:\\x1b\\[[\\d;]*m)*\\x1b\\[27m`));
+    const color = focused ? "38;2;206;168;255" : "37";
+    assert.match(line, new RegExp(`\\x1b\\[${color}m(?:\\x1b\\[[\\d;]*m)* ${label} `));
+    assert.equal((line.match(/\x1b\[7m/g) ?? []).length, 1);
+  }
   const down = "\x1b[B"; const right = "\x1b[C"; const up = "\x1b[A";
   try {
     await frame(/Selected: Import keyboard test/);
     await key("\r", /Page 1\/1/);
     await key("/import", /\/import/);
     let rendered = await key("\r", /Preview\s+12 words/);
-    assert.match(stripVTControlCharacters(rendered), /Filters\s+\[All\]\s+Ready\s+Invalid\s+Duplicates/);
+    assert.match(stripVTControlCharacters(rendered), /Filters\s+All\s+Ready\s+Invalid\s+Duplicates/);
+    assertSelectedFilter(rendered, "All", true);
     let header = rendered.split("\n").find((line) => line.includes("Preview"))!;
     assert.match(header, /\x1b\[37mPreview/);
     assert.match(stripVTControlCharacters(header), /^│ Preview +12 words │$/);
     rendered = await key(down, /Preview\s+12 words/);
+    assertSelectedFilter(rendered, "All", false);
     header = rendered.split("\n").find((line) => line.includes("Preview"))!;
     assert.match(header, /38;2;206;168;255mPreview/);
     rendered = await key(right, /Page 2\/2/);
     assert.match(stripVTControlCharacters(rendered), /Preview\s+12 words/);
     assert.ok(stripVTControlCharacters(rendered).trimEnd().split("\n").length <= 24);
-    await key(up, /\[All\]/);
+    rendered = await key(up, /Filters\s+All/);
+    assertSelectedFilter(rendered, "All", true);
+    rendered = await key(right, /Preview\s+10 words/);
+    assertSelectedFilter(rendered, "Ready", true);
+    rendered = await key("\x1b[D", /Preview\s+12 words/);
+    assertSelectedFilter(rendered, "All", true);
     await key(right, /Preview\s+10 words/);
     await key(right, /Preview\s+1 word/);
-    await key(right, /\[Duplicates\]/);
+    rendered = await key(right, /Filters.*Duplicates/);
+    assertSelectedFilter(rendered, "Duplicates", true);
     await key("\r", /Unsaved import changes/);
     assert.match(stripVTControlCharacters(output), /> Save Changes \(Preserve Test Data\)/);
     const verify = new VocabularyRepository(path);
@@ -78,12 +95,12 @@ test("import keyboard confirmation stages writes and preview header follows filt
       assert.equal(verify.getEntry(entry.id)!.meaning, "old");
       assert.equal(verify.countEntries(workbook.id), 1);
     } finally { verify.close(); }
-    await key("\x1b", /\[Duplicates\]/);
+    await key("\x1b", /Filters.*Duplicates/);
     await key("\r", /Unsaved import changes/);
     await key(down, /> Save Changes \(Reset Test Data\)/);
     await key(down, /> Discard Changes/);
     await key(down, /> Return to Preview/);
-    await key("\r", /\[Duplicates\]/);
+    await key("\r", /Filters.*Duplicates/);
     await key("\r", /Unsaved import changes/);
     await key(down, /> Save Changes \(Reset Test Data\)/);
     await key(down, /> Discard Changes/);

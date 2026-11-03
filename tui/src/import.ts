@@ -168,7 +168,7 @@ export const IMPORT_EXIT_CHOICES = [
 ] as const;
 
 export function formatImportPreviewFilter(label: string, selected: boolean): string {
-  return selected ? `[${label}]` : label;
+  return selected ? ` ${label} ` : label;
 }
 
 export function importPreviewWordCount(preview: ImportPreview, filter: ImportPreviewFilter): string {

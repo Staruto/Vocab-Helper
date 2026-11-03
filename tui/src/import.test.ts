@@ -83,7 +83,7 @@ Japanese: 魚`, workbook, tagTypes, ["猫"]);
   ]);
   assert.match(buildImportPreviewLines(preview).join("\n"), /\+1 ignored field, \+1 ignored tag/);
   assert.doesNotMatch(buildImportPreviewLines(preview).join("\n"), /Record 1:/);
-  assert.equal(formatImportPreviewFilter("All", true), "[All]");
+  assert.equal(formatImportPreviewFilter("All", true), " All ");
   assert.equal(formatImportPreviewFilter("Ready", false), "Ready");
   assert.equal(importPreviewWordCount(preview, "records"), "5 words");
   assert.equal(importPreviewWordCount(preview, "ready"), "1 word");

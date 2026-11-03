@@ -63,7 +63,7 @@ const PAGE_SIZE = 20;
 const TITLE = "VocabHelper 3.7.1";
 const AUXILIARY_TEXT_COLOR = "#8a8a8a"; // light gray
 const GRAY_TIER_COLOR = "#777777"; // medium gray
-const SELECTED_TEXT_COLOR = "#cea8ff";
+const SELECTED_TEXT_COLOR = "#c5a8ff";
 const TAG_BADGE_COLOR = "#5fd7d7";
 const YELLOW_TIER_COLOR = "#e5c65f";
 const COMMAND_SUGGESTION_ROWS = 6;
@@ -773,10 +773,10 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
         </Box>
         {mode.error ? <Text color="red">{padLine(mode.error, width)}</Text> : null}
         <Text>{padLine("", width)}</Text>
-        <Text color={mode.focus === "filters" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{"─".repeat(width)}</Text>
+        <Text color={SELECTED_TEXT_COLOR}>{padLine("▔".repeat(width), width)}</Text>
         <Box flexDirection="row" gap={3}>
-          <Text color={mode.focus === "filters" ? SELECTED_TEXT_COLOR : "white"} bold={true}>Filters</Text>
-          {filters.map((item) => <Text key={item.key} color={item.key === mode.filter && mode.focus === "filters" ? SELECTED_TEXT_COLOR : "white"} bold={item.key === mode.filter}>{formatImportPreviewFilter(item.label, item.key === mode.filter)}</Text>)}
+          <Text color={SELECTED_TEXT_COLOR} bold={true}>Filters</Text>
+          {filters.map((item) => <Text key={item.key} color={item.key === mode.filter && mode.focus === "filters" ? SELECTED_TEXT_COLOR : "white"} inverse={item.key === mode.filter}>{formatImportPreviewFilter(item.label, item.key === mode.filter)}</Text>)}
         </Box>
         <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`Ignored fields: ${mode.preview.diagnostics.filter((item) => item.kind === "ignored-field").length} | Ignored tags: ${mode.preview.diagnostics.filter((item) => item.kind === "ignored-tag").length}`, width)}</Text>
         <Text>{padLine("", width)}</Text>
