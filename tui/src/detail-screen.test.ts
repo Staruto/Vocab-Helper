@@ -77,7 +77,7 @@ test("detail page keyboard flow preserves carets and drafts, owns navigation, an
   function assertSelectedRow(rendered: string, label: string, editable: boolean): void {
     const line = attributeLine(rendered, label);
     assert.match(stripVTControlCharacters(line), /^> /);
-    assert.match(line, /38;2;206;168;255m/);
+    assert.match(line, /38;2;197;168;255m/);
     assert.doesNotMatch(line, /38;2;229;198;95m/);
     assert.doesNotMatch(line, /\x1b\[40m/);
     // A text row has only the standard white block caret; tag rows have no background.

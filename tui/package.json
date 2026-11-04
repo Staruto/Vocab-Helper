@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "tsx src/index.tsx",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
     "start": "node dist/index.js",
     "test": "tsx --test src/*.test.ts",
     "test:practice": "tsx --test src/practice.test.ts",

@@ -56,7 +56,7 @@ test("import keyboard confirmation stages writes and preview header follows filt
     assert.ok(line, "Missing filters row");
     assert.doesNotMatch(stripVTControlCharacters(line), /[\[\]]/);
     assert.match(line, new RegExp(`\\x1b\\[7m(?:\\x1b\\[[\\d;]*m)* ${label} (?:\\x1b\\[[\\d;]*m)*\\x1b\\[27m`));
-    const color = focused ? "38;2;206;168;255" : "37";
+    const color = focused ? "38;2;197;168;255" : "37";
     assert.match(line, new RegExp(`\\x1b\\[${color}m(?:\\x1b\\[[\\d;]*m)* ${label} `));
     assert.equal((line.match(/\x1b\[7m/g) ?? []).length, 1);
   }
@@ -74,7 +74,7 @@ test("import keyboard confirmation stages writes and preview header follows filt
     rendered = await key(down, /Preview\s+12 words/);
     assertSelectedFilter(rendered, "All", false);
     header = rendered.split("\n").find((line) => line.includes("Preview"))!;
-    assert.match(header, /38;2;206;168;255mPreview/);
+    assert.match(header, /38;2;197;168;255mPreview/);
     rendered = await key(right, /Page 2\/2/);
     assert.match(stripVTControlCharacters(rendered), /Preview\s+12 words/);
     assert.ok(stripVTControlCharacters(rendered).trimEnd().split("\n").length <= 24);
