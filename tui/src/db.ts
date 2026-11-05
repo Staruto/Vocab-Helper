@@ -216,6 +216,13 @@ export class VocabularyRepository {
     const row = workbookId === undefined ? this.db.prepare("SELECT COUNT(*) AS count FROM entries").get() : this.db.prepare("SELECT COUNT(*) AS count FROM entries WHERE workbook_id = ?").get(workbookId);
     return Number((row as { count?: number } | undefined)?.count ?? 0);
   }
+  getWorkbookProgressEnabled(): boolean {
+    return Number((this.db.prepare("SELECT workbook_progress_enabled FROM app_settings WHERE singleton_id = 1").get() as { workbook_progress_enabled: number }).workbook_progress_enabled) === 1;
+  }
+  setWorkbookProgressEnabled(enabled: boolean): boolean {
+    this.db.prepare("UPDATE app_settings SET workbook_progress_enabled = ? WHERE singleton_id = 1").run(enabled ? 1 : 0);
+    return enabled;
+  }
   getTierColorsEnabled(): boolean {
     return Number((this.db.prepare("SELECT tier_colors_enabled FROM app_settings WHERE singleton_id = 1").get() as { tier_colors_enabled: number }).tier_colors_enabled) === 1;
   }

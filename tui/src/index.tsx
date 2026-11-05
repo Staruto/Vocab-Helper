@@ -360,6 +360,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   const [suggestionIndex, setSuggestionIndex] = useState(0);
   const [statusLines, setStatusLines] = useState<string[]>(() => buildStatusLines("/ for commands, Esc to exit."));
   const [tierColorsEnabled, setTierColorsEnabled] = useState(() => backend.getTierColorsEnabled());
+  const [workbookProgressEnabled] = useState(() => backend.getWorkbookProgressEnabled());
   const [savedImportFilePath, setSavedImportFilePath] = useState(workbook.importFilePath);
   const tagTypes = orchestration.tagTypes;
   const visibleEntries = useMemo(() => filterEntriesForSearch(entries, workbook, tagTypes, activeSearchQuery), [entries, workbook, tagTypes, activeSearchQuery]);
@@ -813,8 +814,8 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
         <Text color={AUXILIARY_TEXT_COLOR}>|{padLine(`No vocabulary matches "${activeSearchQuery}".`, Math.max(1, tableLayout.border.length - 2))}|</Text>
       ) : null}
       <Text>{tableLayout.border}</Text>
-      <Text color={dailyProgress.color}>{centerLine(dailyProgress.label, width)}</Text>
-      <Text color={dailyProgress.color}>{centerLine(dailyProgress.bar, width)}</Text>
+      <Text color={dailyProgress.color}>{centerLine(workbookProgressEnabled ? dailyProgress.label : "", width)}</Text>
+      <Text color={dailyProgress.color}>{centerLine(workbookProgressEnabled ? dailyProgress.bar : "", width)}</Text>
       <Box flexDirection="row" width={width} alignItems="center">
         <Box width={footerLeftWidth}><Text color={AUXILIARY_TEXT_COLOR}>{padLine(pageText, footerLeftWidth)}</Text></Box>
         <Box width={searchBoxWidth} borderStyle="single" borderColor={inputFocus === "search" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}>
@@ -1326,10 +1327,33 @@ function ImportSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook
 }
 
 function AppearanceSettingsScreen({ onCancel, onQuit }: { onCancel: () => void; onQuit: () => void }): JSX.Element {
-  const { stdout } = useStdout(); const [width, setWidth] = useState(() => stdout?.columns ?? 80); const [enabled, setEnabled] = useState(() => backend.getTierColorsEnabled());
+  const { stdout } = useStdout();
+  const [width, setWidth] = useState(() => stdout?.columns ?? 80);
+  const [enabled, setEnabled] = useState(() => backend.getTierColorsEnabled());
+  const [progressEnabled, setProgressEnabled] = useState(() => backend.getWorkbookProgressEnabled());
+  const [selected, setSelected] = useState(0);
+  const options = [
+    { label: "Tier colors", enabled },
+    { label: "Workbook homepage progress", enabled: progressEnabled },
+  ];
   useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => { stdout.off("resize", f); }; }, [stdout]);
-  useInput((input, key) => { if (key.ctrl && input === "c") onQuit(); else if (key.escape) onCancel(); else if (input === " ") { const next = !enabled; backend.setTierColorsEnabled(next); setEnabled(next); } });
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Appearance", width)}</Text><Text>{padLine("", width)}</Text><Text color={enabled ? "green" : AUXILIARY_TEXT_COLOR}>{padLine(`[${enabled ? "●" : " "}] Tier colors`, width)}</Text><Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Space toggles | Esc back", width)}</Text></Box>;
+  useInput((input, key) => {
+    if (key.ctrl && input === "c") onQuit();
+    else if (key.escape) onCancel();
+    else if (key.upArrow) setSelected((value) => (value + options.length - 1) % options.length);
+    else if (key.downArrow) setSelected((value) => (value + 1) % options.length);
+    else if (input === " ") {
+      if (selected === 0) setEnabled(backend.setTierColorsEnabled(!enabled));
+      else setProgressEnabled(backend.setWorkbookProgressEnabled(!progressEnabled));
+    }
+  });
+  return <Box flexDirection="column">
+    <Text color="cyan" bold>{centerLine("Appearance", width)}</Text>
+    <Text>{padLine("", width)}</Text>
+    {options.map((option, index) => <Text key={option.label} color={index === selected ? SELECTED_TEXT_COLOR : option.enabled ? "green" : AUXILIARY_TEXT_COLOR}>{padLine(`${index === selected ? ">" : " "} [${option.enabled ? "●" : " "}] ${option.label}`, width)}</Text>)}
+    <Text>{padLine("", width)}</Text>
+    <Text color={AUXILIARY_TEXT_COLOR}>{padLine("↑↓ select | Space toggles | Esc back", width)}</Text>
+  </Box>;
 }
 
 type AttributeSection = "vocabulary" | "meaning" | "preset" | "optional";

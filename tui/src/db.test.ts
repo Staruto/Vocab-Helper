@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { defaultDbPath, TagDataLossError, ValidationError, VocabularyRepository, WorkbookDataLossError, WorkbookConfigurationInput } from "./db.js";
 import { assertDatabaseIntegrity, CURRENT_SCHEMA_VERSION, runSchemaMigrations, SCHEMA_MIGRATIONS } from "./schema.js";
 import type { EntryRow, ImportEntryInput } from "./db.js";
+import { VocabularyBackend } from "./backend.js";
 
 function temporaryDatabase(): { directory: string; path: string; cleanup: () => void } {
   const directory = mkdtempSync(join(tmpdir(), "vocabhelper-"));
@@ -46,6 +47,30 @@ test("fresh databases use the current schema and migrations are idempotent", () 
     assert.equal((db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name LIKE 'mvp_%'").get() as { count: number }).count, 0);
     assertDatabaseIntegrity(db); db.close();
     const reopened = new VocabularyRepository(temp.path); reopened.close();
+  } finally { temp.cleanup(); }
+});
+
+test("homepage progress defaults on after upgrade and persists independently of tier colors", () => {
+  const temp = temporaryDatabase();
+  try {
+    const db = new DatabaseSync(temp.path);
+    runSchemaMigrations(db, SCHEMA_MIGRATIONS.filter((migration) => migration.version <= 8));
+    db.prepare("UPDATE app_settings SET tier_colors_enabled = 0 WHERE singleton_id = 1").run();
+    db.close();
+    const backend = new VocabularyBackend(temp.path);
+    try {
+      assert.equal(backend.getWorkbookProgressEnabled(), true);
+      assert.equal(backend.setWorkbookProgressEnabled(false), false);
+      assert.equal(backend.getWorkbookProgressEnabled(), false);
+      assert.equal(backend.getTierColorsEnabled(), false);
+    } finally { backend.close(); }
+    const reopened = new VocabularyBackend(temp.path);
+    try {
+      assert.equal(reopened.getWorkbookProgressEnabled(), false);
+      assert.equal(reopened.setWorkbookProgressEnabled(true), true);
+      assert.equal(reopened.getWorkbookProgressEnabled(), true);
+      assert.equal(reopened.getTierColorsEnabled(), false);
+    } finally { reopened.close(); }
   } finally { temp.cleanup(); }
 });
 

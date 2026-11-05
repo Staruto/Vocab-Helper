@@ -63,6 +63,8 @@ export class VocabularyBackend {
   }
 
   getTierColorsEnabled(): boolean { return this.repository.getTierColorsEnabled(); }
+  getWorkbookProgressEnabled(): boolean { return this.repository.getWorkbookProgressEnabled(); }
+  setWorkbookProgressEnabled(enabled: boolean): boolean { return this.repository.setWorkbookProgressEnabled(enabled); }
   setTierColorsEnabled(enabled: boolean): boolean { return this.repository.setTierColorsEnabled(enabled); }
   setWorkbookImportFilePath(workbookId: number, path: string | null): WorkbookRow { return this.repository.setWorkbookImportFilePath(workbookId, path); }
   setWorkbookDailyGoal(workbookId: number, goal: number | null): WorkbookRow { return this.repository.setWorkbookDailyGoal(workbookId, goal); }

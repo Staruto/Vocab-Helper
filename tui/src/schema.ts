@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { reviewDeadline } from "./calendar.js";
 import { LANGUAGE_PRESET_DEFINITIONS } from "./language-presets.js";
 
-export const CURRENT_SCHEMA_VERSION = 8;
+export const CURRENT_SCHEMA_VERSION = 9;
 
 export type SchemaMigration = {
   version: number;
@@ -283,6 +283,14 @@ SCHEMA_MIGRATIONS.push({
       CHECK (goal_snapshot IS NULL OR (typeof(goal_snapshot) = 'integer' AND goal_snapshot > 0 AND goal_snapshot <= 9007199254740991));
       UPDATE workbook_daily_practice SET goal_snapshot =
         (SELECT daily_goal FROM workbooks WHERE workbooks.id = workbook_daily_practice.workbook_id);`);
+  },
+});
+
+SCHEMA_MIGRATIONS.push({
+  version: 9,
+  apply(db) {
+    db.exec(`ALTER TABLE app_settings ADD COLUMN workbook_progress_enabled INTEGER NOT NULL DEFAULT 1
+      CHECK (workbook_progress_enabled IN (0, 1));`);
   },
 });
 
