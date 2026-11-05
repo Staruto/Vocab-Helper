@@ -1,4 +1,4 @@
-import { isActiveAttribute, createPresetAttributes } from "./attributes.js";
+import { entryAttributeValue, isActiveAttribute, createPresetAttributes } from "./attributes.js";
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, render, useApp, useInput, useStdout } from "ink";
 import { CreateWorkbookInput, EntryRow, LANGUAGE_PRESET_DEFINITIONS, MeaningAttribute, MetadataAttribute, TagDataLossError, TagType, TagTypeDraft, VocabularyKind, WorkbookAttributesDraft, WorkbookConfigurationInput, WorkbookDataLossError, WorkbookRow, WorkbookTagsDraft } from "./db.js";
@@ -242,14 +242,15 @@ function clampPageIndex(pageIndex: number, totalEntries: number): number {
   return Math.max(0, Math.min(pageIndex, getPageCount(totalEntries) - 1));
 }
 
-type VocabularyTableLayout = { border: string; header: string; columns: Array<{ key: string; label: string }>; widths: number[]; entries: EntryRow[] };
+type VocabularyTableLayout = { border: string; header: string; columns: Array<Pick<MetadataAttribute, "key" | "label" | "role" | "displayOrder">>; widths: number[]; entries: EntryRow[] };
 
 function buildTableLayout(entries: EntryRow[], pageIndex: number, width: number, availableRows: number, vocabularyLabel: string, meaningLabel: string, attributes?: MetadataAttribute[]): VocabularyTableLayout {
   const totalWidth = Math.max(width, 40);
   const innerWidth = Math.max(20, totalWidth - 2);
   const columns = (attributes?.filter((a) => a.visible && isActiveAttribute(a)) ?? [
-    { key: "vocab", label: vocabularyLabel }, { key: "meaning_1", label: meaningLabel },
-  ]).map((a) => ({ key: a.key, label: a.label }));
+    { key: "vocab", label: vocabularyLabel, role: "vocabulary" as const, displayOrder: 0 },
+    { key: "meaning_1", label: meaningLabel, role: "meaning" as const, displayOrder: 1 },
+  ]).map((a) => ({ key: a.key, label: a.label, role: a.role, displayOrder: a.displayOrder }));
   const columnWidth = Math.max(12, Math.floor((innerWidth - columns.length + 1) / columns.length));
   const widths = columns.map((_c, i) => i === columns.length - 1 ? innerWidth - (columnWidth + 1) * (columns.length - 1) : columnWidth);
   const border = `+${widths.map((w) => "─".repeat(w)).join("+")}+`;
@@ -257,12 +258,6 @@ function buildTableLayout(entries: EntryRow[], pageIndex: number, width: number,
   const pageEntries = entries.slice(pageIndex * PAGE_SIZE, pageIndex * PAGE_SIZE + visibleRows);
   const header = `|${columns.map((c, i) => padLine(c.label, widths[i])).join("|")}|`;
   return { border, header, columns, widths, entries: pageEntries };
-}
-
-function tableValueFor(entry: EntryRow, key: string): string {
-  if (key === "vocab") return buildEntryLabel(entry);
-  if (key.startsWith("meaning_")) return entry.meanings[Number(key.slice("meaning_".length)) - 1] ?? "";
-  return entry.attributes[key] ?? "";
 }
 
 function VocabularyTableCell({ entry, width, tagTypes }: { entry: EntryRow; width: number; tagTypes: TagType[] }): JSX.Element {
@@ -815,7 +810,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       <Text>{tableLayout.border}</Text>
       {tableLayout.entries.map((entry) => (
         <Text key={entry.id} color={tierColorsEnabled ? tierColor(entry.tier) : undefined}>
-          |{tableLayout.columns.map((column, index) => <React.Fragment key={column.key}>{column.key === "vocab" ? <VocabularyTableCell entry={entry} width={tableLayout.widths[index]} tagTypes={tagTypes} /> : padLine(tableValueFor(entry, column.key), tableLayout.widths[index])}|</React.Fragment>)}
+          |{tableLayout.columns.map((column, index) => <React.Fragment key={column.key}>{column.key === "vocab" ? <VocabularyTableCell entry={entry} width={tableLayout.widths[index]} tagTypes={tagTypes} /> : padLine(entryAttributeValue(entry, column), tableLayout.widths[index])}|</React.Fragment>)}
         </Text>
       ))}
       {activeSearchQuery && tableLayout.entries.length === 0 ? (

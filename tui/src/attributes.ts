@@ -1,4 +1,4 @@
-import type { MetadataAttribute } from "./db.js";
+import type { EntryRow, MetadataAttribute } from "./db.js";
 import { LANGUAGE_PRESET_DEFINITIONS } from "./language-presets.js";
 
 export function createPresetAttributes(languageCode: string | null): MetadataAttribute[] {
@@ -10,6 +10,13 @@ export function createPresetAttributes(languageCode: string | null): MetadataAtt
 
 export function isActiveAttribute(field: MetadataAttribute): boolean {
   return !field.presetKey || field.active !== false;
+}
+
+export function entryAttributeValue(entry: EntryRow, field: Pick<MetadataAttribute, "key" | "role" | "displayOrder">): string {
+  if (field.key === "vocab") return entry.vocabulary;
+  // Meaning keys retain their identity when promotion changes the display order.
+  if (field.role === "meaning") return entry.meanings[field.displayOrder - 1] ?? "";
+  return entry.attributes[field.key] ?? "";
 }
 
 export function entryAttributes(fields: MetadataAttribute[]): MetadataAttribute[] {

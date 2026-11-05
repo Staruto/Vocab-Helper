@@ -4,7 +4,7 @@ import { EntryRow, TagType, WorkbookRow } from "./db.js";
 import { filterEntriesForSearch } from "./search.js";
 
 const workbook = { id: 1, metadataAttributes: [
-  { key: "vocab", label: "Word", visible: true }, { key: "meaning_1", label: "Meaning", visible: true },
+  { key: "vocab", label: "Word", visible: true }, { key: "meaning_1", role: "meaning", displayOrder: 1, label: "Meaning", visible: true },
   { key: "note", label: "Note", visible: true }, { key: "internal", label: "Internal", visible: false },
 ] } as WorkbookRow;
 const tags: TagType[] = [
