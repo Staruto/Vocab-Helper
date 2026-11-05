@@ -1,4 +1,4 @@
-# VocabHelper 3.7.1
+# VocabHelper 3.8.0
 
 A modern TypeScript TUI for vocabulary memorization.
 
@@ -124,6 +124,7 @@ Current and longest streaks count consecutive local calendar days with any pract
 - Override with `VOCAB_HELPER_DB_PATH`
 - Numeric IDs are stable and are intentionally not recycled after deletion. Gaps are normal.
 - Normalized databases created by VocabHelper 3.0.0 or newer are upgraded automatically.
+- Version 3.8.0 upgrades the database to schema 10, adding a saved list order for each workbook. Existing workbooks default to oldest first; vocabulary content, learning statistics, and practice history are preserved. No manual migration is required. Older app versions reject schema 10 databases, so opening an upgraded database requires version 3.8.0 or newer.
 - On first launch of v3.4.2, tested entries with missing deadlines are repaired automatically using the local calendar date of Last tested and the current Error Count. Existing deadlines and other learning data are preserved; never-tested entries remain unscheduled. Historical deadlines may already be overdue.
 - Legacy Python and hybrid database formats are no longer supported.
 

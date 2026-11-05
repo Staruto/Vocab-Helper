@@ -61,7 +61,7 @@ type ParameterizedCommand = "edit" | "delete";
 type LanguagePreset = { code: string; label: string };
 
 const PAGE_SIZE = 20;
-const TITLE = "VocabHelper 3.7.1";
+const TITLE = "VocabHelper 3.8.0";
 const AUXILIARY_TEXT_COLOR = "#8a8a8a"; // light gray
 const GRAY_TIER_COLOR = "#777777"; // medium gray
 const SELECTED_TEXT_COLOR = "#c5a8ff";
