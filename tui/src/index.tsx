@@ -822,14 +822,14 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       <Box flexDirection="row" width={width} alignItems="center">
         <Box width={footerLeftWidth}><Text color={AUXILIARY_TEXT_COLOR}>{padLine(pageText, footerLeftWidth)}</Text></Box>
         <Box width={searchBoxWidth} borderStyle="single" borderColor={inputFocus === "search" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}>
-          <CaretInputLine prefix="Search: " value={searchDraft} onChange={setSearchDraft} width={Math.max(1, searchBoxWidth - 4)} color="white" focus={mode.kind === "command" && inputFocus === "search"} inputKey="workbook-search" />
+          <CaretInputLine prefix="⌕ Search: " value={searchDraft} onChange={setSearchDraft} width={Math.max(1, searchBoxWidth - 4)} color="white" focus={mode.kind === "command" && inputFocus === "search"} inputKey="workbook-search" />
         </Box>
         <Box width={footerRightWidth}><Text color={AUXILIARY_TEXT_COLOR} italic>{rightLine(footerHint, footerRightWidth)}</Text></Box>
       </Box>
       <Text>{padLine("", width)}</Text>
-      <Text>{padLine("", width)}</Text>
+      <Text color={inputFocus === "command" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{"─".repeat(width)}</Text>
       <CaretInputLine key={textInputKey} prefix="> " value={buffer} onChange={setBuffer} width={width} focus={textInputActive} inputKey={textInputKey} />
-      <Text>{padLine("", width)}</Text>
+      <Text color={inputFocus === "command" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{"─".repeat(width)}</Text>
       {mode.kind === "listOrder" ? <>
         <Text bold color={SELECTED_TEXT_COLOR}>{padLine("Select a list order", width)}</Text>
         <Text>{padLine("", width)}</Text>
