@@ -11,6 +11,7 @@ import { formatImportPreviewFilter, formatImportPreviewRecord, importPreviewPage
 import { createAddDetailEditor, createDetailEditor, detailExitChoices, detailEditRows, detailEditorKeyAction, detailRowChanged, detailRowValue, saveDetailEditor, updateDetailEditor, DetailEditRow, DetailEditorState } from "./detail-editor.js";
 import { CaretInputLine } from "./text-input.js";
 import { filterEntriesForSearch } from "./search.js";
+import { LIST_ORDER_OPTIONS } from "./list-order.js";
 import { localCalendarDay } from "./calendar.js";
 import { buildPracticeProfile } from "./profile-display.js";
 import { buildWorkbookMenuLines, buildWorkbookProgress, parseDailyGoalInput } from "./workbook-display.js";
@@ -84,7 +85,7 @@ const VOCABULARY_TYPES: Array<{ kind: VocabularyKind; code: string | null; label
 const WORKBOOK_MENU_HINT = "↑↓ select | Enter open | Ctrl+E edit | Del delete | Esc exit";
 const WORKBOOK_DELETE_HINT = "Type yes to confirm. Enter deletes. Esc cancels.";
 const COMMANDS: CommandSpec[] = [
-  { name: "list", hint: "Refresh and show entries" },
+  { name: "list", hint: "Order and refresh entries" },
   { name: "search", hint: "Search visible vocabulary properties" },
   { name: "add", hint: "Add a new entry" },
   { name: "import", hint: "Import entries from labeled text" },
@@ -348,7 +349,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
   const [rows, setRows] = useState(() => stdout?.rows ?? 24);
-  const [orchestration, setOrchestration] = useState(() => createInitialState(workbook, orchestrationCapabilities.reads.listEntries(workbook.id), orchestrationCapabilities.reads.listTagTypes(workbook.id)));
+  const [orchestration, setOrchestration] = useState(() => createInitialState(backend.getWorkbook(workbook.id) ?? workbook, orchestrationCapabilities.reads.listEntries(workbook.id), orchestrationCapabilities.reads.listTagTypes(workbook.id)));
   const [entries, setEntries] = useState<EntryRow[]>(() => orchestration.entries);
   const orchestrationRef = useRef(orchestration);
   const [pageIndex, setPageIndex] = useState(0);
@@ -517,7 +518,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     }
 
     if (lower === "list") {
-      dispatchIntent({ type: "commandSubmitted", raw: "/list" });
+      dispatchIntent({ type: "commandSubmitted", raw });
       return;
     }
 
@@ -589,6 +590,13 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       return;
     }
 
+    if (mode.kind === "listOrder") {
+      if (mode.saving) return;
+      if (key.escape) cancelActiveMode();
+      else if (key.upArrow || key.downArrow) dispatchIntent({ type: "listOrderMoved", delta: key.upArrow ? -1 : 1 });
+      else if (key.return) dispatchIntent({ type: "listOrderConfirmed" });
+      return;
+    }
     if (mode.kind === "importPending") return;
     if (mode.kind === "importConfirm") {
       if (key.escape) dispatchIntent({ type: "importPreviewReturned" });
@@ -827,6 +835,11 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       <Text>{padLine("", width)}</Text>
       <CaretInputLine key={textInputKey} prefix="> " value={buffer} onChange={setBuffer} width={width} focus={textInputActive} inputKey={textInputKey} />
       <Text>{padLine("", width)}</Text>
+      {mode.kind === "listOrder" ? <>
+        {LIST_ORDER_OPTIONS.map((option, index) => <Text key={option.value} inverse={index === mode.choice} color={index === mode.choice ? undefined : "white"}>{padLine(`${index === mode.choice ? ">" : " "} ${option.label}`, width)}</Text>)}
+        <Text color={mode.error ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(mode.error ?? (mode.saving ? "Saving list order..." : "Up/Down select | Enter apply | Esc cancel"), width)}</Text>
+        <Text>{padLine("", width)}</Text>
+      </> : null}
       {commandPaletteActive
         ? suggestionLines.map((line, index) => {
           const hasCommands = commandSuggestions.length > 0;
@@ -846,7 +859,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
         })
         : null}
       {commandPaletteActive ? <Text>{padLine("", width)}</Text> : null}
-      {!commandPaletteActive
+      {!commandPaletteActive && mode.kind !== "listOrder"
         ? statusLines.map((line, index) => (
             <Text key={`status-${index}-${line}`} color={AUXILIARY_TEXT_COLOR}>
               {padLine(line, width)}

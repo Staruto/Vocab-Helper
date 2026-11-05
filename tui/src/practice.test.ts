@@ -9,7 +9,7 @@ import { textActionFromRawInput } from "./text-input.js";
 const workbook: WorkbookRow = {
   id: 1, name: "Practice", wordCount: 0, createdAt: "",
   vocabularyLabel: "Vocabulary", vocabularyLanguageCode: null,
-  vocabularyKind: "non_language", importFilePath: null, dailyGoal: null, todayPracticeCount: 0,
+  vocabularyKind: "non_language", importFilePath: null, listOrder: "add_asc", dailyGoal: null, todayPracticeCount: 0,
   meaningAttributes: [{ position: 1, label: "Meaning", languageCode: null }],
   metadataAttributes: [],
 };
@@ -28,6 +28,7 @@ function session(count: number, sessionWorkbook = workbook) {
   let saves = 0;
   const records: Array<{ id: number; correct: boolean; decreaseError: boolean }> = [];
   const capabilities: OrchestrationCapabilities = {
+    list: { saveOrder: unexpected },
     reads: { listEntries: unexpected, getEntry: unexpected, listTagTypes: unexpected, getWorkbook: unexpected },
     writes: { addEntry: unexpected, updateEntry: unexpected, deleteEntry: unexpected },
     import: { readLabeledTextFile: unexpected, previewImportUpdates: unexpected, importEntries: unexpected, readWorkbookImportPath: unexpected, saveWorkbookImportPath: unexpected },

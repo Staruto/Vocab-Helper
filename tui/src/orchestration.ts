@@ -2,6 +2,7 @@ import { localCalendarDay } from "./calendar.js";
 import type { PracticeSessionResult, EntryRow, EntryUpdateOptions, ImportEntryInput, ImportResult, TagType, WorkbookRow } from "./db.js";
 import type { ImportPreview, ImportPreviewFilter, ImportDiagnostic } from "./import.js";
 import { IMPORT_EXIT_CHOICES } from "./import.js";
+import { LIST_ORDER_OPTIONS, LIST_ORDER_USAGE, parseListOrder, type ListOrder } from "./list-order.js";
 
 export type { ImportPreview, ImportPreviewFilter, ImportDiagnostic };
 export type ImportPreviewFocus = "path" | "filters" | "records";
@@ -10,6 +11,7 @@ export type ImportPreviewMode = { kind: "importPreview"; path: string; pathBuffe
 
 export type UiMode =
   | { kind: "command" }
+  | { kind: "listOrder"; choice: number; saving?: boolean; error?: string }
   | { kind: "commandArg"; command: ParameterizedCommand }
   | { kind: "delete"; entryId: number; label: string }
   | { kind: "importPath"; alternate: boolean }
@@ -54,6 +56,7 @@ export type OrchestrationState = {
 };
 
 export type OrchestrationCapabilities = {
+  list: { saveOrder(workbookId: number, order: ListOrder): WorkbookRow };
   reads: { listEntries(workbookId: number): EntryRow[]; getEntry(entryId: number): EntryRow | null; listTagTypes(workbookId: number): TagType[]; getWorkbook(workbookId: number): WorkbookRow | null };
   writes: { addEntry(workbookId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, tagIds?: number[]): EntryRow; updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, tagIds?: number[], options?: EntryUpdateOptions): EntryRow; deleteEntry(entryId: number): void };
   import: { readLabeledTextFile(path: string): Promise<{ path: string; text: string }>; previewImportUpdates(workbookId: number, entries: ImportEntryInput[]): number; importEntries(workbookId: number, entries: ImportEntryInput[], options?: EntryUpdateOptions): ImportResult; readWorkbookImportPath(workbookId: number): string | null; saveWorkbookImportPath(workbookId: number, path: string | null): WorkbookRow };
@@ -61,6 +64,10 @@ export type OrchestrationCapabilities = {
 };
 
 export type Intent =
+  | { type: "listOrderMoved"; delta: number }
+  | { type: "listOrderConfirmed" }
+  | { type: "listOrderSaved"; workbook: WorkbookRow; entries: EntryRow[] }
+  | { type: "listOrderFailed"; error: string }
   | { type: "modeCancelled"; message?: string }
   | { type: "inputFocusChanged"; focus: "command" | "search" }
   | { type: "commandSubmitted"; raw: string }
@@ -102,6 +109,7 @@ export type Intent =
   | { type: "practiceSaveFailed"; requestId: number; error: string };
 
 export type Effect =
+  | { type: "saveListOrder"; workbookId: number; order: ListOrder }
   | { type: "loadEntries"; workbookId: number }
   | { type: "loadPracticeCandidates"; workbookId: number; count: number; requestId: number }
   | { type: "loadImportPreview"; workbookId: number; path: string; requestId: number }
@@ -144,6 +152,16 @@ function commitImport(state: OrchestrationState, previous: ImportPreviewMode, pr
 export function update(state: OrchestrationState, intent: Intent): Transition {
   let next = state;
   const effects: Effect[] = [];
+  if (state.mode.kind === "listOrder" && state.mode.saving && intent.type !== "listOrderSaved" && intent.type !== "listOrderFailed") return { state, effects: [] };
+  if (intent.type === "listOrderMoved") return state.mode.kind === "listOrder"
+    ? { state: { ...state, mode: { kind: "listOrder", choice: (state.mode.choice + intent.delta + LIST_ORDER_OPTIONS.length) % LIST_ORDER_OPTIONS.length } }, effects: [] }
+    : { state, effects: [] };
+  if (intent.type === "listOrderConfirmed") {
+    if (state.mode.kind !== "listOrder") return { state, effects: [] };
+    return { state: { ...state, mode: { ...state.mode, saving: true, error: undefined } }, effects: [{ type: "saveListOrder", workbookId: state.workbook.id, order: LIST_ORDER_OPTIONS[state.mode.choice].value }] };
+  }
+  if (intent.type === "listOrderSaved") return { state: { ...state, workbook: intent.workbook, entries: intent.entries, mode: { kind: "command" }, pageIndex: 0, commandBuffer: "", inputFocus: "command", statusLines: status(`List order saved: ${LIST_ORDER_OPTIONS.find((option) => option.value === intent.workbook.listOrder)!.label}. Loaded ${intent.entries.length} entries.`) }, effects: [] };
+  if (intent.type === "listOrderFailed") return { state: { ...state, mode: state.mode.kind === "listOrder" ? { ...state.mode, saving: false, error: intent.error } : state.mode, statusLines: status(intent.error) }, effects: [] };
   if (state.mode.kind === "importPending" && !["importUpdatesChecked", "importCommitFailed", "importCommitted"].includes(intent.type)) return { state, effects: [] };
   if (intent.type === "modeCancelled") return { state: { ...state, importRequestId: state.importRequestId + 1, mode: { kind: "command" }, commandBuffer: "", statusLines: status(intent.message ?? "Cancelled.") }, effects: [] };
   if (intent.type === "inputFocusChanged") return { state: { ...state, inputFocus: intent.focus }, effects: [] };
@@ -159,7 +177,13 @@ export function update(state: OrchestrationState, intent: Intent): Transition {
   if (intent.type === "pageChanged") return { state: { ...state, pageIndex: clampPage(state.pageIndex + intent.delta, state.entries.length) }, effects: [] };
   if (intent.type === "commandSubmitted") {
     const [command, ...args] = normalize(intent.raw); const lower = command?.toLowerCase();
-    if (lower === "list") return { state: { ...state, commandBuffer: "" }, effects: [{ type: "loadEntries", workbookId: state.workbook.id }] };
+    if (lower === "list") {
+      const order = parseListOrder(args);
+      if (args.length > 0 && !order) return { state: { ...state, statusLines: status(LIST_ORDER_USAGE) }, effects: [] };
+      const choice = LIST_ORDER_OPTIONS.findIndex((option) => option.value === (order ?? state.workbook.listOrder));
+      const selection = { ...state, commandBuffer: "", inputFocus: "command" as const, mode: { kind: "listOrder" as const, choice } };
+      return order ? update(selection, { type: "listOrderConfirmed" }) : { state: selection, effects: [] };
+    }
     if (lower === "search") return update(state, { type: "searchChanged", query: args.join(" " ) });
     if (lower === "import") { const saved = state.workbook.importFilePath; return saved ? update(state, { type: "importPathLoadRequested", path: saved, alternate: false }) : { state: { ...state, mode: { kind: "importPath", alternate: true }, commandBuffer: "", statusLines: status("Enter the path to a UTF-8 .txt import file.") }, effects: [] }; }
     if (lower === "edit") return { state: { ...state, mode: { kind: "commandArg", command: "edit" }, commandBuffer: "/edit ", statusLines: status("Enter id for /edit.") }, effects: [] };

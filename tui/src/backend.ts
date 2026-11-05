@@ -1,5 +1,7 @@
 import { PracticeSessionResult, CreateWorkbookInput, defaultDbPath, EntryRow, EntryUpdateOptions, ImportEntryInput, ImportResult, MeaningAttribute, MeaningPromotionImpact, MetadataAttribute, TagType, TagUpdateImpact, WorkbookAttributesDraft, WorkbookConfigurationInput, WorkbookRow, WorkbookTagsDraft, WorkbookUpdateImpact, VocabularyRepository } from "./db.js";
 
+import type { ListOrder } from "./list-order.js";
+
 export class VocabularyBackend {
   private readonly repository: VocabularyRepository;
 
@@ -9,6 +11,10 @@ export class VocabularyBackend {
 
   listEntries(workbookId?: number): EntryRow[] {
     return this.repository.listEntries(workbookId);
+  }
+
+  setWorkbookListOrder(workbookId: number, order: ListOrder): WorkbookRow {
+    return this.repository.setWorkbookListOrder(workbookId, order);
   }
 
   listWorkbooks(): WorkbookRow[] {

@@ -6,7 +6,7 @@ import { createAddDetailEditor, detailExitChoices, createDetailEditor, detailEdi
 import type { DetailEditorAction, DetailEditorState } from "./detail-editor.js";
 
 const workbook: WorkbookRow = {
-  id: 1, name: "Demo", wordCount: 1, createdAt: "", vocabularyLabel: "Word", vocabularyLanguageCode: null, vocabularyKind: "non_language", importFilePath: null, dailyGoal: null, todayPracticeCount: 0,
+  id: 1, name: "Demo", wordCount: 1, createdAt: "", vocabularyLabel: "Word", vocabularyLanguageCode: null, vocabularyKind: "non_language", importFilePath: null, listOrder: "add_asc", dailyGoal: null, todayPracticeCount: 0,
   meaningAttributes: [{ position: 1, label: "Meaning", languageCode: null }, { position: 2, label: "Other meaning", languageCode: null }],
   metadataAttributes: [
     { key: "usage", role: "optional", label: "Usage", languageCode: null, required: false, visible: false, displayOrder: 1, presetKey: "example_sentence_1", active: true },

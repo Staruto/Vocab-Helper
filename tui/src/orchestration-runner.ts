@@ -1,9 +1,17 @@
 import type { PracticeSessionResult, EntryRow, EntryUpdateOptions, WorkbookRow } from "./db.js";
 import { loadLabeledTextFile, parseLabeledTextImport } from "./import.js";
+import type { ListOrder } from "./list-order.js";
 import type { Effect, Intent, OrchestrationCapabilities, OrchestrationState } from "./orchestration.js";
 
 export async function executeEffect(effect: Effect, state: OrchestrationState, capabilities: OrchestrationCapabilities): Promise<Intent> {
   switch (effect.type) {
+    case "saveListOrder":
+      try {
+        const workbook = capabilities.list.saveOrder(effect.workbookId, effect.order);
+        return { type: "listOrderSaved", workbook, entries: capabilities.reads.listEntries(effect.workbookId) };
+      } catch (error) {
+        return { type: "listOrderFailed", error: error instanceof Error ? error.message : "Could not save or reload list order." };
+      }
     case "loadEntries":
       return { type: "entriesLoaded", entries: capabilities.reads.listEntries(effect.workbookId) };
     case "loadPracticeCandidates":
@@ -60,10 +68,11 @@ export async function executeEffect(effect: Effect, state: OrchestrationState, c
 }
 
 export function createOrchestrationCapabilities(backend: {
+  setWorkbookListOrder(workbookId: number, order: ListOrder): WorkbookRow;
   listEntries(workbookId: number): EntryRow[]; getEntry(entryId: number): EntryRow | null; listTagTypes(workbookId: number): import("./db.js").TagType[]; getWorkbook(workbookId: number): WorkbookRow | null;
   addEntry(workbookId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, tagIds?: number[]): EntryRow; updateEntry(entryId: number, vocabulary: string, meaning: string, meanings?: string[], attributes?: Record<string, string>, tagIds?: number[], options?: EntryUpdateOptions): EntryRow; deleteEntry(entryId: number): void;
   previewImportUpdates(workbookId: number, entries: import("./db.js").ImportEntryInput[]): number;
   importEntries(workbookId: number, entries: import("./db.js").ImportEntryInput[], options?: EntryUpdateOptions): import("./db.js").ImportResult; setWorkbookImportFilePath(workbookId: number, path: string | null): WorkbookRow; selectPracticeCandidates(workbookId: number, count: number): EntryRow[]; completePracticeSession(workbookId: number, results: PracticeSessionResult[], completedDay: string): EntryRow[];
 }): OrchestrationCapabilities {
-  return { reads: { listEntries: (id) => backend.listEntries(id), getEntry: (id) => backend.getEntry(id), listTagTypes: (id) => backend.listTagTypes(id), getWorkbook: (id) => backend.getWorkbook(id) }, writes: { addEntry: (...args) => backend.addEntry(...args), updateEntry: (...args) => backend.updateEntry(...args), deleteEntry: (id) => backend.deleteEntry(id) }, import: { readLabeledTextFile: loadLabeledTextFile, previewImportUpdates: (id, entries) => backend.previewImportUpdates(id, entries), importEntries: (id, entries, options) => backend.importEntries(id, entries, options), readWorkbookImportPath: (id) => backend.getWorkbook(id)?.importFilePath ?? null, saveWorkbookImportPath: (id, path) => backend.setWorkbookImportFilePath(id, path) }, practice: { selectPracticeCandidates: (id, count) => backend.selectPracticeCandidates(id, count), completePracticeSession: (id, results, day) => backend.completePracticeSession(id, results, day) } };
+  return { list: { saveOrder: (id, order) => backend.setWorkbookListOrder(id, order) }, reads: { listEntries: (id) => backend.listEntries(id), getEntry: (id) => backend.getEntry(id), listTagTypes: (id) => backend.listTagTypes(id), getWorkbook: (id) => backend.getWorkbook(id) }, writes: { addEntry: (...args) => backend.addEntry(...args), updateEntry: (...args) => backend.updateEntry(...args), deleteEntry: (id) => backend.deleteEntry(id) }, import: { readLabeledTextFile: loadLabeledTextFile, previewImportUpdates: (id, entries) => backend.previewImportUpdates(id, entries), importEntries: (id, entries, options) => backend.importEntries(id, entries, options), readWorkbookImportPath: (id) => backend.getWorkbook(id)?.importFilePath ?? null, saveWorkbookImportPath: (id, path) => backend.setWorkbookImportFilePath(id, path) }, practice: { selectPracticeCandidates: (id, count) => backend.selectPracticeCandidates(id, count), completePracticeSession: (id, results, day) => backend.completePracticeSession(id, results, day) } };
 }

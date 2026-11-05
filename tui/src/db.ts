@@ -5,6 +5,7 @@ import { addCalendarDays, localCalendarDay, reviewDeadline } from "./calendar.js
 import { runSchemaMigrations } from "./schema.js";
 import { LANGUAGE_PRESET_DEFINITIONS } from "./language-presets.js";
 import { createPresetAttributes, isActiveAttribute } from "./attributes.js";
+import { LIST_ORDER_OPTIONS, type ListOrder } from "./list-order.js";
 export { LANGUAGE_PRESET_DEFINITIONS } from "./language-presets.js";
 export type { LanguagePresetDefinition } from "./language-presets.js";
 
@@ -36,6 +37,7 @@ export type WorkbookRow = {
   vocabularyLabel: string; vocabularyLanguageCode: string | null;
   vocabularyKind: VocabularyKind;
   importFilePath: string | null;
+  listOrder: ListOrder;
   dailyGoal: number | null; todayPracticeCount: number;
   meaningAttributes: MeaningAttribute[]; metadataAttributes: MetadataAttribute[];
 };
@@ -208,9 +210,22 @@ export class VocabularyRepository {
   listEntries(workbookId?: number): EntryRow[] {
     const resolved = workbookId ?? this.getCurrentWorkbookId();
     if (resolved === null) return [];
-    this.requireWorkbook(resolved);
-    const ids = this.db.prepare("SELECT id FROM entries WHERE workbook_id = ? ORDER BY id").all(resolved) as Array<{ id: number }>;
+    const workbook = this.requireWorkbook(resolved);
+    const orderBy: Record<ListOrder, string> = {
+      add_asc: "e.id ASC",
+      add_desc: "e.id DESC",
+      error_asc: "(s.test_count = 0) ASC, CASE WHEN s.test_count > 0 THEN s.error_count END ASC, e.id ASC",
+      error_desc: "(s.test_count = 0) DESC, CASE WHEN s.test_count > 0 THEN s.error_count END DESC, e.id ASC",
+    };
+    const ids = this.db.prepare(`SELECT e.id FROM entries e JOIN entry_stats s ON s.entry_id = e.id
+      WHERE e.workbook_id = ? ORDER BY ${orderBy[workbook.listOrder]}`).all(resolved) as Array<{ id: number }>;
     return ids.map((row) => this.getEntry(Number(row.id))!);
+  }
+  setWorkbookListOrder(workbookId: number, order: ListOrder): WorkbookRow {
+    this.requireWorkbook(workbookId);
+    if (!LIST_ORDER_OPTIONS.some((option) => option.value === order)) throw new ValidationError("Choose a valid list order.");
+    this.db.prepare("UPDATE workbooks SET list_order = ? WHERE id = ?").run(order, workbookId);
+    return this.requireWorkbook(workbookId);
   }
   countEntries(workbookId?: number): number {
     const row = workbookId === undefined ? this.db.prepare("SELECT COUNT(*) AS count FROM entries").get() : this.db.prepare("SELECT COUNT(*) AS count FROM entries WHERE workbook_id = ?").get(workbookId);
@@ -570,6 +585,7 @@ export class VocabularyRepository {
       id, name: String(row.name), wordCount: Number(row.word_count ?? 0), createdAt: String(row.created_at), vocabularyLabel, vocabularyLanguageCode,
       vocabularyKind: String(row.vocabulary_kind) as VocabularyKind,
       importFilePath: row.import_file_path == null ? null : String(row.import_file_path),
+      listOrder: String(row.list_order) as ListOrder,
       dailyGoal: row.daily_goal == null ? null : Number(row.daily_goal), todayPracticeCount: Number(row.today_practice_count ?? 0),
       meaningAttributes: meanings, metadataAttributes: metadata,
     };

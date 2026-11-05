@@ -33,6 +33,12 @@ npm run build
 npm run start
 ```
 
+## Vocabulary list ordering
+
+Run `/list` to choose **Added: oldest first**, **Added: newest first**, **Error count: ascending**, or **Error count: descending** in the command palette area. Up/Down selects, Enter saves and refreshes, and Esc cancels. The current order is selected initially; confirming it refreshes the list too.
+
+Use `/list add asc`, `/list add desc`, `/list error asc`, or `/list error desc` to apply an order directly. Each workbook remembers its order across restarts; the default is oldest first, using vocabulary IDs. Unpracticed entries (Test Count 0) appear first for descending error count and last for ascending error count. Error-count ties use ascending ID. Ordering preserves the active search, resets to the first page, and also applies to Previous/Next navigation in details.
+
 ## Adding, viewing, and editing entries
 
 Use `/add` to open a blank **New Vocabulary** draft in the detail editor, starting on the vocabulary row. Fill in the vocabulary and primary meaning; other meanings, active optional attributes, and tags are optional. Nothing is written until you confirm saving. Esc or Ctrl+S offers **Save Changes**, **Discard Changes**, or **Continue Editing** when the draft has changes. An unchanged blank draft or discarded draft returns to the vocabulary list. Saving opens the new entry in detail view; validation or save errors keep the draft available for correction.

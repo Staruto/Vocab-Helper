@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { reviewDeadline } from "./calendar.js";
 import { LANGUAGE_PRESET_DEFINITIONS } from "./language-presets.js";
 
-export const CURRENT_SCHEMA_VERSION = 9;
+export const CURRENT_SCHEMA_VERSION = 10;
 
 export type SchemaMigration = {
   version: number;
@@ -291,6 +291,14 @@ SCHEMA_MIGRATIONS.push({
   apply(db) {
     db.exec(`ALTER TABLE app_settings ADD COLUMN workbook_progress_enabled INTEGER NOT NULL DEFAULT 1
       CHECK (workbook_progress_enabled IN (0, 1));`);
+  },
+});
+
+SCHEMA_MIGRATIONS.push({
+  version: 10,
+  apply(db) {
+    db.exec(`ALTER TABLE workbooks ADD COLUMN list_order TEXT NOT NULL DEFAULT 'add_asc'
+      CHECK (list_order IN ('add_asc', 'add_desc', 'error_asc', 'error_desc'));`);
   },
 });
 
