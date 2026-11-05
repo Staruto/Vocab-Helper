@@ -128,11 +128,7 @@ export function parseLabeledTextImport(text: string, workbook: WorkbookRow, tagT
       diagnostics.push({ recordNumber, kind: "invalid", message: `missing required field '${workbook.vocabularyLabel}'` });
       malformed = true;
     }
-    const primaryLabel = workbook.meaningAttributes[0]?.label ?? "Primary Meaning";
-    if (!meanings[0]) {
-      diagnostics.push({ recordNumber, kind: "invalid", message: `missing required field '${primaryLabel}'` });
-      malformed = true;
-    }
+
     if (malformed) {
       skippedInvalid += 1;
       previewRecords.push({ recordNumber, status: "invalid", vocabulary: vocabulary || "<missing vocabulary>", ignoredFieldCount, ignoredTagCount });

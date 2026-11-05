@@ -20,7 +20,7 @@ test("import keyboard confirmation stages writes and preview header follows filt
   repository.completePracticeSession(workbook.id, [{ entryId: entry.id, answers: [false, true] }], "2026-10-25");
   const stats = repository.getEntryStats(entry.id);
   const record = (word: string, meaning: string) => `${workbook.vocabularyLabel}: ${word}\n${workbook.meaningAttributes[0].label}: ${meaning}`;
-  writeFileSync(file, [record("existing", "new"), ...Array.from({ length: 10 }, (_, i) => record(`word${i}`, "meaning")), `${workbook.vocabularyLabel}: invalid`].join("\n\n"));
+  writeFileSync(file, [record("existing", "new"), ...Array.from({ length: 10 }, (_, i) => record(`word${i}`, i === 0 ? "" : "meaning")), `${workbook.meaningAttributes[0].label}: missing vocabulary`].join("\n\n"));
   repository.close();
   const source = `
     process.stdin.isTTY = true;
@@ -114,6 +114,7 @@ test("import keyboard confirmation stages writes and preview header follows filt
       assert.equal(saved.getEntry(entry.id)!.meaning, "new");
       assert.deepEqual(saved.getEntryStats(entry.id), stats);
       assert.equal(saved.countEntries(workbook.id), 11);
+      assert.equal(saved.listEntries(workbook.id).find((item) => item.vocabulary === "word0")?.meaning, "");
     } finally { saved.close(); }
   } finally {
     if (child.exitCode === null && child.signalCode === null) {

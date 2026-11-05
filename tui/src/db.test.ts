@@ -34,6 +34,55 @@ function customAttributesWorkbook(): WorkbookConfigurationInput {
   };
 }
 
+test("optional meanings support blank entry values and preserve visibility across settings and restart", () => {
+  const temp = temporaryDatabase();
+  let repository = new VocabularyRepository(temp.path);
+  try {
+    const workbook = repository.createWorkbook("Optional meanings");
+    assert.equal(workbook.meaningAttributes[0].visible, true);
+    for (const value of ["", "   "]) {
+      const entry = repository.addEntry(workbook.id, `word${value.length}`, value);
+      assert.deepEqual(entry.meanings, [""]);
+      assert.equal(repository.updateEntry(entry.id, entry.vocabulary, "  ").meaning, "");
+    }
+    assert.throws(() => repository.addEntry(workbook.id, "  ", ""), /required/);
+    const fields = workbook.metadataAttributes.filter((field) => field.role !== "vocabulary").map((field) => ({ ...field, visible: false }));
+    const hidden = repository.updateWorkbookAttributes(workbook.id, { vocabularyLabel: workbook.vocabularyLabel, fields });
+    assert.equal(hidden.meaningAttributes[0].visible, false);
+    assert.equal(hidden.metadataAttributes.find((field) => field.role === "meaning")?.required, false);
+    const { visible: _visible, ...meaning } = hidden.meaningAttributes[0];
+    repository.updateWorkbookSettings(workbook.id, "Renamed", workbook.vocabularyLabel, null, [meaning]);
+    repository.close();
+    repository = new VocabularyRepository(temp.path);
+    const reopened = repository.getWorkbook(workbook.id)!;
+    assert.equal(reopened.meaningAttributes[0].visible, false);
+    const shown = repository.updateWorkbookAttributes(workbook.id, { vocabularyLabel: workbook.vocabularyLabel, fields: fields.map((field) => ({ ...field, visible: true })) });
+    assert.equal(shown.meaningAttributes[0].visible, true);
+  } finally { repository.close(); temp.cleanup(); }
+});
+
+test("migration 11 clears required meaning flags while preserving values and visibility", () => {
+  const temp = temporaryDatabase();
+  try {
+    const repository = new VocabularyRepository(temp.path);
+    const workbook = repository.createWorkbook("Upgrade", "Word", null, [
+      { position: 1, label: "Meaning", languageCode: null, visible: false },
+      { position: 2, label: "Other", languageCode: null, visible: true },
+    ]);
+    const entry = repository.addEntry(workbook.id, "word", "definition", ["definition", "other"]);
+    repository.close();
+    const db = new DatabaseSync(temp.path);
+    db.exec("DELETE FROM schema_migrations WHERE version = 11; UPDATE workbook_fields SET is_required = 1 WHERE role = 'meaning'");
+    runSchemaMigrations(db);
+    assert.deepEqual(db.prepare("SELECT is_required, is_visible FROM workbook_fields ORDER BY position").all().map((row) => [row.is_required, row.is_visible]), [[0, 0], [0, 1]]);
+    assertDatabaseIntegrity(db);
+    db.close();
+    const upgraded = new VocabularyRepository(temp.path);
+    try { assert.deepEqual(upgraded.getEntry(entry.id)?.meanings, ["definition", "other"]); }
+    finally { upgraded.close(); }
+  } finally { temp.cleanup(); }
+});
+
 test("fresh databases use the current schema and migrations are idempotent", () => {
   const temp = temporaryDatabase();
   try {
@@ -409,7 +458,7 @@ test("attribute updates preserve stable meaning identity and values when a middl
   } finally { repository?.close(); temp.cleanup(); }
 });
 
-test("new attributes receive blank values and the primary meaning remains required and visible", () => {
+test("new attributes receive blank values and the primary meaning can be optional and hidden", () => {
   const temp = temporaryDatabase(); let repository: VocabularyRepository | undefined;
   try {
     repository = new VocabularyRepository(temp.path);
@@ -423,8 +472,8 @@ test("new attributes receive blank values and the primary meaning remains requir
     assert.equal(updated.vocabularyLabel, "Term");
     assert.equal(updated.meaningAttributes[0].position, 1);
     const firstMeaning = updated.metadataAttributes.find((field) => field.role === "meaning" && field.displayOrder === 1)!;
-    assert.equal(firstMeaning.required, true);
-    assert.equal(firstMeaning.visible, true);
+    assert.equal(firstMeaning.required, false);
+    assert.equal(firstMeaning.visible, false);
     assert.deepEqual(repository.getEntry(entry.id)?.meanings, ["cat", ""]);
     assert.equal(repository.getEntry(entry.id)?.attributes.source, "");
   } finally { repository?.close(); temp.cleanup(); }
@@ -451,8 +500,8 @@ test("a fully populated meaning can become primary without changing field identi
     const updated = repository.updateWorkbookAttributes(workbook.id, { vocabularyLabel: before.vocabularyLabel, fields });
     assert.deepEqual(updated.meaningAttributes.map((field) => [field.id, field.label]), [[japanese.id, "Japanese"], [meaningFields[0].id, "English"], [meaningFields[2].id, "Chinese"]]);
     const updatedFields = updated.metadataAttributes.filter((field) => field.role === "meaning");
-    assert.equal(updatedFields[0].required, true);
-    assert.equal(updatedFields[0].visible, true);
+    assert.equal(updatedFields[0].required, false);
+    assert.equal(updatedFields[0].visible, false);
     assert.equal(updatedFields[1].required, false);
     assert.equal(updatedFields[1].visible, true);
     assert.deepEqual(repository.getEntry(entry.id)?.meanings, ["猫", "cat", "猫"]);
@@ -460,7 +509,7 @@ test("a fully populated meaning can become primary without changing field identi
   } finally { repository?.close(); temp.cleanup(); }
 });
 
-test("an incomplete meaning cannot become primary and the failed save is atomic", () => {
+test("an incomplete meaning can become primary without changing values or visibility", () => {
   const temp = temporaryDatabase(); let repository: VocabularyRepository | undefined;
   try {
     repository = new VocabularyRepository(temp.path);
@@ -477,13 +526,13 @@ test("an incomplete meaning cannot become primary and the failed save is atomic"
     assert.equal(repository.getMeaningPromotionImpact(workbook.id, meaningFields[1].id!).emptyEntryCount, 1);
 
     const fields = [meaningFields[1], meaningFields[0], ...before.metadataAttributes.filter((field) => field.role === "optional")];
-    assert.throws(() => repository!.updateWorkbookAttributes(workbook.id, { vocabularyLabel: before.vocabularyLabel, fields }), /1 entry is empty/);
-    assert.deepEqual(repository.getWorkbook(workbook.id)?.meaningAttributes.map((field) => field.id), meaningFields.map((field) => field.id));
-    assert.deepEqual(repository.listEntries(workbook.id).map((entry) => entry.meanings), [["cat", "猫"], ["dog", ""]]);
+    repository.updateWorkbookAttributes(workbook.id, { vocabularyLabel: before.vocabularyLabel, fields });
+    assert.deepEqual(repository.getWorkbook(workbook.id)?.meaningAttributes.map((field) => field.id), [meaningFields[1].id, meaningFields[0].id]);
+    assert.deepEqual(repository.listEntries(workbook.id).map((entry) => entry.meanings), [["猫", "cat"], ["", "dog"]]);
   } finally { repository?.close(); temp.cleanup(); }
 });
 
-test("empty workbooks allow primary promotion and enforce it for later entries", () => {
+test("empty workbooks allow primary promotion and blank meanings for later entries", () => {
   const temp = temporaryDatabase(); let repository: VocabularyRepository | undefined;
   try {
     repository = new VocabularyRepository(temp.path);
@@ -497,7 +546,7 @@ test("empty workbooks allow primary promotion and enforce it for later entries",
     assert.equal(repository.getMeaningPromotionImpact(workbook.id, meaningFields[1].id!).emptyEntryCount, 0);
     const fields = [meaningFields[1], meaningFields[0], ...workbook.metadataAttributes.filter((field) => field.role === "optional")];
     repository.updateWorkbookAttributes(workbook.id, { vocabularyLabel: workbook.vocabularyLabel, fields });
-    assert.throws(() => repository!.addEntry(workbook.id, "cat", "", ["", "cat"]), /Japanese is required/);
+    assert.deepEqual(repository.addEntry(workbook.id, "cat", "", ["", "cat"]).meanings, ["", "cat"]);
   } finally { repository?.close(); temp.cleanup(); }
 });
 

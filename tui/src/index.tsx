@@ -1444,16 +1444,10 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
     if (selected.section !== "meaning" || !selectedField || meanings[0] === selectedField) return;
     if (selectedField.id === undefined) { setMessage("Save this new meaning before making it the Primary Meaning."); return; }
     try {
-      const impact = backend.getMeaningPromotionImpact(workbook.id, selectedField.id);
-      if (impact.emptyEntryCount > 0) {
-        const noun = impact.emptyEntryCount === 1 ? "entry is" : "entries are";
-        setMessage(`Cannot make ${selectedField.label} the Primary Meaning: ${impact.emptyEntryCount} ${noun} empty.`);
-        return;
-      }
       setFields((current) => {
         const promoted = current.find((field) => field.id === selectedField.id)!;
         const reorderedMeanings = [
-          { ...promoted, required: true, visible: true },
+          { ...promoted, required: false },
           ...current.filter((field) => field.role === "meaning" && field.id !== promoted.id).map((field) => ({ ...field, required: false })),
         ];
         return [...reorderedMeanings, ...current.filter((field) => field.role === "optional")];
@@ -1517,7 +1511,7 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
     if (key.ctrl && input.toLowerCase() === "r") { beginRename(); return; }
     if (key.tab) { togglePreset(); return; }
     if (input === " ") {
-      if (selected.section === "vocabulary" || (selected.section === "meaning" && meanings[0] === selectedField)) { setMessage(selected.section === "vocabulary" ? "Vocabulary is always shown." : "The Primary Meaning is required and always shown."); return; }
+      if (selected.section === "vocabulary") { setMessage("Vocabulary is always shown."); return; }
       if (selectedField) setFields((current) => current.map((field) => field === selectedField ? { ...field, visible: !field.visible } : field));
       return;
     }
@@ -1538,7 +1532,7 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
     return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Confirm data removal", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Saving will permanently remove stored values from these fields:", width)}</Text><Text>{padLine("", width)}</Text>{destructiveFields.map((field) => <Text key={field.label} color="red">{padLine(`${field.label}: ${field.valueCount} populated value(s)`, width)}</Text>)}<Text>{padLine("", width)}</Text><CaretInputLine prefix="Type yes: " value={confirmBuffer} onChange={(value) => { setConfirmBuffer(value); setMessage(""); }} width={width} color="cyan" inputKey="attribute-destructive-confirm" /><Text color="red">{padLine(message, width)}</Text><Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Enter confirm | Esc continue editing", width)}</Text></Box>;
   }
 
-  const meaningFooter = meanings[0] === selectedField ? "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Esc leave" : `↑↓ navigate | Ctrl+A add | Ctrl+R rename${selectedField?.id === undefined ? "" : " | Ctrl+P make primary"} | Space show/hide | Del remove | Esc leave`;
+  const meaningFooter = meanings[0] === selectedField ? "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Space show/hide | Esc leave" : `↑↓ navigate | Ctrl+A add | Ctrl+R rename${selectedField?.id === undefined ? "" : " | Ctrl+P make primary"} | Space show/hide | Del remove | Esc leave`;
   const footer = editAction !== "none" ? "Enter confirm | Esc cancel edit" : selected.section === "vocabulary" ? "↑↓ navigate | Ctrl+R rename | Esc leave" : selected.section === "meaning" ? meaningFooter : selected.section === "preset" ? "↑↓ select | Tab active/inactive | Ctrl+R rename | Space show/hide | Esc leave" : "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Space show/hide | Del remove | Esc leave";
   const lines: Array<{ text: string; color?: string; borderColor?: string; bold?: boolean; selected?: boolean; inactiveLabel?: string }> = [];
   function group(section: AttributeSection, title: string, description: string, members: Array<{ field: MetadataAttribute; index: number }>): void {
@@ -1553,13 +1547,13 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
     else for (const { field, index } of members) {
       const focused = selected.fieldIndex === index;
       const color = focused ? SELECTED_TEXT_COLOR : "white";
-      line(`${focused ? ">" : " "} ${field.label} [${field.visible ? "shown" : "hidden"}]${meanings[0] === field ? " (primary, required)" : ""}`, color, false, focused, isActiveAttribute(field) ? undefined : field.label);
+      line(`${focused ? ">" : " "} ${field.label} [${field.visible ? "shown" : "hidden"}]${meanings[0] === field ? " (primary)" : ""}`, color, false, focused, isActiveAttribute(field) ? undefined : field.label);
     }
     lines.push({ text: `└${"─".repeat(Math.max(1, width - 2))}┘`, color: borderColor });
   }
   const indexed = fields.map((field, index) => ({ field, index }));
   group("vocabulary", "Vocabulary", "The workbook type is fixed. This display name can be changed.", []);
-  group("meaning", "Meanings", "The Primary Meaning is required and always shown. Up to five meanings.", indexed.filter(({ field }) => field.role === "meaning"));
+  group("meaning", "Meanings", "Meaning values are optional. Space shows or hides a column. Up to five meanings.", indexed.filter(({ field }) => field.role === "meaning"));
   if (presets.length) group("preset", "Language Preset Attributes", "Rename, activate, or change visibility. Preset membership is fixed.", indexed.filter(({ field }) => Boolean(field.presetKey)));
   group("optional", "Optional Attributes", "Custom fields can be added, renamed, shown, hidden, or removed.", indexed.filter(({ field }) => field.role === "optional" && !field.presetKey));
   const viewportSize = Math.max(1, height - (editAction !== "none" ? 7 : 6));

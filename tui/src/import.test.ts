@@ -57,6 +57,13 @@ Example Sentence 2: 連休に海へ行きます。 (I will go to the sea during 
   assert.deepEqual(preview.diagnostics, []);
 });
 
+test("missing, empty, and whitespace meanings are valid while vocabulary is required", () => {
+  const preview = parseLabeledTextImport("Japanese: first\n\nJapanese: second\nEnglish:\n\nJapanese: third\nEnglish:   \n\nEnglish: definition", workbook, tagTypes, []);
+  assert.deepEqual(preview.entries.map((entry) => entry.meanings), [["", "", ""], ["", "", ""], ["", "", ""]]);
+  assert.equal(preview.skippedInvalid, 1);
+  assert.match(preview.diagnostics.map((item) => item.message).join("\n"), /missing required field 'Japanese'/);
+});
+
 test("records report every row with status, vocabulary, and compact ignored-data counts", () => {
   const preview = parseLabeledTextImport(`\uFEFFJapanese: 猫\r
 English: cat: a small feline\r
@@ -75,20 +82,20 @@ English: bird\r
 \r
 Japanese: 魚`, workbook, tagTypes, ["猫"]);
 
-  assert.deepEqual(preview.entries.map((entry) => entry.vocabulary), ["猫", "犬", "犬"]);
+  assert.deepEqual(preview.entries.map((entry) => entry.vocabulary), ["猫", "犬", "犬", "魚"]);
   assert.equal(preview.skippedDuplicates, 2);
-  assert.equal(preview.skippedInvalid, 2);
+  assert.equal(preview.skippedInvalid, 1);
   assert.deepEqual(preview.records.map((record) => [record.status, record.vocabulary]), [
-    ["duplicate", "猫"], ["ready", "犬"], ["duplicate", "犬"], ["invalid", "鳥"], ["invalid", "魚"],
+    ["duplicate", "猫"], ["ready", "犬"], ["duplicate", "犬"], ["invalid", "鳥"], ["ready", "魚"],
   ]);
   assert.match(buildImportPreviewLines(preview).join("\n"), /\+1 ignored field, \+1 ignored tag/);
   assert.doesNotMatch(buildImportPreviewLines(preview).join("\n"), /Record 1:/);
   assert.equal(formatImportPreviewFilter("All", true), " All ");
   assert.equal(formatImportPreviewFilter("Ready", false), "Ready");
   assert.equal(importPreviewWordCount(preview, "records"), "5 words");
-  assert.equal(importPreviewWordCount(preview, "ready"), "1 word");
+  assert.equal(importPreviewWordCount(preview, "ready"), "2 words");
   assert.equal(importPreviewWordCount(preview, "duplicates"), "2 words");
-  assert.equal(importPreviewWordCount(preview, "invalid"), "2 words");
+  assert.equal(importPreviewWordCount(preview, "invalid"), "1 word");
   assert.deepEqual(paginateImportPreview(preview, "duplicates", 1, 1).records.map((record) => record.vocabulary), ["犬"]);
   assert.equal(paginateImportPreview(preview, "ready", 99, 10).pageIndex, 0);
 });

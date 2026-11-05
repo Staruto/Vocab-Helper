@@ -41,7 +41,7 @@ Use `/list add asc`, `/list add desc`, `/list error asc`, or `/list error desc` 
 
 ## Adding, viewing, and editing entries
 
-Use `/add` to open a blank **New Vocabulary** draft in the detail editor, starting on the vocabulary row. Fill in the vocabulary and primary meaning; other meanings, active optional attributes, and tags are optional. Nothing is written until you confirm saving. Esc or Ctrl+S offers **Save Changes**, **Discard Changes**, or **Continue Editing** when the draft has changes. An unchanged blank draft or discarded draft returns to the vocabulary list. Saving opens the new entry in detail view; validation or save errors keep the draft available for correction.
+Use `/add` to open a blank **New Vocabulary** draft in the detail editor, starting on the vocabulary row. Fill in the vocabulary; all meanings, active optional attributes, and tags are optional. The primary meaning is shown on the workbook homepage by default; use Space in attribute settings to show or hide its column. Nothing is written until you confirm saving. Esc or Ctrl+S offers **Save Changes**, **Discard Changes**, or **Continue Editing** when the draft has changes. An unchanged blank draft or discarded draft returns to the vocabulary list. Saving opens the new entry in detail view; validation or save errors keep the draft available for correction.
 
 Use `/view <id>` to open entry details. The vocabulary appears as both the title and the first labeled row under a Vocabulary section heading. Left/Right opens the previous/next entry; Ctrl+E enters edit mode. `/edit <id>` opens details directly in edit mode; `/edit` prompts for an ID.
 
@@ -83,7 +83,7 @@ Run `/import` inside an open workbook. If that workbook has no default import fi
 
 Set, replace, or clear the workbook's default file under `/setting` > `Import`. Saved paths are validated and stored as absolute paths. A valid default opens directly in the import preview; if it can no longer be loaded, the app reports the error and returns to path entry. After importing from a different file, the app asks whether to remember it as the workbook default.
 
-Each line uses `Workbook label: value`, and blank lines separate entries. Labels match the workbook's displayed attribute and tag-type names exactly; their order does not matter. Multiple tags use commas. Unknown fields and tag values are reported and ignored, while records missing the vocabulary or primary meaning are skipped. New vocabularies are added; valid duplicates synchronize changed meanings, optional fields, and tags, and identical duplicates are left untouched.
+Each line uses `Workbook label: value`, and blank lines separate entries. Labels match the workbook's displayed attribute and tag-type names exactly; their order does not matter. Multiple tags use commas. Unknown fields and tag values are reported and ignored, while records missing the vocabulary are skipped; omitted or blank meanings are accepted as empty values. New vocabularies are added; valid duplicates synchronize changed meanings, optional fields, and tags, and identical duplicates are left untouched.
 
 ```text
 Japanese: 連休

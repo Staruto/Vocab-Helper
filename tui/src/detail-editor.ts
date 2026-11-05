@@ -154,7 +154,6 @@ export function saveDetailEditor(state: DetailEditorState, workbook: WorkbookRow
     const vocabulary = state.draft.vocabulary.trim();
     const meanings = state.draft.meanings.map((value) => value.trim());
     if (!vocabulary) return { ...state, mode: "edit", selected: 0, error: "Vocabulary is required." };
-    if (!meanings[0]) return { ...state, mode: "edit", selected: 1, error: `${workbook.meaningAttributes[0]?.label ?? "Primary Meaning"} is required.` };
     const attributes = { ...state.draft.attributes };
     for (const field of entryAttributes(workbook.metadataAttributes)) attributes[field.key] = (attributes[field.key] ?? "").trim();
     return createDetailEditor(write({ vocabulary, meanings, attributes, tagIds: [...state.draft.tagIds] }, { preserveTestData: choice.preserveTestData }));

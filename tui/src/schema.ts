@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { reviewDeadline } from "./calendar.js";
 import { LANGUAGE_PRESET_DEFINITIONS } from "./language-presets.js";
 
-export const CURRENT_SCHEMA_VERSION = 10;
+export const CURRENT_SCHEMA_VERSION = 11;
 
 export type SchemaMigration = {
   version: number;
@@ -299,6 +299,13 @@ SCHEMA_MIGRATIONS.push({
   apply(db) {
     db.exec(`ALTER TABLE workbooks ADD COLUMN list_order TEXT NOT NULL DEFAULT 'add_asc'
       CHECK (list_order IN ('add_asc', 'add_desc', 'error_asc', 'error_desc'));`);
+  },
+});
+
+SCHEMA_MIGRATIONS.push({
+  version: 11,
+  apply(db) {
+    db.exec("UPDATE workbook_fields SET is_required = 0 WHERE role = 'meaning'");
   },
 });
 

@@ -60,11 +60,11 @@ test("creation validates required rows and preserves drafts on failure for retry
   state = act(state, { type: "change", value: "" });
   state = saveDetailEditor(act(state, { type: "exit" }), workbook, fail);
   assert.equal(state.selected, 1);
-  assert.match(state.error, /Meaning is required/);
-  assert.equal(writes, 0);
+  assert.equal(state.error, "Save failed");
+  assert.equal(writes, 1);
   state = act(state, { type: "change", value: "meaning" });
   state = saveDetailEditor(act(state, { type: "exit" }), workbook, fail);
-  assert.equal(writes, 1);
+  assert.equal(writes, 2);
   assert.equal(state.mode, "edit");
   assert.equal(state.draft.vocabulary, "word");
   assert.equal(state.draft.meanings[0], "meaning");
@@ -230,7 +230,7 @@ for (const preserveTestData of [true, false]) {
     state = act(state, { type: "change", value: "" });
     state = saveDetailEditor(confirm(state), workbook, fail);
     assert.equal(state.selected, 1);
-    assert.match(state.error, /Meaning is required/);
+    assert.equal(state.error, "Database unavailable");
     state = act(state, { type: "change", value: "restored" });
     state = saveDetailEditor(confirm(state), workbook, fail);
     assert.equal(state.mode, "edit");

@@ -188,7 +188,10 @@ test("detail page keyboard flow preserves carets and drafts, owns navigation, an
     await key("created", /Word:\s+created/);
     stdin.write("\x1b[C"); await delay(70); // Entry navigation stays disabled without repainting.
     await key("\x13", /Unsaved vocabulary changes/);
-    rendered = await key("\r", /Meaning is required/);
+    rendered = await key("\r", /Ctrl\+E edit/);
+    assert.match(stripVTControlCharacters(rendered), /Word:\s+created/);
+    await key("\x05", /rows/);
+    rendered = await key(down, /Meaning:/);
     assertSelectedRow(rendered, "Meaning", true);
     await key("new meaning", /Meaning:\s+new meaning/);
     await key(down, /Other meaning:/);
@@ -199,6 +202,7 @@ test("detail page keyboard flow preserves carets and drafts, owns navigation, an
     await key("\r", /Select tags/);
     await key(" ", /one/);
     await key("\x13", /Unsaved vocabulary changes/);
+    await key(down, /> Save Changes \(Reset Test Data\)/);
     await key(down, /> Discard Changes/);
     await key(down, /> Continue Editing/);
     rendered = await key("\r", /Labels:\s+\[one\]/);

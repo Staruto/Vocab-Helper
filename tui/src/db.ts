@@ -10,7 +10,7 @@ export { LANGUAGE_PRESET_DEFINITIONS } from "./language-presets.js";
 export type { LanguagePresetDefinition } from "./language-presets.js";
 
 export type VocabularyKind = "preset_language" | "other_language" | "non_language";
-export type MeaningAttribute = { id?: number; key?: string; position: number; label: string; languageCode: string | null };
+export type MeaningAttribute = { id?: number; key?: string; position: number; label: string; languageCode: string | null; visible?: boolean };
 export type MetadataAttribute = { id?: number; key: string; role?: "vocabulary" | "meaning" | "optional"; label: string; languageCode: string | null; required: boolean; visible: boolean; displayOrder: number; provenance?: "preset" | "custom"; presetKey?: string | null; active?: boolean };
 export type Tag = { id: number; tagTypeId: number; name: string };
 export type TagType = { id: number; workbookId: number; name: string; position: number; visible: boolean; tags: Tag[] };
@@ -168,7 +168,7 @@ export class VocabularyRepository {
     if (config.vocabularyKind !== current.vocabularyKind || config.vocabularyLanguageCode !== current.vocabularyLanguageCode) {
       throw new ValidationError("Workbook type cannot be changed after creation.");
     }
-    this.assertPresetMembership(workbookId, [...config.meaningAttributes.map((field) => ({ ...field, key: field.key ?? `meaning_${field.position}`, role: "meaning" as const, required: field.position === 1, visible: field.position === 1, displayOrder: field.position })), ...config.presetAttributes, ...config.optionalAttributes]);
+    this.assertPresetMembership(workbookId, [...config.meaningAttributes.map((field) => ({ ...field, key: field.key ?? `meaning_${field.position}`, role: "meaning" as const, required: false, visible: field.visible ?? field.position === 1, displayOrder: field.position })), ...config.presetAttributes, ...config.optionalAttributes]);
     transaction(this.db, () => {
       const impact = this.previewWorkbookUpdate(workbookId, config);
       if (impact.populatedFields.length > 0 && !confirmDataLoss) throw new WorkbookDataLossError(impact);
@@ -410,7 +410,7 @@ export class VocabularyRepository {
   updateWorkbookAttributes(workbookId: number, draft: WorkbookAttributesDraft, confirmDataLoss = false): WorkbookRow {
     transaction(this.db, () => {
       const normalized = this.normalizeAttributesDraft(workbookId, draft);
-      this.assertPrimaryMeaningComplete(workbookId, normalized);
+      this.assertPrimaryMeaningSaved(workbookId, normalized);
       const impact = this.previewWorkbookAttributesUpdate(workbookId, normalized);
       if (impact.populatedFields.length > 0 && !confirmDataLoss) throw new WorkbookDataLossError(impact);
       const retainedIds = new Set(normalized.fields.flatMap((field) => field.id === undefined ? [] : [field.id]));
@@ -570,7 +570,7 @@ export class VocabularyRepository {
   private hydrateWorkbook(row: Record<string, unknown>): WorkbookRow {
     const id = Number(row.id);
     const fields = this.db.prepare("SELECT * FROM workbook_fields WHERE workbook_id = ? ORDER BY role, position").all(id) as Record<string, unknown>[];
-    const meanings = fields.filter((field) => field.role === "meaning").map((field) => ({ id: Number(field.id), key: String(field.field_key), position: Number(field.position), label: String(field.label), languageCode: field.language_code == null ? null : String(field.language_code) }));
+    const meanings = fields.filter((field) => field.role === "meaning").map((field) => ({ id: Number(field.id), key: String(field.field_key), position: Number(field.position), visible: Number(field.is_visible) === 1, label: String(field.label), languageCode: field.language_code == null ? null : String(field.language_code) }));
     const vocabularyLabel = String(row.vocabulary_label); const vocabularyLanguageCode = row.vocabulary_language_code == null ? null : String(row.vocabulary_language_code);
     const metadata: MetadataAttribute[] = [
       { key: "vocab", role: "vocabulary", label: vocabularyLabel, languageCode: vocabularyLanguageCode, required: true, visible: true, displayOrder: 0, provenance: "custom" },
@@ -595,7 +595,12 @@ export class VocabularyRepository {
     if (!kinds.includes(input.vocabularyKind)) throw new ValidationError("Choose a valid vocabulary type.");
     const code = input.vocabularyKind === "preset_language" ? trimRequired(input.vocabularyLanguageCode ?? "", "Preset language").toUpperCase() : null;
     if (input.vocabularyKind === "preset_language" && !LANGUAGE_PRESET_DEFINITIONS[code!]) throw new ValidationError("Choose a supported language preset.");
-    const meanings = this.normalizeMeaningAttributes(input.meaningAttributes); const keys = new Set<string>();
+    const existingMeanings = workbookId === undefined ? [] : this.requireWorkbook(workbookId).meaningAttributes;
+    const meanings = this.normalizeMeaningAttributes(input.meaningAttributes).map((field, index) => {
+      const existing = existingMeanings.find((candidate) => field.id === undefined ? candidate.key === (field.key ?? `meaning_${field.position}`) : candidate.id === field.id);
+      return { ...field, visible: field.visible ?? existing?.visible ?? index === 0 };
+    });
+    const keys = new Set<string>();
     const definitions = code ? LANGUAGE_PRESET_DEFINITIONS[code].attributes : [];
     const presetFields = input.presetAttributes;
     if (presetFields.length !== definitions.length || definitions.some((definition) => presetFields.filter((field) => field.presetKey === definition.key).length !== 1)) throw new ValidationError("Language preset attributes cannot be added or removed.");
@@ -685,22 +690,16 @@ export class VocabularyRepository {
       if (id === undefined && existingByKey.has(key)) throw new ValidationError(`Attribute key '${key}' already belongs to an existing field.`);
       if (usedKeys.has(key)) throw new ValidationError("Attribute keys must be unique.");
       usedKeys.add(key);
-      const firstMeaning = role === "meaning" && index === 0;
       return { ...field, id, key, role, label: trimRequired(field.label, `${role === "meaning" ? "Meaning" : "Optional"} attribute label`), languageCode: trimOptional(field.languageCode)?.toUpperCase() ?? null,
-        required: firstMeaning, active: isActiveAttribute(field), visible: firstMeaning ? true : Boolean(field.visible), displayOrder: index + 1 };
+        required: false, active: isActiveAttribute(field), visible: Boolean(field.visible), displayOrder: index + 1 };
     });
     return { vocabularyLabel, fields: [...normalizeFields(meanings, "meaning"), ...normalizeFields(optional, "optional")] };
   }
-  private assertPrimaryMeaningComplete(workbookId: number, draft: WorkbookAttributesDraft): void {
+  private assertPrimaryMeaningSaved(workbookId: number, draft: WorkbookAttributesDraft): void {
     const proposed = draft.fields.find((field) => field.role === "meaning");
     const current = this.db.prepare("SELECT id FROM workbook_fields WHERE workbook_id = ? AND role = 'meaning' AND position = 1").get(workbookId) as { id: number } | undefined;
     if (proposed?.id === current?.id) return;
     if (proposed?.id === undefined) throw new ValidationError("Save a new meaning before making it the Primary Meaning.");
-    const emptyEntryCount = this.getMeaningPromotionImpact(workbookId, proposed.id).emptyEntryCount;
-    if (emptyEntryCount > 0) {
-      const noun = emptyEntryCount === 1 ? "entry is" : "entries are";
-      throw new ValidationError(`Cannot make ${proposed?.label ?? "this field"} the Primary Meaning: ${emptyEntryCount} ${noun} empty.`);
-    }
   }
   private normalizeTagsDraft(workbookId: number, draft: WorkbookTagsDraft): WorkbookTagsDraft {
     this.requireWorkbook(workbookId);
@@ -736,7 +735,7 @@ export class VocabularyRepository {
   }
   private writeFields(workbookId: number, config: WorkbookConfigurationInput): void {
     const insert = this.db.prepare("INSERT INTO workbook_fields (workbook_id, field_key, role, position, label, language_code, is_required, is_visible, provenance, preset_key, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-    for (const field of config.meaningAttributes) insert.run(workbookId, field.key ?? `meaning_${field.position}`, "meaning", field.position, field.label, field.languageCode, field.position === 1 ? 1 : 0, field.position === 1 ? 1 : 0, "custom", null, 1);
+    for (const field of config.meaningAttributes) insert.run(workbookId, field.key ?? `meaning_${field.position}`, "meaning", field.position, field.label, field.languageCode, 0, field.visible ? 1 : 0, "custom", null, 1);
     [...config.presetAttributes, ...config.optionalAttributes].forEach((field, index) => insert.run(workbookId, field.key, "optional", index + 1, field.label, field.languageCode, 0, field.visible ? 1 : 0, field.provenance ?? "custom", field.presetKey ?? null, isActiveAttribute(field) ? 1 : 0));
   }
   private syncFields(workbookId: number, config: WorkbookConfigurationInput): void {
@@ -768,7 +767,7 @@ export class VocabularyRepository {
     };
     resolved.filter((item) => item.role === "meaning").forEach(({ field, key, row }, index) => {
       const resolvedKey = row?.field_key ?? (field.key || this.nextFieldKey(workbookId, "meaning"));
-      save({ ...field, key: resolvedKey, role: "meaning", required: index === 0, visible: index === 0, displayOrder: index + 1 }, "meaning", index + 1, resolvedKey, index === 0, index === 0, row?.id);
+      save({ ...field, key: resolvedKey, role: "meaning", required: false, visible: field.visible ?? index === 0, displayOrder: index + 1 }, "meaning", index + 1, resolvedKey, false, field.visible ?? index === 0, row?.id);
     });
     resolved.filter((item) => item.role === "optional").forEach(({ field, key, row }, index) => save(field, "optional", index + 1, row?.field_key ?? key, false, field.visible, row?.id));
   }
@@ -800,7 +799,7 @@ export class VocabularyRepository {
   }
   private normalizeEntryMeanings(workbook: WorkbookRow, input: string[]): string[] {
     const values = workbook.meaningAttributes.map((_, index) => trimOptional(input[index]) ?? "");
-    values[0] = trimRequired(values[0] ?? "", workbook.meaningAttributes[0]?.label ?? "Primary Meaning"); return values;
+    return values;
   }
   private validateEntryAssociations(workbookId: number, attributes: Record<string, string>, tagIds: number[]): void {
     const fields = new Set((this.db.prepare("SELECT field_key FROM workbook_fields WHERE workbook_id = ? AND role = 'optional'").all(workbookId) as Array<{ field_key: string }>).map((row) => String(row.field_key)));
