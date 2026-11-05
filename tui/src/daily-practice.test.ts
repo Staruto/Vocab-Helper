@@ -11,7 +11,7 @@ import { createOrchestrationController } from "./ink-orchestration.js";
 import { createOrchestrationCapabilities } from "./orchestration-runner.js";
 import { createInitialState } from "./orchestration.js";
 import { assertDatabaseIntegrity, runSchemaMigrations, SCHEMA_MIGRATIONS } from "./schema.js";
-import { buildWorkbookMenuLines, parseDailyGoalInput } from "./workbook-display.js";
+import { buildWorkbookMenuLines, buildWorkbookProgress, parseDailyGoalInput } from "./workbook-display.js";
 
 function fixture() {
   const directory = mkdtempSync(join(tmpdir(), "vocabhelper-daily-"));
@@ -159,6 +159,22 @@ test("goal editor accepts decimal digits or blank and rejects invalid input", ()
   assert.equal(parseDailyGoalInput(String(Number.MAX_SAFE_INTEGER)), Number.MAX_SAFE_INTEGER);
   for (const value of ["0", "-1", "1.5", "1e2", "0x10", "NaN", "Infinity", "words", "9007199254740992"]) {
     assert.throws(() => parseDailyGoalInput(value), /positive whole number/);
+  }
+});
+
+test("workbook progress labels retain counts and share goal colors and bars", () => {
+  const cases = [
+    { count: 0, goal: 15, label: "Today 0 / 15 words", bar: "□□□□□□□□□□", color: "#777777" },
+    { count: 8, goal: 15, label: "Today 8 / 15 words", bar: "■■■■■□□□□□", color: "#e5c65f" },
+    { count: 15, goal: 15, label: "Today 15 / 15 words", bar: "■■■■■■■■■■", color: "green" },
+    { count: 20, goal: 15, label: "Today 20 / 15 words", bar: "■■■■■■■■■■", color: "green" },
+    { count: 0, goal: null, label: "Today 0 words · No goal", bar: "          ", color: "#777777" },
+    { count: 8, goal: null, label: "Today 8 words · No goal", bar: "          ", color: "green" },
+  ];
+  for (const { count, goal, label, bar, color } of cases) {
+    assert.deepEqual(buildWorkbookProgress({ todayPracticeCount: count, dailyGoal: goal }), {
+      label, bar, color, value: `${count} / ${goal ?? "No goal"}`,
+    });
   }
 });
 

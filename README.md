@@ -92,7 +92,7 @@ Saving through `/edit` lets you preserve test data or reset its test count, erro
 
 ## Practice
 
-The home workbook list shows **Today / Goal** for each workbook. Set or clear a workbook's daily goal through `/setting` → **Daily Goal**. Goals are optional positive whole numbers; an empty value means no goal. Tracking works even without a goal, and totals can exceed the goal.
+The home workbook list shows **Today / Goal** for each workbook. Inside a workbook, today's count and progress bar are centered between the vocabulary table and search bar. Without a goal, this area shows the count and **No goal**, with a blank bar row. Set or clear a workbook's daily goal through `/setting` → **Daily Goal**. Goals are optional positive whole numbers; an empty value means no goal. Tracking works even without a goal, and totals can exceed the goal.
 
 Daily practice counts each word once per completed session, excluding retries. Practicing the same word in another completed session counts again. Cancelled or failed sessions add nothing; a successful save retry counts the session once. Sessions count on their local completion day, including sessions that cross midnight. The home page refreshes when you return and checks for a new day every 30 seconds while open.
 

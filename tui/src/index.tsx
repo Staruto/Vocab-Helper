@@ -13,7 +13,7 @@ import { CaretInputLine } from "./text-input.js";
 import { filterEntriesForSearch } from "./search.js";
 import { localCalendarDay } from "./calendar.js";
 import { buildPracticeProfile } from "./profile-display.js";
-import { buildWorkbookMenuLines, parseDailyGoalInput } from "./workbook-display.js";
+import { buildWorkbookMenuLines, buildWorkbookProgress, parseDailyGoalInput } from "./workbook-display.js";
 import { UiMode } from "./orchestration.js";
 import { createOrchestrationCapabilities } from "./orchestration-runner.js";
 import { createInitialState, update as updateOrchestration } from "./orchestration.js";
@@ -714,6 +714,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     [visibleEntries, safePageIndex, width, workbook.vocabularyLabel, workbook.meaningAttributes, workbook.metadataAttributes],
   );
   const screenTitle = `${TITLE} - ${workbook.name}`;
+  const dailyProgress = buildWorkbookProgress(workbook);
   const searchBoxWidth = Math.min(34, Math.max(12, width - 56));
   const footerLeftWidth = Math.floor((width - searchBoxWidth) / 2);
   const footerRightWidth = Math.max(0, width - searchBoxWidth - footerLeftWidth);
@@ -812,8 +813,8 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
         <Text color={AUXILIARY_TEXT_COLOR}>|{padLine(`No vocabulary matches "${activeSearchQuery}".`, Math.max(1, tableLayout.border.length - 2))}|</Text>
       ) : null}
       <Text>{tableLayout.border}</Text>
-      <Text>{padLine("", width)}</Text>
-      <Text>{padLine("", width)}</Text>
+      <Text color={dailyProgress.color}>{centerLine(dailyProgress.label, width)}</Text>
+      <Text color={dailyProgress.color}>{centerLine(dailyProgress.bar, width)}</Text>
       <Box flexDirection="row" width={width} alignItems="center">
         <Box width={footerLeftWidth}><Text color={AUXILIARY_TEXT_COLOR}>{padLine(pageText, footerLeftWidth)}</Text></Box>
         <Box width={searchBoxWidth} borderStyle="single" borderColor={inputFocus === "search" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}>
@@ -1972,12 +1973,17 @@ function App(): JSX.Element {
   }, []);
 
   useEffect(() => {
-    if (screen.kind !== "menu") return;
+    if (screen.kind !== "menu" && screen.kind !== "vocab") return;
     let displayedDay = localCalendarDay();
     const timer = setInterval(() => {
       const today = localCalendarDay();
       if (today !== displayedDay) {
         setWorkbooks(backend.listWorkbooks());
+        setScreen((current) => {
+          if (current.kind !== "vocab") return current;
+          const workbook = backend.getWorkbook(current.workbook.id);
+          return workbook ? { ...current, workbook } : current;
+        });
         displayedDay = today;
       }
     }, 30_000);

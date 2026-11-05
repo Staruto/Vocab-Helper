@@ -19,13 +19,30 @@ export function parseDailyGoalInput(input: string): number | null {
   return goal;
 }
 
+export function buildWorkbookProgress(workbook: Pick<WorkbookRow, "todayPracticeCount" | "dailyGoal">): {
+  bar: string;
+  value: string;
+  label: string;
+  color: WorkbookMenuRow["progressColor"];
+} {
+  const { todayPracticeCount: count, dailyGoal: goal } = workbook;
+  const filled = goal === null ? 0 : Math.floor(Math.min(count / goal, 1) * 10);
+  return {
+    bar: goal === null ? " ".repeat(10) : "■".repeat(filled) + "□".repeat(10 - filled),
+    value: `${count} / ${goal ?? "No goal"}`,
+    label: goal === null ? `Today ${count} words · No goal` : `Today ${count} / ${goal} words`,
+    color: count === 0 ? "#777777" : goal !== null && count < goal ? "#e5c65f" : "green",
+  };
+}
+
 export function buildWorkbookMenuLines(
   workbooks: WorkbookRow[],
   width: number,
   selectedIndex: number,
   pad: (text: string, width: number) => string,
 ): { border: string; header: string; rows: WorkbookMenuRow[] } {
-  const progressValues = workbooks.map((workbook) => `${workbook.todayPracticeCount} / ${workbook.dailyGoal ?? "No goal"}`);
+  const progress = workbooks.map(buildWorkbookProgress);
+  const progressValues = progress.map((item) => item.value);
   const valueWidth = Math.max(16, ...progressValues.map((value) => value.length));
   const progressWidth = valueWidth + 14;
   const selectWidth = 3;
@@ -38,15 +55,13 @@ export function buildWorkbookMenuLines(
   };
   const border = `+${"─".repeat(selectWidth)}+${"─".repeat(nameWidth)}+${"─".repeat(progressWidth)}+${"─".repeat(countWidth)}+`;
   const rows = workbooks.map((workbook, index) => {
-    const filled = workbook.dailyGoal === null ? 0 : Math.floor(Math.min(workbook.todayPracticeCount / workbook.dailyGoal, 1) * 10);
-    const bar = workbook.dailyGoal === null ? " ".repeat(10) : "■".repeat(filled) + "□".repeat(10 - filled);
+    const { bar, color } = progress[index];
     return row(
       index === selectedIndex,
       workbook.name,
       String(workbook.wordCount),
       ` ${bar}  ${progressValues[index].padStart(valueWidth)} `,
-      workbook.todayPracticeCount === 0 ? "#777777"
-        : workbook.dailyGoal !== null && workbook.todayPracticeCount < workbook.dailyGoal ? "#e5c65f" : "green",
+      color,
     );
   });
   const headerProgress = pad(`${" ".repeat(Math.floor((progressWidth - "Today / Goal".length) / 2))}Today / Goal`, progressWidth);
