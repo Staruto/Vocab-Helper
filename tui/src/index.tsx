@@ -836,8 +836,11 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       <CaretInputLine key={textInputKey} prefix="> " value={buffer} onChange={setBuffer} width={width} focus={textInputActive} inputKey={textInputKey} />
       <Text>{padLine("", width)}</Text>
       {mode.kind === "listOrder" ? <>
+        <Text bold color={SELECTED_TEXT_COLOR}>{padLine("Select a list order", width)}</Text>
+        <Text>{padLine("", width)}</Text>
         {LIST_ORDER_OPTIONS.map((option, index) => <Text key={option.value} inverse={index === mode.choice} color={index === mode.choice ? undefined : "white"}>{padLine(`${index === mode.choice ? ">" : " "} ${option.label}`, width)}</Text>)}
-        <Text color={mode.error ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(mode.error ?? (mode.saving ? "Saving list order..." : "Up/Down select | Enter apply | Esc cancel"), width)}</Text>
+        <Text>{padLine("", width)}</Text>
+        <Text color={mode.error ? "red" : AUXILIARY_TEXT_COLOR} italic>{padLine(mode.error ?? (mode.saving ? "Saving list order..." : "↑↓ select | Enter apply | Esc cancel"), width)}</Text>
         <Text>{padLine("", width)}</Text>
       </> : null}
       {commandPaletteActive

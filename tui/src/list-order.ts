@@ -1,8 +1,8 @@
 export const LIST_ORDER_OPTIONS = [
   { value: "add_asc", label: "Added: oldest first", parameter: "add asc" },
   { value: "add_desc", label: "Added: newest first", parameter: "add desc" },
-  { value: "error_asc", label: "Error count: ascending (unpracticed last)", parameter: "error asc" },
-  { value: "error_desc", label: "Error count: descending (unpracticed first)", parameter: "error desc" },
+  { value: "error_asc", label: "Error count: ascending", parameter: "error asc" },
+  { value: "error_desc", label: "Error count: descending", parameter: "error desc" },
 ] as const;
 
 export type ListOrder = typeof LIST_ORDER_OPTIONS[number]["value"];
