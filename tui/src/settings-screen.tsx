@@ -6,6 +6,8 @@ import { loadLabeledTextFile } from "./import.js";
 import { SETTINGS_SECTIONS, settingsTabWindow, SettingsSection } from "./settings-navigation.js";
 import { CaretInputLine } from "./text-input.js";
 import { parseDailyGoalInput } from "./workbook-display.js";
+import truncate from "cli-truncate";
+import displayWidth from "string-width";
 
 export type SettingsPanelControls = {
   focused: boolean;
@@ -24,6 +26,11 @@ type Props = {
 };
 const selectedColor = "#c5a8ff";
 const auxiliary = "#8a8a8a";
+
+function padLine(text: string, width: number): string {
+  const clipped = truncate(text, width);
+  return `${clipped}${" ".repeat(Math.max(0, width - displayWidth(clipped)))}`;
+}
 
 export function SettingsScreen({ workbook, backend, onCancel, onQuit, renderAttributes, renderTags }: Props): JSX.Element {
   const { stdout } = useStdout();
@@ -173,8 +180,10 @@ export function SettingsScreen({ workbook, backend, onCancel, onQuit, renderAttr
 
   return <Box flexDirection="column" width={width}>
     <Box flexDirection="column" display={mode === "edit" ? "none" : "flex"}>
-    <Text color="cyan" bold>{mode === "exit" ? "Unsaved settings changes" : "Confirm data removal"}</Text>
-    {mode === "exit" ? ["Save changes", "Discard changes", "Continue editing"].map((label, index) => <Text key={label} inverse={choice === index}>{`${choice === index ? ">" : " "} ${label}`}</Text>) : <>
+      <Box justifyContent='center'><Text color="cyan" bold>{mode === "exit" ? "Unsaved settings changes" : "Confirm data removal"}</Text></Box>
+      <Text color={auxiliary}>Choose what to do with your staged changes.</Text>
+      <Text>{" "}</Text>
+    {mode === "exit" ? ["Save changes", "Discard changes", "Continue editing"].map((label, index) => <Text key={label} inverse={choice === index}>{padLine(`${index === choice ? ">" : " "} ${label}`, width)}</Text>) : <>
       <Text color={auxiliary}>Saving will permanently remove:</Text>
       {warnings.map((line, index) => <Text key={index} color="red" wrap="truncate-end">{line}</Text>)}
       <CaretInputLine prefix="Type yes: " value={confirm} onChange={setConfirm} focus={mode === "destructive" && !saving} width={width} inputKey="settings-confirm" />
