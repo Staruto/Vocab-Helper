@@ -149,6 +149,19 @@ export function SettingsScreen({ workbook, backend, onCancel, onQuit, renderAttr
   });
   const panel: SettingsPanelControls = { focused: contentFocused, onTop: () => setFocus("sections") };
   const tabs = settingsTabWindow(width, sectionIndex);
+
+  const navigationHints: string[] = [];
+  if (focus === "sections") {
+    navigationHints.push("←/→ sections", "↓ settings");
+  }
+  if (section === "Import" || section === "Daily Goal") {
+    navigationHints.push("Enter saves", "Ctrl+U clears");
+  }
+  if (section === "Appearance") {
+    navigationHints.push("↑↓ select", "Space toggles");
+  }
+  navigationHints.push("Esc leave");
+
   return <Box flexDirection="column" width={width}>
     <Box flexDirection="column" display={mode === "edit" ? "none" : "flex"}>
     <Text color="cyan" bold>{mode === "exit" ? "Unsaved settings changes" : "Confirm data removal"}</Text>
@@ -162,15 +175,26 @@ export function SettingsScreen({ workbook, backend, onCancel, onQuit, renderAttr
     </Box>
     <Box flexDirection="column" display={mode === "edit" ? "flex" : "none"}>
     <Box justifyContent="center"><Text color="cyan" bold wrap="truncate-end">{`Settings - ${workbook.name}`}</Text></Box>
-    <Text>{" "}</Text>
-    <Text wrap="truncate-end"><Text color="cyan" bold>Settings</Text>{"   "}{tabs.map((index, position) => <Text key={index}>{position ? "   " : ""}<Text inverse={index === sectionIndex} color={index === sectionIndex && focus === "sections" ? selectedColor : "white"}>{index === sectionIndex ? ` ${SETTINGS_SECTIONS[index]} ` : SETTINGS_SECTIONS[index]}</Text></Text>)}</Text>
+    <Text color={selectedColor} wrap="truncate-end">{"─".repeat(width)}</Text>
+    <Text wrap="truncate-end"><Text color={selectedColor} bold>Settings</Text>{"   "}{tabs.map((index, position) => <Text key={index}>{position ? "   " : ""}<Text inverse={index === sectionIndex} color={index === sectionIndex && focus === "sections" ? selectedColor : "white"} bold = {index === sectionIndex && focus === "sections"}>{index === sectionIndex ? ` ${SETTINGS_SECTIONS[index]} ` : SETTINGS_SECTIONS[index]}</Text></Text>)}</Text>
     <Text color={message === "Saved." ? "green" : "red"} wrap="truncate-end">{message || (saving ? "Validating settings..." : " ")}</Text>
     {section === "Attributes" ? renderAttributes(panel, { vocabularyLabel, setVocabularyLabel, fields, setFields }, leave) : null}
     {section === "Tags" ? renderTags(panel, { types, setTypes }, leave) : null}
-    {section === "Import" ? <Box flexDirection="column"><Text wrap="truncate-end">Default import file (UTF-8 .txt; empty clears the default)</Text><CaretInputLine prefix="> " value={importPath} onChange={(value) => { setImportPath(value); setMessage(""); }} focus={contentFocused} width={width} inputKey="settings-import" /><Text color={auxiliary} wrap="truncate-end">Enter saves | Ctrl+U clears | ↑ sections | Esc leave</Text></Box> : null}
-    {section === "Daily Goal" ? <Box flexDirection="column"><Text wrap="truncate-end">Words per day: positive whole number; empty means no goal.</Text><CaretInputLine prefix="Daily goal: " value={goal} onChange={(value) => { setGoal(value); setMessage(""); }} focus={contentFocused} width={width} inputKey="settings-goal" /><Text color={auxiliary} wrap="truncate-end">Enter saves | Ctrl+U clears | ↑ sections | Esc leave</Text></Box> : null}
-    {section === "Appearance" ? <Box flexDirection="column">{[{ label: "Tier colors", enabled: tierColors }, { label: "Workbook homepage progress", enabled: progress }].map((option, index) => <Text key={option.label} wrap="truncate-end" color={contentFocused && index === appearanceIndex ? selectedColor : option.enabled ? "green" : auxiliary}>{`${contentFocused && index === appearanceIndex ? ">" : " "} [${option.enabled ? "●" : " "}] ${option.label}`}</Text>)}<Text color={auxiliary} wrap="truncate-end">↑↓ select | Space toggles | ↑ at first: sections | Esc leave</Text></Box> : null}
-    {focus === "sections" ? <Text color={auxiliary} wrap="truncate-end">←→ sections | ↓ settings | Esc leave</Text> : null}
+      {section === "Import" ? (
+        <Box flexDirection="column">
+          <CaretInputLine
+            prefix="  Default import file (UTF-8 .txt): "
+            value={importPath}
+            onChange={(value) => { setImportPath(value); setMessage(""); }}
+            focus={contentFocused}
+            width={width}
+            inputKey="settings-import"
+          />
+        </Box>
+      ) : null}
+    {section === "Daily Goal" ? <Box flexDirection="column"><Text wrap="truncate-end">Words per day: positive whole number; empty means no goal.</Text><CaretInputLine prefix="Daily goal: " value={goal} onChange={(value) => { setGoal(value); setMessage(""); }} focus={contentFocused} width={width} inputKey="settings-goal" /></Box> : null}
+    {section === "Appearance" ? <Box flexDirection="column">{[{ label: "Tier colors", enabled: tierColors }, { label: "Workbook homepage progress", enabled: progress }].map((option, index) => <Text key={option.label} wrap="truncate-end" color={contentFocused && index === appearanceIndex ? selectedColor : option.enabled ? "green" : auxiliary}>{`${contentFocused && index === appearanceIndex ? ">" : " "} [${option.enabled ? "●" : " "}] ${option.label}`}</Text>)}</Box> : null}
+    <Text>{" "}</Text><Text color={auxiliary} wrap="truncate-end">{navigationHints.join(" | ")}</Text>
     </Box>
   </Box>;
 }
