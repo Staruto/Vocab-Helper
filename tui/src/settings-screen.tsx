@@ -161,8 +161,9 @@ export function SettingsScreen({ workbook, backend, onCancel, onQuit, renderAttr
     <Text color={auxiliary} wrap="truncate-end">{saving ? "Validating settings... Esc cancels" : mode === "exit" ? "↑↓ select | Enter confirm | Esc continue editing" : "Enter confirm | Esc continue editing"}</Text>
     </Box>
     <Box flexDirection="column" display={mode === "edit" ? "flex" : "none"}>
+    <Box justifyContent="center"><Text color="cyan" bold wrap="truncate-end">{`Settings - ${workbook.name}`}</Text></Box>
+    <Text>{" "}</Text>
     <Text wrap="truncate-end"><Text color="cyan" bold>Settings</Text>{"   "}{tabs.map((index, position) => <Text key={index}>{position ? "   " : ""}<Text inverse={index === sectionIndex} color={index === sectionIndex && focus === "sections" ? selectedColor : "white"}>{index === sectionIndex ? ` ${SETTINGS_SECTIONS[index]} ` : SETTINGS_SECTIONS[index]}</Text></Text>)}</Text>
-    <Text color={auxiliary} wrap="truncate-end">{workbook.name}</Text>
     <Text color={message === "Saved." ? "green" : "red"} wrap="truncate-end">{message || (saving ? "Validating settings..." : " ")}</Text>
     {section === "Attributes" ? renderAttributes(panel, { vocabularyLabel, setVocabularyLabel, fields, setFields }, leave) : null}
     {section === "Tags" ? renderTags(panel, { types, setTypes }, leave) : null}

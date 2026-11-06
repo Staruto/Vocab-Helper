@@ -75,7 +75,7 @@ async function app(width: number) {
 }
 
 function selectedTab(rendered: string, label: string, focused: boolean): void {
-  const line = rendered.split("\n").find((line) => plain(line).startsWith("Settings"));
+  const line = rendered.split("\n").find((line) => /^Settings\s{3}/.test(plain(line)));
   assert.ok(line, "Missing settings navigation row");
   assert.match(line, new RegExp(`\\x1b\\[7m(?:\\x1b\\[[\\d;]*m)* ${label} (?:\\x1b\\[[\\d;]*m)*\\x1b\\[27m`));
   assert.match(line, new RegExp(`\\x1b\\[${focused ? "38;2;197;168;255" : "37"}m(?:\\x1b\\[[\\d;]*m)* ${label} `));
@@ -86,6 +86,7 @@ test("settings tabs retain drafts, validate together and save all sections", { t
   const a = await app(80);
   try {
     let rendered = await a.open();
+    assert.match(plain(rendered), /Settings - Settings keyboard test\s*\n\s*\nSettings\s+Attributes/);
     assert.match(plain(rendered), /Settings\s+Attributes\s+Tags\s+Import\s+Appearance\s+Daily Goal/);
     assert.match(plain(rendered), /Configure field names/);
     assert.doesNotMatch(plain(rendered), /> Word/);
@@ -124,7 +125,7 @@ test("settings tabs retain drafts, validate together and save all sections", { t
     selectedTab(rendered, "Tags", true);
     await a.press(left, /Configure field names/);
     assert.match(plain(await a.press(down, /> Word/)), /Meaning.*hidden/);
-    await a.press(up); await a.press(left, /Words per day/);
+    await a.press(up, /←→ sections/); await a.press(left, /Words per day/);
     await a.press(down); await a.press("0", /Daily goal: 0/);
     await a.press(esc, /Unsaved settings changes/);
     await a.press("\r", /positive whole number/);
@@ -132,16 +133,16 @@ test("settings tabs retain drafts, validate together and save all sections", { t
     await a.press("\x15"); await a.press("23", /Daily goal: 23/);
     // Text cursor navigation keeps focus and section.
     selectedTab(await a.press(left), "Daily Goal", false);
-    await a.press(up); await a.press(left, /Tier colors/);
-    await a.press(down); await a.press(" "); // immediate Appearance preference
-    await a.press(up); await a.press(left, /Default import file/);
+    await a.press(up, /←→ sections/); await a.press(left, /Tier colors/);
+    await a.press(down, />.*Tier colors/); await a.press(" ", /> \[ \] Tier colors/); // immediate Appearance preference
+    await a.press(up, /←→ sections/); await a.press(left, /Default import file/);
     await a.press(down); await a.press("missing-settings-file.txt");
     await a.press(esc, /Unsaved settings changes/);
     await a.press("\r", /Could not|ENOENT|Cannot|Unable/);
     selectedTab(await a.press(left), "Import", false);
     await a.press("\x15"); await a.press(a.file);
     await a.press("\r", /Saved\./); // Enter saves just Import, staying in place.
-    await a.press(up); await a.press(right, /Tier colors/); await a.press(right, /Words per day/);
+    await a.press(up, /←→ sections/); await a.press(right, /Tier colors/); await a.press(right, /Words per day/);
     assert.match(plain(await a.press(down)), /Daily goal: 23/);
     await a.press(esc, /Unsaved settings changes/);
     await a.press(down); await a.press(down); await a.press("\r", /Daily goal: 23/); // continue
@@ -166,8 +167,8 @@ test("narrow settings retain the selected tab and discard drafts without reverti
     await a.press(left, /Words per day/);
     selectedTab(await a.press(down), "Daily Goal", false);
     await a.press("8", /Daily goal: 8/);
-    await a.press(up); await a.press(left, /Tier colors/);
-    await a.press(down); await a.press(" ");
+    await a.press(up, /←→ sections/); await a.press(left, /Tier colors/);
+    await a.press(down, />.*Tier colors/); await a.press(" ", /> \[ \] Tier colors/);
     rendered = await a.press(down);
     assert.match(plain(rendered), />.*Workbook homepage progress/);
     assert.match(plain(await a.press(down)), />.*Workbook homepage progress/);

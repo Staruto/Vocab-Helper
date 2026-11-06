@@ -1410,7 +1410,7 @@ function MetadataSettingsScreen({ onCancel, panel, draft }: { panel: SettingsPan
   if (presets.length) group("preset", "Language Preset Attributes", "Rename, activate, or change visibility. Preset membership is fixed.", indexed.filter(({ field }) => Boolean(field.presetKey)));
   group("optional", "Optional Attributes", "Custom fields can be added, renamed, shown, hidden, or removed.", indexed.filter(({ field }) => field.role === "optional" && !field.presetKey));
   // Leave one terminal row free so Ink keeps its incremental-render cache current.
-  const viewportSize = Math.max(1, height - 8 - (editAction !== "none" ? 1 : 0) - (!focused ? 1 : 0));
+  const viewportSize = Math.max(1, height - 9 - (editAction !== "none" ? 1 : 0) - (!focused ? 1 : 0));
   const focusedLine = focused ? Math.max(0, lines.findIndex((line) => line.selected)) : 0;
   const firstLine = Math.max(0, Math.min(lines.length - viewportSize, focusedLine - Math.floor(viewportSize / 2)));
   return <Box flexDirection="column"><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Configure field names, activation, and visibility. Changes are staged.", width)}</Text><Text color={message ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text>
@@ -1544,7 +1544,7 @@ function TagSettingsScreen({ workbook, onSave, onCancel, onQuit, panel, draft }:
   lines.push({ text: `+${"-".repeat(Math.max(1, width - 2))}+`, color: AUXILIARY_TEXT_COLOR });
   row(`${focused && selected.kind === "add-type" ? ">" : " "} + Add tag type`, focused && selected.kind === "add-type");
   lines.push({ text: `+${"-".repeat(Math.max(1, width - 2))}+`, color: AUXILIARY_TEXT_COLOR });
-  const viewport = Math.max(1, height - (panel ? 8 : 6) - (action !== "none" ? 1 : 0) - (panel && !focused ? 1 : 0));
+  const viewport = Math.max(1, height - (panel ? 9 : 6) - (action !== "none" ? 1 : 0) - (panel && !focused ? 1 : 0));
   const focusedLine = Math.max(0, lines.findIndex((line) => line.selected));
   const firstLine = Math.max(0, Math.min(lines.length - viewport, focusedLine - Math.floor(viewport / 2)));
   return <Box flexDirection="column">{!panel ? <Text color="cyan" bold>{centerLine(`Tags - ${workbook.name}`, width)}</Text> : null}<Text color={AUXILIARY_TEXT_COLOR}>{padLine("Organize tags into types. Changes are staged until you leave Settings.", width)}</Text><Text color={message ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text>
