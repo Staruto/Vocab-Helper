@@ -1,4 +1,4 @@
-import { PracticeSessionResult, CreateWorkbookInput, defaultDbPath, EntryRow, EntryUpdateOptions, ImportEntryInput, ImportResult, MeaningAttribute, MeaningPromotionImpact, MetadataAttribute, TagType, TagUpdateImpact, WorkbookAttributesDraft, WorkbookConfigurationInput, WorkbookRow, WorkbookTagsDraft, WorkbookUpdateImpact, VocabularyRepository } from "./db.js";
+import { PracticeSessionResult, CreateWorkbookInput, defaultDbPath, EntryRow, EntryUpdateOptions, ImportEntryInput, ImportResult, MeaningAttribute, MeaningPromotionImpact, MetadataAttribute, TagType, TagUpdateImpact, WorkbookSettingsChanges, WorkbookAttributesDraft, WorkbookConfigurationInput, WorkbookRow, WorkbookTagsDraft, WorkbookUpdateImpact, VocabularyRepository } from "./db.js";
 
 import type { ListOrder } from "./list-order.js";
 
@@ -74,6 +74,9 @@ export class VocabularyBackend {
   setTierColorsEnabled(enabled: boolean): boolean { return this.repository.setTierColorsEnabled(enabled); }
   setWorkbookImportFilePath(workbookId: number, path: string | null): WorkbookRow { return this.repository.setWorkbookImportFilePath(workbookId, path); }
   setWorkbookDailyGoal(workbookId: number, goal: number | null): WorkbookRow { return this.repository.setWorkbookDailyGoal(workbookId, goal); }
+  updateWorkbookSettingsSections(workbookId: number, changes: WorkbookSettingsChanges, confirmDataLoss = false): WorkbookRow {
+    return this.repository.updateWorkbookSettingsSections(workbookId, changes, confirmDataLoss);
+  }
   listDailyPractice(workbookId: number): import("./db.js").DailyPracticeRow[] { return this.repository.listDailyPractice(workbookId); }
   getEntryStats(entryId: number) { return this.repository.getEntryStats(entryId); }
   completePracticeSession(workbookId: number, results: PracticeSessionResult[], completedDay: string): EntryRow[] { return this.repository.completePracticeSession(workbookId, results, completedDay); }

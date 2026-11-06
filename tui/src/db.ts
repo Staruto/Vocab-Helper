@@ -31,6 +31,12 @@ export type WorkbookUpdateImpact = { populatedFields: Array<{ key: string; label
 export type MeaningPromotionImpact = { emptyEntryCount: number };
 export type WorkbookAttributesDraft = { vocabularyLabel: string; fields: MetadataAttribute[] };
 export type WorkbookTagsDraft = { types: TagTypeDraft[] };
+export type WorkbookSettingsChanges = {
+  attributes?: WorkbookAttributesDraft;
+  tags?: WorkbookTagsDraft;
+  importFilePath?: string | null;
+  dailyGoal?: number | null;
+};
 export type TagUpdateImpact = { removals: Array<{ typeName: string; tagName: string | null; tagCount: number; assignmentCount: number; entryCount: number }> };
 export type WorkbookRow = {
   id: number; name: string; wordCount: number; createdAt: string;
@@ -258,11 +264,27 @@ export class VocabularyRepository {
     if (goal !== null && (!Number.isSafeInteger(goal) || goal <= 0)) {
       throw new ValidationError("Daily goal must be a positive whole number, or empty for no goal.");
     }
+    transaction(this.db, () => this.writeSetWorkbookDailyGoal(workbookId, goal));
+    return this.requireWorkbook(workbookId);
+  }
+
+  private writeSetWorkbookDailyGoal(workbookId: number, goal: number | null): void {
+    this.db.prepare("UPDATE workbooks SET daily_goal = ?, updated_at = ? WHERE id = ?")
+      .run(goal, new Date().toISOString(), workbookId);
+    this.db.prepare("UPDATE workbook_daily_practice SET goal_snapshot = ? WHERE workbook_id = ? AND practice_day = ?")
+      .run(goal, workbookId, localCalendarDay());
+  }
+
+  updateWorkbookSettingsSections(workbookId: number, changes: WorkbookSettingsChanges, confirmDataLoss = false): WorkbookRow {
+    this.requireWorkbook(workbookId);
+    if (changes.dailyGoal !== undefined && changes.dailyGoal !== null && (!Number.isSafeInteger(changes.dailyGoal) || changes.dailyGoal <= 0)) {
+      throw new ValidationError("Daily goal must be a positive whole number, or empty for no goal.");
+    }
     transaction(this.db, () => {
-      this.db.prepare("UPDATE workbooks SET daily_goal = ?, updated_at = ? WHERE id = ?")
-        .run(goal, new Date().toISOString(), workbookId);
-      this.db.prepare("UPDATE workbook_daily_practice SET goal_snapshot = ? WHERE workbook_id = ? AND practice_day = ?")
-        .run(goal, workbookId, localCalendarDay());
+      if (changes.attributes) this.writeUpdateWorkbookAttributes(workbookId, changes.attributes, confirmDataLoss);
+      if (changes.tags) this.writeUpdateWorkbookTags(workbookId, changes.tags, confirmDataLoss);
+      if (changes.importFilePath !== undefined) this.setWorkbookImportFilePath(workbookId, changes.importFilePath);
+      if (changes.dailyGoal !== undefined) this.writeSetWorkbookDailyGoal(workbookId, changes.dailyGoal);
     });
     return this.requireWorkbook(workbookId);
   }
@@ -408,30 +430,32 @@ export class VocabularyRepository {
       .map((row) => ({ key: String(row.field_key), label: String(row.label), valueCount: Number(row.value_count) })) };
   }
   updateWorkbookAttributes(workbookId: number, draft: WorkbookAttributesDraft, confirmDataLoss = false): WorkbookRow {
-    transaction(this.db, () => {
-      const normalized = this.normalizeAttributesDraft(workbookId, draft);
-      this.assertPrimaryMeaningSaved(workbookId, normalized);
-      const impact = this.previewWorkbookAttributesUpdate(workbookId, normalized);
-      if (impact.populatedFields.length > 0 && !confirmDataLoss) throw new WorkbookDataLossError(impact);
-      const retainedIds = new Set(normalized.fields.flatMap((field) => field.id === undefined ? [] : [field.id]));
-      const existing = this.db.prepare("SELECT id FROM workbook_fields WHERE workbook_id = ?").all(workbookId) as Array<{ id: number }>;
-      for (const row of existing) if (!retainedIds.has(Number(row.id))) this.db.prepare("DELETE FROM workbook_fields WHERE id = ? AND workbook_id = ?").run(row.id, workbookId);
-      const maxPosition = Number((this.db.prepare("SELECT COALESCE(MAX(position), 0) AS value FROM workbook_fields WHERE workbook_id = ?").get(workbookId) as { value: number }).value);
-      this.db.prepare("UPDATE workbook_fields SET position = position + ? WHERE workbook_id = ?").run(maxPosition + 100, workbookId);
-      const update = this.db.prepare("UPDATE workbook_fields SET position=?, label=?, language_code=?, is_required=?, is_visible=?, is_active=? WHERE id=? AND workbook_id=?");
-      const insert = this.db.prepare("INSERT INTO workbook_fields (workbook_id,field_key,role,position,label,language_code,is_required,is_visible,provenance,preset_key,is_active) VALUES (?,?,?,?,?,?,?,?,'custom',NULL,1)");
-      for (const field of normalized.fields) {
-        if (field.id !== undefined) update.run(field.displayOrder, field.label, field.languageCode, field.required ? 1 : 0, field.visible ? 1 : 0, isActiveAttribute(field) ? 1 : 0, field.id, workbookId);
-        else {
-          if (field.role === undefined) throw new Error("Normalized workbook fields must have a role.");
-          const result = insert.run(workbookId, field.key, field.role, field.displayOrder, field.label, field.languageCode, field.required ? 1 : 0, field.visible ? 1 : 0);
-          const fieldId = Number(result.lastInsertRowid);
-          this.db.prepare("INSERT INTO entry_field_values (entry_id,field_id,workbook_id,value) SELECT id,?,?,'' FROM entries WHERE workbook_id=?").run(fieldId, workbookId, workbookId);
-        }
-      }
-      this.db.prepare("UPDATE workbooks SET vocabulary_label=?, updated_at=? WHERE id=?").run(normalized.vocabularyLabel, new Date().toISOString(), workbookId);
-    });
+    transaction(this.db, () => this.writeUpdateWorkbookAttributes(workbookId, draft, confirmDataLoss));
     return this.requireWorkbook(workbookId);
+  }
+
+  private writeUpdateWorkbookAttributes(workbookId: number, draft: WorkbookAttributesDraft, confirmDataLoss: boolean): void {
+    const normalized = this.normalizeAttributesDraft(workbookId, draft);
+    this.assertPrimaryMeaningSaved(workbookId, normalized);
+    const impact = this.previewWorkbookAttributesUpdate(workbookId, normalized);
+    if (impact.populatedFields.length > 0 && !confirmDataLoss) throw new WorkbookDataLossError(impact);
+    const retainedIds = new Set(normalized.fields.flatMap((field) => field.id === undefined ? [] : [field.id]));
+    const existing = this.db.prepare("SELECT id FROM workbook_fields WHERE workbook_id = ?").all(workbookId) as Array<{ id: number }>;
+    for (const row of existing) if (!retainedIds.has(Number(row.id))) this.db.prepare("DELETE FROM workbook_fields WHERE id = ? AND workbook_id = ?").run(row.id, workbookId);
+    const maxPosition = Number((this.db.prepare("SELECT COALESCE(MAX(position), 0) AS value FROM workbook_fields WHERE workbook_id = ?").get(workbookId) as { value: number }).value);
+    this.db.prepare("UPDATE workbook_fields SET position = position + ? WHERE workbook_id = ?").run(maxPosition + 100, workbookId);
+    const update = this.db.prepare("UPDATE workbook_fields SET position=?, label=?, language_code=?, is_required=?, is_visible=?, is_active=? WHERE id=? AND workbook_id=?");
+    const insert = this.db.prepare("INSERT INTO workbook_fields (workbook_id,field_key,role,position,label,language_code,is_required,is_visible,provenance,preset_key,is_active) VALUES (?,?,?,?,?,?,?,?,'custom',NULL,1)");
+    for (const field of normalized.fields) {
+      if (field.id !== undefined) update.run(field.displayOrder, field.label, field.languageCode, field.required ? 1 : 0, field.visible ? 1 : 0, isActiveAttribute(field) ? 1 : 0, field.id, workbookId);
+      else {
+        if (field.role === undefined) throw new Error("Normalized workbook fields must have a role.");
+        const result = insert.run(workbookId, field.key, field.role, field.displayOrder, field.label, field.languageCode, field.required ? 1 : 0, field.visible ? 1 : 0);
+        const fieldId = Number(result.lastInsertRowid);
+        this.db.prepare("INSERT INTO entry_field_values (entry_id,field_id,workbook_id,value) SELECT id,?,?,'' FROM entries WHERE workbook_id=?").run(fieldId, workbookId, workbookId);
+      }
+    }
+    this.db.prepare("UPDATE workbooks SET vocabulary_label=?, updated_at=? WHERE id=?").run(normalized.vocabularyLabel, new Date().toISOString(), workbookId);
   }
 
   listTagTypes(workbookId: number): TagType[] {
@@ -469,46 +493,48 @@ export class VocabularyRepository {
     return { removals };
   }
   updateWorkbookTags(workbookId: number, draft: WorkbookTagsDraft, confirmDataLoss = false): TagType[] {
-    transaction(this.db, () => {
-      const normalized = this.normalizeTagsDraft(workbookId, draft);
-      const impact = this.previewWorkbookTagsUpdate(workbookId, normalized);
-      if (impact.removals.length > 0 && !confirmDataLoss) throw new TagDataLossError(impact);
-      const retainedTypeIds = new Set(normalized.types.flatMap((type) => type.id === undefined ? [] : [type.id]));
-      const retainedTagIds = new Set(normalized.types.flatMap((type) => type.tags.flatMap((tag) => tag.id === undefined ? [] : [tag.id])));
-      for (const row of this.db.prepare("SELECT id FROM tag_types WHERE workbook_id = ?").all(workbookId) as Array<{ id: number }>) {
-        if (!retainedTypeIds.has(Number(row.id))) this.db.prepare("DELETE FROM tag_types WHERE id = ? AND workbook_id = ?").run(row.id, workbookId);
-      }
-      for (const row of this.db.prepare("SELECT id FROM tags WHERE workbook_id = ?").all(workbookId) as Array<{ id: number }>) {
-        if (!retainedTagIds.has(Number(row.id))) this.db.prepare("DELETE FROM tags WHERE id = ? AND workbook_id = ?").run(row.id, workbookId);
-      }
-      // Move retained names out of their UNIQUE namespaces so swaps remain atomic.
-      for (const typeId of retainedTypeIds) {
-        const result = this.db.prepare("UPDATE tag_types SET name = ? WHERE id = ? AND workbook_id = ?").run(`__vocabhelper_stage_${Date.now()}_${Math.random()}_${typeId}__`, typeId, workbookId);
+    transaction(this.db, () => this.writeUpdateWorkbookTags(workbookId, draft, confirmDataLoss));
+    return this.listTagTypes(workbookId);
+  }
+
+  private writeUpdateWorkbookTags(workbookId: number, draft: WorkbookTagsDraft, confirmDataLoss: boolean): void {
+    const normalized = this.normalizeTagsDraft(workbookId, draft);
+    const impact = this.previewWorkbookTagsUpdate(workbookId, normalized);
+    if (impact.removals.length > 0 && !confirmDataLoss) throw new TagDataLossError(impact);
+    const retainedTypeIds = new Set(normalized.types.flatMap((type) => type.id === undefined ? [] : [type.id]));
+    const retainedTagIds = new Set(normalized.types.flatMap((type) => type.tags.flatMap((tag) => tag.id === undefined ? [] : [tag.id])));
+    for (const row of this.db.prepare("SELECT id FROM tag_types WHERE workbook_id = ?").all(workbookId) as Array<{ id: number }>) {
+      if (!retainedTypeIds.has(Number(row.id))) this.db.prepare("DELETE FROM tag_types WHERE id = ? AND workbook_id = ?").run(row.id, workbookId);
+    }
+    for (const row of this.db.prepare("SELECT id FROM tags WHERE workbook_id = ?").all(workbookId) as Array<{ id: number }>) {
+      if (!retainedTagIds.has(Number(row.id))) this.db.prepare("DELETE FROM tags WHERE id = ? AND workbook_id = ?").run(row.id, workbookId);
+    }
+    // Move retained names out of their UNIQUE namespaces so swaps remain atomic.
+    for (const typeId of retainedTypeIds) {
+      const result = this.db.prepare("UPDATE tag_types SET name = ? WHERE id = ? AND workbook_id = ?").run(`__vocabhelper_stage_${Date.now()}_${Math.random()}_${typeId}__`, typeId, workbookId);
+      if (Number(result.changes) !== 1) throw new ValidationError("A tag type changed while it was being saved.");
+    }
+    for (const tagId of retainedTagIds) {
+      const result = this.db.prepare("UPDATE tags SET name = ? WHERE id = ? AND workbook_id = ?").run(`__vocabhelper_stage_${Date.now()}_${Math.random()}_${tagId}__`, tagId, workbookId);
+      if (Number(result.changes) !== 1) throw new ValidationError("A tag changed while it was being saved.");
+    }
+    const offset = Number((this.db.prepare("SELECT COALESCE(MAX(position), 0) AS value FROM tag_types WHERE workbook_id = ?").get(workbookId) as { value: number }).value) + 100;
+    this.db.prepare("UPDATE tag_types SET position = position + ? WHERE workbook_id = ?").run(offset, workbookId);
+    for (const [index, type] of normalized.types.entries()) {
+      let typeId = type.id;
+      if (typeId === undefined) typeId = Number(this.db.prepare("INSERT INTO tag_types (workbook_id, name, position, is_visible) VALUES (?, ?, ?, ?)").run(workbookId, type.name, index + 1, type.visible ? 1 : 0).lastInsertRowid);
+      else {
+        const result = this.db.prepare("UPDATE tag_types SET name = ?, position = ?, is_visible = ? WHERE id = ? AND workbook_id = ?").run(type.name, index + 1, type.visible ? 1 : 0, typeId, workbookId);
         if (Number(result.changes) !== 1) throw new ValidationError("A tag type changed while it was being saved.");
       }
-      for (const tagId of retainedTagIds) {
-        const result = this.db.prepare("UPDATE tags SET name = ? WHERE id = ? AND workbook_id = ?").run(`__vocabhelper_stage_${Date.now()}_${Math.random()}_${tagId}__`, tagId, workbookId);
-        if (Number(result.changes) !== 1) throw new ValidationError("A tag changed while it was being saved.");
-      }
-      const offset = Number((this.db.prepare("SELECT COALESCE(MAX(position), 0) AS value FROM tag_types WHERE workbook_id = ?").get(workbookId) as { value: number }).value) + 100;
-      this.db.prepare("UPDATE tag_types SET position = position + ? WHERE workbook_id = ?").run(offset, workbookId);
-      for (const [index, type] of normalized.types.entries()) {
-        let typeId = type.id;
-        if (typeId === undefined) typeId = Number(this.db.prepare("INSERT INTO tag_types (workbook_id, name, position, is_visible) VALUES (?, ?, ?, ?)").run(workbookId, type.name, index + 1, type.visible ? 1 : 0).lastInsertRowid);
+      for (const tag of type.tags) {
+        if (tag.id === undefined) this.db.prepare("INSERT INTO tags (tag_type_id, workbook_id, name) VALUES (?, ?, ?)").run(typeId, workbookId, tag.name);
         else {
-          const result = this.db.prepare("UPDATE tag_types SET name = ?, position = ?, is_visible = ? WHERE id = ? AND workbook_id = ?").run(type.name, index + 1, type.visible ? 1 : 0, typeId, workbookId);
-          if (Number(result.changes) !== 1) throw new ValidationError("A tag type changed while it was being saved.");
-        }
-        for (const tag of type.tags) {
-          if (tag.id === undefined) this.db.prepare("INSERT INTO tags (tag_type_id, workbook_id, name) VALUES (?, ?, ?)").run(typeId, workbookId, tag.name);
-          else {
-            const result = this.db.prepare("UPDATE tags SET name = ? WHERE id = ? AND tag_type_id = ? AND workbook_id = ?").run(tag.name, tag.id, typeId, workbookId);
-            if (Number(result.changes) !== 1) throw new ValidationError("A tag changed while it was being saved.");
-          }
+          const result = this.db.prepare("UPDATE tags SET name = ? WHERE id = ? AND tag_type_id = ? AND workbook_id = ?").run(tag.name, tag.id, typeId, workbookId);
+          if (Number(result.changes) !== 1) throw new ValidationError("A tag changed while it was being saved.");
         }
       }
-    });
-    return this.listTagTypes(workbookId);
+    }
   }
 
   getEntryStats(entryId: number) {

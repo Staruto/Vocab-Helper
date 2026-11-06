@@ -55,11 +55,17 @@ All tag types appear while editing, including hidden types and types with no ass
 
 Esc or Ctrl+S exits edit mode to view mode. When changes exist, choose **Save Changes (Preserve Test Data)**, **Save Changes (Reset Test Data)**, **Discard Changes**, or **Continue Editing** with Up/Down and Enter; Esc continues editing. Failed saves preserve the draft and display the error. The preserve option is selected initially. Preserving keeps Test Count, Error Count, Last Tested, and Next Deadline; resetting clears them and returns the entry to the gray tier. Daily practice totals and history remain unchanged with either option.
 
+## Settings
+
+Open `/setting` to see **Settings  Attributes  Tags  Import  Appearance  Daily Goal** across the top. Settings is a heading; the selected section uses an inverse highlight. Left/Right changes sections while this row has focus, and the controls appear below immediately. Down enters the first setting; Up from the first setting returns to the section row. Setting lists stop at the bottom instead of wrapping. Long content scrolls below the navigation row.
+
+Drafts stay available when switching sections. Esc leaves Settings, offering **Save changes**, **Discard changes**, or **Continue editing** for all pending workbook settings together. Saving validates every pending section and commits them together; removals of populated attributes or assigned tags require typing `yes`. Import and Daily Goal also support Enter to save only that section and stay on the page. Appearance toggles save immediately and are retained when other drafts are discarded. During an add or rename edit, Esc cancels that edit first. `/tag` still opens the direct Tags editor.
+
 ## Language preset attributes
 
 Japanese, English, German, Chinese, Korean, Spanish, and French workbooks automatically include Example Sentence 1–5, Common Collocations, and Similar Words. Japanese also includes 読み方 (kana). All preset fields start active and hidden from list columns.
 
-During creation, choose which exclusive attributes are active. Later, open `/setting` → **Attributes** → **Language Preset Attributes**, between Meanings and Optional Attributes. Use Up/Down to select, **T** to toggle activation, **Space** to toggle list visibility, and **Ctrl+R** to rename. The selected field uses the selected color; other fields are white. Inactive preset names are crossed out; visibility labels remain separate. While renaming, T types normally. Preset fields cannot be added or removed. Settings changes use the existing save/discard prompt.
+During creation, choose which exclusive attributes are active. Later, open `/setting` → **Attributes** → **Language Preset Attributes**, between Meanings and Optional Attributes. Use Up/Down to select, **T** to toggle activation, **Space** to toggle list visibility, and **Ctrl+R** to rename. The selected field uses the selected color; other fields are white. Inactive preset names are crossed out; visibility labels remain separate. While renaming, T types normally. Preset fields cannot be added or removed. Settings changes use the shared save/discard prompt.
 
 Inactive fields are omitted from entry prompts, details, list columns, search, and import destinations. Their stored values and visibility preferences survive edits and imports and become available again when reactivated. Active fields still follow their separate visibility setting for list columns and search.
 

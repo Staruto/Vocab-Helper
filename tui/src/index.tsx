@@ -1,7 +1,7 @@
 import { entryAttributeValue, isActiveAttribute, createPresetAttributes } from "./attributes.js";
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, render, useApp, useInput, useStdout } from "ink";
-import { CreateWorkbookInput, EntryRow, LANGUAGE_PRESET_DEFINITIONS, MeaningAttribute, MetadataAttribute, TagDataLossError, TagType, TagTypeDraft, VocabularyKind, WorkbookAttributesDraft, WorkbookConfigurationInput, WorkbookDataLossError, WorkbookRow, WorkbookTagsDraft } from "./db.js";
+import { CreateWorkbookInput, EntryRow, LANGUAGE_PRESET_DEFINITIONS, MeaningAttribute, MetadataAttribute, TagDataLossError, TagType, TagTypeDraft, VocabularyKind, WorkbookConfigurationInput, WorkbookDataLossError, WorkbookRow, WorkbookTagsDraft } from "./db.js";
 import { VocabularyBackend } from "./backend.js";
 import { fitTagBadges, visibleAssignedTagGroups } from "./tag-display.js";
 import { adjacentEntryId, buildDetailSections, buildReviewFields, detailNavigationLabel, DetailField } from "./detail-display.js";
@@ -9,13 +9,14 @@ import { similarWordLines } from "./similar-words.js";
 import { wrapStyledText } from "./styled-text.js";
 import { formatImportPreviewFilter, formatImportPreviewRecord, importPreviewPageSize, importPreviewWordCount, IMPORT_EXIT_CHOICES, ImportPreview, ImportPreviewFilter, loadLabeledTextFile, paginateImportPreview } from "./import.js";
 import { createAddDetailEditor, createDetailEditor, detailExitChoices, detailEditRows, detailEditorKeyAction, detailRowChanged, detailRowValue, saveDetailEditor, updateDetailEditor, DetailEditRow, DetailEditorState } from "./detail-editor.js";
+import { SettingsScreen, type SettingsPanelControls, type AttributeDraftControls, type TagDraftControls } from "./settings-screen.js";
 import { CaretInputLine } from "./text-input.js";
 import { filterEntriesForSearch } from "./search.js";
 import { LIST_ORDER_OPTIONS } from "./list-order.js";
 import { restoreListPosition, VOCABULARY_PAGE_SIZE, type VocabularyListContext } from "./list-navigation.js";
 import { localCalendarDay } from "./calendar.js";
 import { buildPracticeProfile } from "./profile-display.js";
-import { buildWorkbookMenuLines, buildWorkbookProgress, parseDailyGoalInput } from "./workbook-display.js";
+import { buildWorkbookMenuLines, buildWorkbookProgress } from "./workbook-display.js";
 import { UiMode } from "./orchestration.js";
 import { createOrchestrationCapabilities } from "./orchestration-runner.js";
 import { createInitialState, update as updateOrchestration } from "./orchestration.js";
@@ -29,11 +30,7 @@ type AppScreen =
   | { kind: "edit-workbook"; workbook: WorkbookRow }
   | { kind: "delete-workbook"; workbook: WorkbookRow; confirm: string }
   | { kind: "settings"; workbook: WorkbookRow }
-  | { kind: "settings-attributes"; workbook: WorkbookRow }
-  | { kind: "settings-import"; workbook: WorkbookRow }
-  | { kind: "settings-goal"; workbook: WorkbookRow }
-  | { kind: "settings-appearance"; workbook: WorkbookRow }
-  | { kind: "tags"; workbook: WorkbookRow; returnTo?: "vocab" | "settings" }
+  | { kind: "tags"; workbook: WorkbookRow }
   | { kind: "add"; workbook: WorkbookRow }
   | { kind: "view"; workbook: WorkbookRow; entryId: number; editing?: boolean; listContext?: VocabularyListContext }
   | { kind: "profile"; workbook: WorkbookRow }
@@ -1268,137 +1265,17 @@ function WorkbookDeleteConfirmScreen({
   );
 }
 
-function SettingsHomeScreen({ workbook, onAttributes, onTags, onImport, onAppearance, onDailyGoal, onCancel, onQuit }: { workbook: WorkbookRow; onAttributes: () => void; onTags: () => void; onImport: () => void; onAppearance: () => void; onDailyGoal: () => void; onCancel: () => void; onQuit: () => void }): JSX.Element {
-  const { stdout } = useStdout(); const [width, setWidth] = useState(() => stdout?.columns ?? 80); const [selected, setSelected] = useState(0);
-  const sections = ["Attributes", "Tags", "Import", "Appearance", "Daily Goal"];
-  useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => { stdout.off("resize", f); }; }, [stdout]);
-  useInput((input, key) => { if (key.ctrl && input === "c") onQuit(); else if (key.escape) onCancel(); else if (key.upArrow) setSelected((v) => v <= 0 ? sections.length - 1 : v - 1); else if (key.downArrow) setSelected((v) => (v + 1) % sections.length); else if (key.return) [onAttributes, onTags, onImport, onAppearance, onDailyGoal][selected](); });
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Settings - ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Choose a settings section.", width)}</Text><Text>{padLine("", width)}</Text>{sections.map((section, index) => <Text key={section} color={index === selected ? SELECTED_TEXT_COLOR : "white"}>{padLine(`${index === selected ? ">" : " "} ${section}`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("↑↓ select | Enter open | Esc back", width)}</Text></Box>;
-}
-
-function DailyGoalSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook: WorkbookRow; onSave: (workbook: WorkbookRow) => void; onCancel: () => void; onQuit: () => void }): JSX.Element {
-  const { stdout } = useStdout();
-  const [width, setWidth] = useState(() => stdout?.columns ?? 80);
-  const [buffer, setBuffer] = useState(workbook.dailyGoal?.toString() ?? "");
-  const [error, setError] = useState("");
-  useEffect(() => {
-    if (!stdout) return;
-    const resize = () => setWidth(stdout.columns ?? 80);
-    stdout.on("resize", resize);
-    return () => { stdout.off("resize", resize); };
-  }, [stdout]);
-  useInput((input, key) => {
-    if (key.ctrl && input === "c") { onQuit(); return; }
-    if (key.escape) { onCancel(); return; }
-    if (key.ctrl && input === "u") { setBuffer(""); setError(""); return; }
-    if (key.return) {
-      try { onSave(backend.setWorkbookDailyGoal(workbook.id, parseDailyGoalInput(buffer))); }
-      catch (caught) { setError(caught instanceof Error ? caught.message : "Could not save daily goal."); }
-    }
-  });
-  return <Box flexDirection="column">
-    <Text color="cyan" bold>{centerLine(`Daily Goal - ${workbook.name}`, width)}</Text>
-    <Text color={AUXILIARY_TEXT_COLOR}>{padLine("Words per day. Enter a positive whole number; empty means no goal.", width)}</Text>
-    <Text>{padLine("", width)}</Text>
-    <CaretInputLine prefix="Daily goal: " value={buffer} onChange={(value) => { setBuffer(value); setError(""); }} width={width} inputKey="daily-goal" />
-    <Text color="red">{padLine(error, width)}</Text>
-    <Text color={AUXILIARY_TEXT_COLOR}>{padLine("Enter saves | Ctrl+U clears | Esc cancels", width)}</Text>
-  </Box>;
-}
-
-function ImportSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook: WorkbookRow; onSave: (workbook: WorkbookRow) => void; onCancel: () => void; onQuit: () => void }): JSX.Element {
-  const { stdout } = useStdout();
-  const [width, setWidth] = useState(() => stdout?.columns ?? 80);
-  const [buffer, setBuffer] = useState(workbook.importFilePath ?? "");
-  const [message, setMessage] = useState("Enter a UTF-8 .txt file path. Empty clears the default.");
-  const [hasError, setHasError] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const request = useRef(0);
-  useEffect(() => () => { request.current += 1; }, []);
-  useEffect(() => {
-    if (!stdout) return;
-    const resize = () => setWidth(stdout.columns ?? 80);
-    stdout.on("resize", resize);
-    return () => { stdout.off("resize", resize); };
-  }, [stdout]);
-  useInput((input, key) => {
-    if (key.ctrl && input === "c") { request.current += 1; onQuit(); return; }
-    if (key.escape) { request.current += 1; onCancel(); return; }
-    if (saving) return;
-    if (key.ctrl && input === "u") { setBuffer(""); setMessage(""); setHasError(false); return; }
-    if (key.return) {
-      const value = buffer.trim();
-      if (!value) { onSave(backend.setWorkbookImportFilePath(workbook.id, null)); return; }
-      const currentRequest = ++request.current;
-      setSaving(true);
-      setHasError(false);
-      setMessage("Validating import file...");
-      void loadLabeledTextFile(value).then((source) => {
-        if (currentRequest !== request.current) return;
-        onSave(backend.setWorkbookImportFilePath(workbook.id, source.path));
-      }).catch((error: unknown) => {
-        if (currentRequest !== request.current) return;
-        setSaving(false);
-        setHasError(true);
-        setMessage(error instanceof Error ? error.message : "Could not validate the import file.");
-      });
-      return;
-    }
-  });
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Import Settings - ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Default import file", width)}</Text><Text>{padLine("", width)}</Text><CaretInputLine prefix="> " value={buffer} onChange={(value) => { setBuffer(value); setMessage(""); setHasError(false); }} width={width} focus={!saving} inputKey="import-settings-path" /><Text>{padLine("", width)}</Text><Text color={hasError ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Enter saves | Ctrl+U clears | Esc cancels", width)}</Text></Box>;
-}
-
-function AppearanceSettingsScreen({ onCancel, onQuit }: { onCancel: () => void; onQuit: () => void }): JSX.Element {
-  const { stdout } = useStdout();
-  const [width, setWidth] = useState(() => stdout?.columns ?? 80);
-  const [enabled, setEnabled] = useState(() => backend.getTierColorsEnabled());
-  const [progressEnabled, setProgressEnabled] = useState(() => backend.getWorkbookProgressEnabled());
-  const [selected, setSelected] = useState(0);
-  const options = [
-    { label: "Tier colors", enabled },
-    { label: "Workbook homepage progress", enabled: progressEnabled },
-  ];
-  useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => { stdout.off("resize", f); }; }, [stdout]);
-  useInput((input, key) => {
-    if (key.ctrl && input === "c") onQuit();
-    else if (key.escape) onCancel();
-    else if (key.upArrow) setSelected((value) => (value + options.length - 1) % options.length);
-    else if (key.downArrow) setSelected((value) => (value + 1) % options.length);
-    else if (input === " ") {
-      if (selected === 0) setEnabled(backend.setTierColorsEnabled(!enabled));
-      else setProgressEnabled(backend.setWorkbookProgressEnabled(!progressEnabled));
-    }
-  });
-  return <Box flexDirection="column">
-    <Text color="cyan" bold>{centerLine("Appearance", width)}</Text>
-    <Text>{padLine("", width)}</Text>
-    {options.map((option, index) => <Text key={option.label} color={index === selected ? SELECTED_TEXT_COLOR : option.enabled ? "green" : AUXILIARY_TEXT_COLOR}>{padLine(`${index === selected ? ">" : " "} [${option.enabled ? "●" : " "}] ${option.label}`, width)}</Text>)}
-    <Text>{padLine("", width)}</Text>
-    <Text color={AUXILIARY_TEXT_COLOR}>{padLine("↑↓ select | Space toggles | Esc back", width)}</Text>
-  </Box>;
-}
-
 type AttributeSection = "vocabulary" | "meaning" | "preset" | "optional";
 type AttributeSelection = { section: AttributeSection; fieldIndex: number | null };
 
-function attributeDraftSignature(vocabularyLabel: string, fields: MetadataAttribute[]): string {
-  return JSON.stringify({ vocabularyLabel, fields: fields.map((field) => ({ id: field.id, key: field.key, role: field.role, label: field.label, languageCode: field.languageCode, visible: field.visible, active: field.active, presetKey: field.presetKey })) });
-}
-
-function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook: WorkbookRow; onSave: (draft: WorkbookAttributesDraft, confirmDataLoss: boolean) => void; onCancel: () => void; onQuit: () => void }): JSX.Element {
+function MetadataSettingsScreen({ onCancel, panel, draft }: { panel: SettingsPanelControls; draft: AttributeDraftControls; onCancel: () => void }): JSX.Element {
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
   const [height, setHeight] = useState(() => stdout?.rows ?? 24);
-  const initialFields = useMemo(() => workbook.metadataAttributes.filter((field) => field.role !== "vocabulary").map((field) => ({ ...field })), [workbook]);
-  const [vocabularyLabel, setVocabularyLabel] = useState(workbook.vocabularyLabel);
-  const [fields, setFields] = useState<MetadataAttribute[]>(initialFields);
+  const { vocabularyLabel, setVocabularyLabel, fields, setFields } = draft;
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [editAction, setEditAction] = useState<"none" | "add" | "rename">("none");
   const [buffer, setBuffer] = useState("");
-  const [screenMode, setScreenMode] = useState<"edit" | "exit-confirm" | "destructive-confirm">("edit");
-  const [exitChoice, setExitChoice] = useState(0);
-  const [confirmBuffer, setConfirmBuffer] = useState("");
-  const [destructiveFields, setDestructiveFields] = useState<Array<{ label: string; valueCount: number }>>([]);
   const [message, setMessage] = useState("");
   const meanings = fields.filter((field) => field.role === "meaning");
   const presets = fields.filter((field) => Boolean(field.presetKey));
@@ -1411,8 +1288,6 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
   const safeSelectedIndex = Math.min(selectedIndex, Math.max(0, selections.length - 1));
   const selected = selections[safeSelectedIndex];
   const selectedField = selected?.fieldIndex == null ? null : fields[selected.fieldIndex];
-  const originalSignature = useMemo(() => attributeDraftSignature(workbook.vocabularyLabel, initialFields), [workbook.vocabularyLabel, initialFields]);
-  const dirty = attributeDraftSignature(vocabularyLabel, fields) !== originalSignature;
 
   useEffect(() => { if (!stdout) return; const f = () => { setWidth(stdout.columns ?? 80); setHeight(stdout.rows ?? 24); }; stdout.on("resize", f); return () => { stdout.off("resize", f); }; }, [stdout]);
   useEffect(() => { if (selectedIndex !== safeSelectedIndex) setSelectedIndex(safeSelectedIndex); }, [selectedIndex, safeSelectedIndex]);
@@ -1480,38 +1355,18 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
     }
     setEditAction("none"); setBuffer(""); setMessage("");
   }
-  function currentDraft(): WorkbookAttributesDraft { return { vocabularyLabel, fields }; }
-  function save(confirmDataLoss = false): void {
-    try { onSave(currentDraft(), confirmDataLoss); }
-    catch (caught) {
-      if (caught instanceof WorkbookDataLossError) {
-        setDestructiveFields(caught.impact.populatedFields); setConfirmBuffer(""); setScreenMode("destructive-confirm"); setMessage("");
-      } else { setScreenMode("edit"); setMessage(caught instanceof Error ? caught.message : "Could not save attributes."); }
-    }
-  }
-
+  const focused = panel.focused;
   useInput((input, key) => {
-    if (key.ctrl && input === "c") return onQuit();
-    if (screenMode === "destructive-confirm") {
-      if (key.escape) { setScreenMode("edit"); setConfirmBuffer(""); return; }
-      if (key.return) { if (confirmBuffer.trim().toLowerCase() === "yes") save(true); else setMessage("Type yes to confirm removal of populated fields."); return; }
-      return;
-    }
-    if (screenMode === "exit-confirm") {
-      if (key.escape) { setScreenMode("edit"); return; }
-      if (key.upArrow) { setExitChoice((value) => value <= 0 ? 2 : value - 1); return; }
-      if (key.downArrow) { setExitChoice((value) => (value + 1) % 3); return; }
-      if (key.return) { if (exitChoice === 0) save(); else if (exitChoice === 1) onCancel(); else setScreenMode("edit"); }
-      return;
-    }
+    if (!focused) return;
+    if (key.ctrl && input === "c") return;
     if (editAction !== "none") {
       if (key.escape) { setEditAction("none"); setBuffer(""); setMessage(""); return; }
       if (key.return) { commitEdit(); return; }
       return;
     }
-    if (key.escape) { if (dirty) { setExitChoice(0); setScreenMode("exit-confirm"); } else onCancel(); return; }
-    if (key.upArrow) { setSelectedIndex((value) => value <= 0 ? selections.length - 1 : value - 1); setMessage(""); return; }
-    if (key.downArrow) { setSelectedIndex((value) => (value + 1) % selections.length); setMessage(""); return; }
+    if (key.escape) { onCancel(); return; }
+    if (key.upArrow) { if (safeSelectedIndex === 0) panel.onTop(); else setSelectedIndex((value) => Math.max(0, value - 1)); setMessage(""); return; }
+    if (key.downArrow) { setSelectedIndex((value) => Math.min(selections.length - 1, value + 1)); setMessage(""); return; }
     if (key.ctrl && input.toLowerCase() === "p") { promoteSelectedMeaning(); return; }
     if (key.ctrl && input.toLowerCase() === "a") { beginAdd(); return; }
     if (key.ctrl && input.toLowerCase() === "r") { beginRename(); return; }
@@ -1530,30 +1385,22 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
     }
   });
 
-  if (screenMode === "exit-confirm") {
-    const choices = ["Save changes", "Discard changes", "Continue editing"];
-    return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Unsaved attribute changes", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Choose what to do with your changes.", width)}</Text><Text>{padLine("", width)}</Text>{choices.map((choice, index) => <Text key={choice} inverse={index === exitChoice} color={index === exitChoice ? undefined : "white"}>{padLine(`${index === exitChoice ? ">" : " "} ${choice}`, width)}</Text>)}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("↑↓ select | Enter confirm | Esc continue editing", width)}</Text></Box>;
-  }
-  if (screenMode === "destructive-confirm") {
-    return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Confirm data removal", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Saving will permanently remove stored values from these fields:", width)}</Text><Text>{padLine("", width)}</Text>{destructiveFields.map((field) => <Text key={field.label} color="red">{padLine(`${field.label}: ${field.valueCount} populated value(s)`, width)}</Text>)}<Text>{padLine("", width)}</Text><CaretInputLine prefix="Type yes: " value={confirmBuffer} onChange={(value) => { setConfirmBuffer(value); setMessage(""); }} width={width} color="cyan" inputKey="attribute-destructive-confirm" /><Text color="red">{padLine(message, width)}</Text><Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Enter confirm | Esc continue editing", width)}</Text></Box>;
-  }
-
   const meaningFooter = meanings[0] === selectedField ? "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Space show/hide | Esc leave" : `↑↓ navigate | Ctrl+A add | Ctrl+R rename${selectedField?.id === undefined ? "" : " | Ctrl+P make primary"} | Space show/hide | Del remove | Esc leave`;
   const footer = editAction !== "none" ? "Enter confirm | Esc cancel edit" : selected.section === "vocabulary" ? "↑↓ navigate | Ctrl+R rename | Esc leave" : selected.section === "meaning" ? meaningFooter : selected.section === "preset" ? "↑↓ select | Tab active/inactive | Ctrl+R rename | Space show/hide | Esc leave" : "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Space show/hide | Del remove | Esc leave";
   const lines: Array<{ text: string; color?: string; borderColor?: string; bold?: boolean; selected?: boolean; inactiveLabel?: string }> = [];
   function group(section: AttributeSection, title: string, description: string, members: Array<{ field: MetadataAttribute; index: number }>): void {
-    const borderColor = selected.section === section ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR;
+    const borderColor = focused && selected.section === section ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR;
     const innerWidth = Math.max(1, width - 4);
     const line = (text: string, color?: string, bold?: boolean, focused = false, inactiveLabel?: string) => lines.push({ text: padLine(text, innerWidth), color, borderColor, bold, selected: focused, inactiveLabel });
     lines.push({ text: `┌${"─".repeat(Math.max(1, width - 2))}┐`, color: borderColor });
     line(title, borderColor, true);
     line(description, AUXILIARY_TEXT_COLOR);
-    if (section === "vocabulary") line(`${selected.section === "vocabulary" ? ">" : " "} ${vocabularyLabel} [shown] (required)`, selected.section === "vocabulary" ? SELECTED_TEXT_COLOR : "white", false, selected.section === "vocabulary");
-    else if (!members.length) line(`${selected.section === section ? ">" : " "} No optional attributes`, AUXILIARY_TEXT_COLOR, false, selected.section === section);
+    if (section === "vocabulary") line(`${focused && selected.section === "vocabulary" ? ">" : " "} ${vocabularyLabel} [shown] (required)`, focused && selected.section === "vocabulary" ? SELECTED_TEXT_COLOR : "white", false, focused && selected.section === "vocabulary");
+    else if (!members.length) line(`${focused && selected.section === section ? ">" : " "} No optional attributes`, AUXILIARY_TEXT_COLOR, false, focused && selected.section === section);
     else for (const { field, index } of members) {
-      const focused = selected.fieldIndex === index;
-      const color = focused ? SELECTED_TEXT_COLOR : "white";
-      line(`${focused ? ">" : " "} ${field.label} [${field.visible ? "shown" : "hidden"}]${meanings[0] === field ? " (primary)" : ""}`, color, false, focused, isActiveAttribute(field) ? undefined : field.label);
+      const rowFocused = focused && selected.fieldIndex === index;
+      const color = rowFocused ? SELECTED_TEXT_COLOR : "white";
+      line(`${rowFocused ? ">" : " "} ${field.label} [${field.visible ? "shown" : "hidden"}]${meanings[0] === field ? " (primary)" : ""}`, color, false, rowFocused, isActiveAttribute(field) ? undefined : field.label);
     }
     lines.push({ text: `└${"─".repeat(Math.max(1, width - 2))}┘`, color: borderColor });
   }
@@ -1562,12 +1409,13 @@ function MetadataSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbo
   group("meaning", "Meanings", "Meaning values are optional. Space shows or hides a column. Up to five meanings.", indexed.filter(({ field }) => field.role === "meaning"));
   if (presets.length) group("preset", "Language Preset Attributes", "Rename, activate, or change visibility. Preset membership is fixed.", indexed.filter(({ field }) => Boolean(field.presetKey)));
   group("optional", "Optional Attributes", "Custom fields can be added, renamed, shown, hidden, or removed.", indexed.filter(({ field }) => field.role === "optional" && !field.presetKey));
-  const viewportSize = Math.max(1, height - (editAction !== "none" ? 7 : 6));
-  const focusedLine = Math.max(0, lines.findIndex((line) => line.selected));
+  // Leave one terminal row free so Ink keeps its incremental-render cache current.
+  const viewportSize = Math.max(1, height - 8 - (editAction !== "none" ? 1 : 0) - (!focused ? 1 : 0));
+  const focusedLine = focused ? Math.max(0, lines.findIndex((line) => line.selected)) : 0;
   const firstLine = Math.max(0, Math.min(lines.length - viewportSize, focusedLine - Math.floor(viewportSize / 2)));
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Attributes - ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Configure field names, activation, and visibility. Changes are staged.", width)}</Text><Text color={message ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text>
+  return <Box flexDirection="column"><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Configure field names, activation, and visibility. Changes are staged.", width)}</Text><Text color={message ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text>
     {lines.slice(firstLine, firstLine + viewportSize).map((line, index) => <Text key={firstLine + index} color={line.borderColor ?? line.color}>{line.borderColor ? <>{"│ "}<Text color={line.color} bold={line.bold}><AttributeRowText text={line.text} inactiveLabel={line.inactiveLabel} /></Text>{" │"}</> : line.text}</Text>)}
-    {editAction !== "none" ? <CaretInputLine key={`${editAction}-${selectedIndex}`} prefix={`${editAction === "add" ? "New attribute" : "Display name"}: `} value={buffer} onChange={(value) => { setBuffer(value); setMessage(""); }} width={width} color="cyan" inputKey={`${editAction}-${selectedIndex}`} /> : null}
+    {editAction !== "none" ? <CaretInputLine key={`${editAction}-${selectedIndex}`} prefix={`${editAction === "add" ? "New attribute" : "Display name"}: `} value={buffer} onChange={(value) => { setBuffer(value); setMessage(""); }} width={width} focus={focused} color="cyan" inputKey={`${editAction}-${selectedIndex}`} /> : null}
     <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`${firstLine > 0 ? "↑ more above" : ""}${firstLine + viewportSize < lines.length ? "  ↓ more below" : ""}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footer, width)}</Text></Box>;
 }
 
@@ -1577,11 +1425,13 @@ function tagDraftSignature(types: TagTypeDraft[]): string {
   return JSON.stringify(types.map((type) => ({ id: type.id, name: type.name, visible: type.visible, tags: type.tags.map((tag) => ({ id: tag.id, name: tag.name })) })));
 }
 
-function TagSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook: WorkbookRow; onSave: (draft: WorkbookTagsDraft, confirmDataLoss: boolean) => void; onCancel: () => void; onQuit: () => void }): JSX.Element {
+function TagSettingsScreen({ workbook, onSave, onCancel, onQuit, panel, draft }: { panel?: SettingsPanelControls; draft?: TagDraftControls; workbook: WorkbookRow; onSave: (draft: WorkbookTagsDraft, confirmDataLoss: boolean) => void; onCancel: () => void; onQuit: () => void }): JSX.Element {
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
+  const [height, setHeight] = useState(() => stdout?.rows ?? 24);
   const initialTypes = useMemo<TagTypeDraft[]>(() => backend.listTagTypes(workbook.id).map((type) => ({ id: type.id, name: type.name, visible: type.visible, tags: type.tags.map((tag) => ({ id: tag.id, name: tag.name })) })), [workbook.id]);
-  const [types, setTypes] = useState<TagTypeDraft[]>(initialTypes);
+  const [localTypes, setLocalTypes] = useState<TagTypeDraft[]>(initialTypes);
+  const { types, setTypes } = draft ?? { types: localTypes, setTypes: setLocalTypes };
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [action, setAction] = useState<"none" | "add-type" | "add-tag" | "rename-type" | "rename-tag">("none");
   const [buffer, setBuffer] = useState("");
@@ -1596,7 +1446,7 @@ function TagSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook: W
   const selectedType = selected.kind === "add-type" ? undefined : types[selected.typeIndex];
   const selectedTag = selected.kind === "tag" ? selectedType?.tags[selected.tagIndex] : undefined;
   const dirty = tagDraftSignature(types) !== tagDraftSignature(initialTypes);
-  useEffect(() => { if (!stdout) return; const f = () => setWidth(stdout.columns ?? 80); stdout.on("resize", f); return () => { stdout.off("resize", f); }; }, [stdout]);
+  useEffect(() => { if (!stdout) return; const f = () => { setWidth(stdout.columns ?? 80); setHeight(stdout.rows ?? 24); }; stdout.on("resize", f); return () => { stdout.off("resize", f); }; }, [stdout]);
   useEffect(() => { if (selectedIndex !== safeSelectedIndex) setSelectedIndex(safeSelectedIndex); }, [selectedIndex, safeSelectedIndex]);
 
   function begin(next: typeof action): void {
@@ -1628,7 +1478,9 @@ function TagSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook: W
     }
   }
 
+  const focused = panel?.focused ?? true;
   useInput((input, key) => {
+    if (!focused) return;
     if (key.ctrl && input === "c") return onQuit();
     if (screenMode === "destructive-confirm") {
       if (key.escape) { setScreenMode("edit"); setConfirmBuffer(""); return; }
@@ -1646,9 +1498,9 @@ function TagSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook: W
       if (key.return) { commitEdit(); return; }
       return;
     }
-    if (key.escape) { if (dirty) { setExitChoice(0); setScreenMode("exit-confirm"); } else onCancel(); return; }
-    if (key.upArrow) { setSelectedIndex((value) => value <= 0 ? selections.length - 1 : value - 1); setMessage(""); return; }
-    if (key.downArrow) { setSelectedIndex((value) => (value + 1) % selections.length); setMessage(""); return; }
+    if (key.escape) { if (panel) { onCancel(); return; } if (dirty) { setExitChoice(0); setScreenMode("exit-confirm"); } else onCancel(); return; }
+    if (key.upArrow) { if (safeSelectedIndex === 0 && panel) panel.onTop(); else setSelectedIndex((value) => Math.max(0, value - 1)); setMessage(""); return; }
+    if (key.downArrow) { setSelectedIndex((value) => Math.min(selections.length - 1, value + 1)); setMessage(""); return; }
     if (key.return && selected.kind === "add-type") { begin("add-type"); return; }
     if (input === " " && selected.kind === "type" && selectedType) {
       setTypes((current) => current.map((type) => type === selectedType ? { ...type, visible: !type.visible } : type));
@@ -1672,10 +1524,32 @@ function TagSettingsScreen({ workbook, onSave, onCancel, onQuit }: { workbook: W
     return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Confirm tag data removal", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Saving will permanently remove these entry assignments:", width)}</Text><Text>{padLine("", width)}</Text>{removals.map((item, index) => <Text key={`${item.typeName}-${item.tagName}-${index}`} color="red">{padLine(`${item.typeName}${item.tagName ? ` / ${item.tagName}` : ""}: ${item.assignmentCount} assignment(s) across ${item.entryCount} entry/entries`, width)}</Text>)}<Text>{padLine("", width)}</Text><CaretInputLine prefix="Type yes: " value={confirmBuffer} onChange={(value) => { setConfirmBuffer(value); setMessage(""); }} width={width} color="cyan" inputKey="tag-destructive-confirm" /><Text color="red">{padLine(message, width)}</Text><Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Enter confirm | Esc continue editing", width)}</Text></Box>;
   }
   const footer = action !== "none" ? "Enter confirm | Esc cancel edit" : selected.kind === "add-type" ? "↑↓ navigate | Enter add tag type | Esc leave" : selected.kind === "type" ? "↑↓ navigate | Space show/hide | Ctrl+A add tag | Ctrl+R rename | Del remove | Esc leave" : "↑↓ navigate | Ctrl+A add tag | Ctrl+R rename | Del remove | Esc leave";
-  return <Box flexDirection="column"><Text color="cyan" bold>{centerLine(`Tags - ${workbook.name}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Organize tags into types. Changes are staged until you leave this page.", width)}</Text><Text color={message ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text>
-    {types.map((type, typeIndex) => { const active = selected.kind !== "add-type" && selected.typeIndex === typeIndex; const titleActive = selected.kind === "type" && active; return <Box key={type.id ?? `new-${typeIndex}`} flexDirection="column" borderStyle="single" borderColor={active ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}><Text bold color={titleActive ? SELECTED_TEXT_COLOR : undefined}>{`${titleActive ? "> " : ""}${type.name} [${type.visible ? "shown" : "hidden"}]`}</Text>{type.tags.length ? type.tags.map((tag, tagIndex) => { const tagActive = selected.kind === "tag" && selected.typeIndex === typeIndex && selected.tagIndex === tagIndex; return <Text key={tag.id ?? `new-${tagIndex}`} color={tagActive ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{`${tagActive ? ">" : " "} ${tag.name}`}</Text>; }) : <Text color={AUXILIARY_TEXT_COLOR}>No tags</Text>}</Box>; })}
-    <Box flexDirection="column" borderStyle="classic" borderColor={selected.kind === "add-type" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR} paddingX={1}><Text color={selected.kind === "add-type" ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR}>{`${selected.kind === "add-type" ? "> " : ""} + Add tag type`}</Text></Box>
-    {action !== "none" ? <CaretInputLine key={`${action}-${safeSelectedIndex}`} prefix={`${action.includes("type") ? "Tag type" : "Tag"} name: `} value={buffer} onChange={(value) => { setBuffer(value); setMessage(""); }} width={width} color="cyan" inputKey={`${action}-${safeSelectedIndex}`} /> : null}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footer, width)}</Text></Box>;
+  const lines: Array<{ text: string; color?: string; selected?: boolean }> = [];
+  const inner = Math.max(1, width - 4);
+  function row(text: string, active = false, color = AUXILIARY_TEXT_COLOR): void {
+    lines.push({ text: `│ ${padLine(text, inner)} │`, color: active ? SELECTED_TEXT_COLOR : color, selected: active });
+  }
+  types.forEach((type, typeIndex) => {
+    const active = focused && selected.kind !== "add-type" && selected.typeIndex === typeIndex;
+    const border = active ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR;
+    lines.push({ text: `┌${"─".repeat(Math.max(1, width - 2))}┐`, color: border });
+    row(`${active && selected.kind === "type" ? ">" : " "} ${type.name} [${type.visible ? "shown" : "hidden"}]`, active && selected.kind === "type", "white");
+    if (!type.tags.length) row("No tags");
+    type.tags.forEach((tag, tagIndex) => {
+      const tagActive = focused && selected.kind === "tag" && selected.typeIndex === typeIndex && selected.tagIndex === tagIndex;
+      row(`${tagActive ? ">" : " "} ${tag.name}`, tagActive);
+    });
+    lines.push({ text: `└${"─".repeat(Math.max(1, width - 2))}┘`, color: border });
+  });
+  lines.push({ text: `+${"-".repeat(Math.max(1, width - 2))}+`, color: AUXILIARY_TEXT_COLOR });
+  row(`${focused && selected.kind === "add-type" ? ">" : " "} + Add tag type`, focused && selected.kind === "add-type");
+  lines.push({ text: `+${"-".repeat(Math.max(1, width - 2))}+`, color: AUXILIARY_TEXT_COLOR });
+  const viewport = Math.max(1, height - (panel ? 8 : 6) - (action !== "none" ? 1 : 0) - (panel && !focused ? 1 : 0));
+  const focusedLine = Math.max(0, lines.findIndex((line) => line.selected));
+  const firstLine = Math.max(0, Math.min(lines.length - viewport, focusedLine - Math.floor(viewport / 2)));
+  return <Box flexDirection="column">{!panel ? <Text color="cyan" bold>{centerLine(`Tags - ${workbook.name}`, width)}</Text> : null}<Text color={AUXILIARY_TEXT_COLOR}>{padLine("Organize tags into types. Changes are staged until you leave Settings.", width)}</Text><Text color={message ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text>
+    {lines.slice(firstLine, firstLine + viewport).map((line, index) => <Text key={firstLine + index} color={line.color}>{line.text}</Text>)}
+    {action !== "none" ? <CaretInputLine key={`${action}-${safeSelectedIndex}`} prefix={`${action.includes("type") ? "Tag type" : "Tag"} name: `} value={buffer} onChange={(value) => { setBuffer(value); setMessage(""); }} width={width} focus={focused} color="cyan" inputKey={`${action}-${safeSelectedIndex}`} /> : null}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footer, width)}</Text></Box>;
 }
 
 function wrapDetailText(value: string, width: number): string[] {
@@ -2106,12 +1980,10 @@ function App(): JSX.Element {
 
   if (screen.kind === "practice") return <PracticeScreen workbook={screen.workbook} count={screen.count} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} onDone={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} />;
 
-  if (screen.kind === "settings") return <SettingsHomeScreen workbook={screen.workbook} onAttributes={() => setScreen({ kind: "settings-attributes", workbook: refreshWorkbook(screen.workbook.id) })} onTags={() => setScreen({ kind: "tags", workbook: refreshWorkbook(screen.workbook.id), returnTo: "settings" })} onImport={() => setScreen({ kind: "settings-import", workbook: refreshWorkbook(screen.workbook.id) })} onAppearance={() => setScreen({ kind: "settings-appearance", workbook: refreshWorkbook(screen.workbook.id) })} onDailyGoal={() => setScreen({ kind: "settings-goal", workbook: refreshWorkbook(screen.workbook.id) })} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
-  if (screen.kind === "settings-attributes") return <MetadataSettingsScreen workbook={screen.workbook} onSave={(draft, confirmDataLoss) => { backend.updateWorkbookAttributes(screen.workbook.id, draft, confirmDataLoss); setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) }); }} onCancel={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
-  if (screen.kind === "settings-goal") return <DailyGoalSettingsScreen workbook={screen.workbook} onSave={(updated) => setScreen({ kind: "settings", workbook: updated })} onCancel={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
-  if (screen.kind === "settings-import") return <ImportSettingsScreen workbook={screen.workbook} onSave={(updated) => setScreen({ kind: "settings", workbook: updated })} onCancel={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
-  if (screen.kind === "settings-appearance") return <AppearanceSettingsScreen onCancel={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
-  if (screen.kind === "tags") return <TagSettingsScreen workbook={screen.workbook} onSave={(draft, confirmDataLoss) => { backend.updateWorkbookTags(screen.workbook.id, draft, confirmDataLoss); setScreen(screen.returnTo === "settings" ? { kind: "settings", workbook: refreshWorkbook(screen.workbook.id) } : { kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) }); }} onCancel={() => setScreen(screen.returnTo === "settings" ? { kind: "settings", workbook: refreshWorkbook(screen.workbook.id) } : { kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
+  if (screen.kind === "settings") return <SettingsScreen workbook={screen.workbook} backend={backend} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit}
+    renderAttributes={(panel, draft, leave) => <MetadataSettingsScreen panel={panel} draft={draft} onCancel={leave} />}
+    renderTags={(panel, draft, leave) => <TagSettingsScreen workbook={screen.workbook} panel={panel} draft={draft} onSave={() => {}} onCancel={leave} onQuit={quit} />} />;
+  if (screen.kind === "tags") return <TagSettingsScreen workbook={screen.workbook} onSave={(draft, confirmDataLoss) => { backend.updateWorkbookTags(screen.workbook.id, draft, confirmDataLoss); setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) }); }} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
   if (screen.kind === "view" || screen.kind === "add") return <EntryViewScreen key={screen.kind === "add" ? "new" : screen.entryId} workbook={screen.workbook} entryId={screen.kind === "add" ? null : screen.entryId} editing={screen.kind === "view" && screen.editing} onCreated={(entryId) => setScreen({ kind: "view", workbook: screen.workbook, entryId })} onNavigate={(entryId) => setScreen({ kind: "view", workbook: screen.workbook, entryId, editing: false, listContext: screen.kind === "view" ? screen.listContext : undefined })} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id), listContext: screen.kind === "view" ? screen.listContext : undefined })} onQuit={quit} />;
 
   if (screen.kind === "create-workbook") {
