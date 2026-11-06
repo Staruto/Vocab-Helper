@@ -7,7 +7,11 @@ import { SETTINGS_SECTIONS, settingsTabWindow, SettingsSection } from "./setting
 import { CaretInputLine } from "./text-input.js";
 import { parseDailyGoalInput } from "./workbook-display.js";
 
-export type SettingsPanelControls = { focused: boolean; onTop: () => void };
+export type SettingsPanelControls = {
+  focused: boolean;
+  onTop: () => void;
+  setNavigationHint: React.Dispatch<React.SetStateAction<string>>;
+};
 export type AttributeDraftControls = {
   vocabularyLabel: string; setVocabularyLabel: React.Dispatch<React.SetStateAction<string>>;
   fields: MetadataAttribute[]; setFields: React.Dispatch<React.SetStateAction<MetadataAttribute[]>>;
@@ -33,6 +37,7 @@ export function SettingsScreen({ workbook, backend, onCancel, onQuit, renderAttr
   const [warnings, setWarnings] = useState<string[]>([]);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  const [panelNavigationHint, setPanelNavigationHint] = useState("");
   const request = useRef(0);
   const initialFields = useMemo(() => workbook.metadataAttributes.filter((field) => field.role !== "vocabulary"), [workbook]);
   const initialTypes = useMemo<TagTypeDraft[]>(() => backend.listTagTypes(workbook.id).map((type) => ({ id: type.id, name: type.name, visible: type.visible, tags: type.tags.map((tag) => ({ id: tag.id, name: tag.name })) })), [backend, workbook.id]);
@@ -147,20 +152,24 @@ export function SettingsScreen({ workbook, backend, onCancel, onQuit, renderAttr
       else if (key.return) void save(false);
     }
   });
-  const panel: SettingsPanelControls = { focused: contentFocused, onTop: () => setFocus("sections") };
+  const panel: SettingsPanelControls = { focused: contentFocused, onTop: () => setFocus("sections"), setNavigationHint: setPanelNavigationHint };
   const tabs = settingsTabWindow(width, sectionIndex);
 
   const navigationHints: string[] = [];
   if (focus === "sections") {
     navigationHints.push("←/→ sections", "↓ settings");
   }
-  if (section === "Import" || section === "Daily Goal") {
-    navigationHints.push("Enter saves", "Ctrl+U clears");
+  if (focus === "content" && panelNavigationHint) {
+    navigationHints.push(panelNavigationHint);
+  } else {
+    if (section === "Import" || section === "Daily Goal") {
+      navigationHints.push("Enter saves", "Ctrl+U clears");
+    }
+    if (section === "Appearance") {
+      navigationHints.push("↑↓ select", "Space toggles");
+    }
+    navigationHints.push("Esc leave");
   }
-  if (section === "Appearance") {
-    navigationHints.push("↑↓ select", "Space toggles");
-  }
-  navigationHints.push("Esc leave");
 
   return <Box flexDirection="column" width={width}>
     <Box flexDirection="column" display={mode === "edit" ? "none" : "flex"}>

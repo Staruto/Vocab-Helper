@@ -1387,6 +1387,10 @@ function MetadataSettingsScreen({ onCancel, panel, draft }: { panel: SettingsPan
 
   const meaningFooter = meanings[0] === selectedField ? "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Space show/hide | Esc leave" : `↑↓ navigate | Ctrl+A add | Ctrl+R rename${selectedField?.id === undefined ? "" : " | Ctrl+P make primary"} | Space show/hide | Del remove | Esc leave`;
   const footer = editAction !== "none" ? "Enter confirm | Esc cancel edit" : selected.section === "vocabulary" ? "↑↓ navigate | Ctrl+R rename | Esc leave" : selected.section === "meaning" ? meaningFooter : selected.section === "preset" ? "↑↓ select | Tab active/inactive | Ctrl+R rename | Space show/hide | Esc leave" : "↑↓ navigate | Ctrl+A add | Ctrl+R rename | Space show/hide | Del remove | Esc leave";
+  useEffect(() => {
+    panel.setNavigationHint(footer);
+    return () => panel.setNavigationHint("");
+  }, [panel.setNavigationHint, footer]);
   const lines: Array<{ text: string; color?: string; borderColor?: string; bold?: boolean; selected?: boolean; inactiveLabel?: string }> = [];
   function group(section: AttributeSection, title: string, description: string, members: Array<{ field: MetadataAttribute; index: number }>): void {
     const borderColor = focused && selected.section === section ? SELECTED_TEXT_COLOR : AUXILIARY_TEXT_COLOR;
@@ -1410,13 +1414,13 @@ function MetadataSettingsScreen({ onCancel, panel, draft }: { panel: SettingsPan
   if (presets.length) group("preset", "Language Preset Attributes", "Rename, activate, or change visibility. Preset membership is fixed.", indexed.filter(({ field }) => Boolean(field.presetKey)));
   group("optional", "Optional Attributes", "Custom fields can be added, renamed, shown, hidden, or removed.", indexed.filter(({ field }) => field.role === "optional" && !field.presetKey));
   // Leave one terminal row free so Ink keeps its incremental-render cache current.
-  const viewportSize = Math.max(1, height - 9 - (editAction !== "none" ? 1 : 0) - (!focused ? 1 : 0));
+  const viewportSize = Math.max(1, height - 10 - (editAction !== "none" ? 1 : 0) - (!focused ? 1 : 0));
   const focusedLine = focused ? Math.max(0, lines.findIndex((line) => line.selected)) : 0;
   const firstLine = Math.max(0, Math.min(lines.length - viewportSize, focusedLine - Math.floor(viewportSize / 2)));
   return <Box flexDirection="column"><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Configure field names, activation, and visibility. Changes are staged.", width)}</Text><Text color={message ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text>
     {lines.slice(firstLine, firstLine + viewportSize).map((line, index) => <Text key={firstLine + index} color={line.borderColor ?? line.color}>{line.borderColor ? <>{"│ "}<Text color={line.color} bold={line.bold}><AttributeRowText text={line.text} inactiveLabel={line.inactiveLabel} /></Text>{" │"}</> : line.text}</Text>)}
     {editAction !== "none" ? <CaretInputLine key={`${editAction}-${selectedIndex}`} prefix={`${editAction === "add" ? "New attribute" : "Display name"}: `} value={buffer} onChange={(value) => { setBuffer(value); setMessage(""); }} width={width} focus={focused} color="cyan" inputKey={`${editAction}-${selectedIndex}`} /> : null}
-    <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`${firstLine > 0 ? "↑ more above" : ""}${firstLine + viewportSize < lines.length ? "  ↓ more below" : ""}`, width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footer, width)}</Text></Box>;
+    <Text color={AUXILIARY_TEXT_COLOR}>{padLine(`${firstLine > 0 ? "↑ more above" : ""}${firstLine + viewportSize < lines.length ? "  ↓ more below" : ""}`, width)}</Text></Box>;
 }
 
 type TagSelection = { kind: "type"; typeIndex: number } | { kind: "tag"; typeIndex: number; tagIndex: number } | { kind: "add-type" };
@@ -1524,6 +1528,11 @@ function TagSettingsScreen({ workbook, onSave, onCancel, onQuit, panel, draft }:
     return <Box flexDirection="column"><Text color="cyan" bold>{centerLine("Confirm tag data removal", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{padLine("Saving will permanently remove these entry assignments:", width)}</Text><Text>{padLine("", width)}</Text>{removals.map((item, index) => <Text key={`${item.typeName}-${item.tagName}-${index}`} color="red">{padLine(`${item.typeName}${item.tagName ? ` / ${item.tagName}` : ""}: ${item.assignmentCount} assignment(s) across ${item.entryCount} entry/entries`, width)}</Text>)}<Text>{padLine("", width)}</Text><CaretInputLine prefix="Type yes: " value={confirmBuffer} onChange={(value) => { setConfirmBuffer(value); setMessage(""); }} width={width} color="cyan" inputKey="tag-destructive-confirm" /><Text color="red">{padLine(message, width)}</Text><Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine("Enter confirm | Esc continue editing", width)}</Text></Box>;
   }
   const footer = action !== "none" ? "Enter confirm | Esc cancel edit" : selected.kind === "add-type" ? "↑↓ navigate | Enter add tag type | Esc leave" : selected.kind === "type" ? "↑↓ navigate | Space show/hide | Ctrl+A add tag | Ctrl+R rename | Del remove | Esc leave" : "↑↓ navigate | Ctrl+A add tag | Ctrl+R rename | Del remove | Esc leave";
+  useEffect(() => {
+    if (!panel) return;
+    panel.setNavigationHint(footer);
+    return () => panel.setNavigationHint("");
+  }, [panel?.setNavigationHint, footer]);
   const lines: Array<{ text: string; color?: string; selected?: boolean }> = [];
   const inner = Math.max(1, width - 4);
   function row(text: string, active = false, color = AUXILIARY_TEXT_COLOR): void {
@@ -1549,7 +1558,22 @@ function TagSettingsScreen({ workbook, onSave, onCancel, onQuit, panel, draft }:
   const firstLine = Math.max(0, Math.min(lines.length - viewport, focusedLine - Math.floor(viewport / 2)));
   return <Box flexDirection="column">{!panel ? <Text color="cyan" bold>{centerLine(`Tags - ${workbook.name}`, width)}</Text> : null}<Text color={AUXILIARY_TEXT_COLOR}>{padLine("Organize tags into types. Changes are staged until you leave Settings.", width)}</Text><Text color={message ? "red" : AUXILIARY_TEXT_COLOR}>{padLine(message, width)}</Text>
     {lines.slice(firstLine, firstLine + viewport).map((line, index) => <Text key={firstLine + index} color={line.color}>{line.text}</Text>)}
-    {action !== "none" ? <CaretInputLine key={`${action}-${safeSelectedIndex}`} prefix={`${action.includes("type") ? "Tag type" : "Tag"} name: `} value={buffer} onChange={(value) => { setBuffer(value); setMessage(""); }} width={width} focus={focused} color="cyan" inputKey={`${action}-${safeSelectedIndex}`} /> : null}<Text>{padLine("", width)}</Text><Text color={AUXILIARY_TEXT_COLOR}>{rightLine(footer, width)}</Text></Box>;
+    {action !== "none" ? (<CaretInputLine key={`${action}-${safeSelectedIndex}`} prefix={`${action.includes("type") ? "Tag type" : "Tag"} name: `} value={buffer} onChange={(value) => { setBuffer(value); setMessage(""); }}
+      width={width}
+      focus={focused}
+      color="cyan"
+      inputKey={`${action}-${safeSelectedIndex}`}
+    />
+    ) : null}
+    {!panel ? (
+      <>
+        <Text>{padLine("", width)}</Text>
+        <Text color={AUXILIARY_TEXT_COLOR}>
+          {rightLine(footer, width)}
+        </Text>
+      </>
+    ) : null}
+  </Box>;
 }
 
 function wrapDetailText(value: string, width: number): string[] {
