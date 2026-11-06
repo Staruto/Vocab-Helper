@@ -157,9 +157,9 @@ export function SettingsScreen({ workbook, backend, onCancel, onQuit, renderAttr
 
   const navigationHints: string[] = [];
   if (focus === "sections") {
-    navigationHints.push("←/→ sections", "↓ settings");
+    navigationHints.push("←/→ sections", "↓/Enter settings", "Esc leave");
   }
-  if (focus === "content" && panelNavigationHint) {
+  else if (focus === "content" && panelNavigationHint) {
     navigationHints.push(panelNavigationHint);
   } else {
     if (section === "Import" || section === "Daily Goal") {
@@ -201,7 +201,7 @@ export function SettingsScreen({ workbook, backend, onCancel, onQuit, renderAttr
           />
         </Box>
       ) : null}
-    {section === "Daily Goal" ? <Box flexDirection="column"><Text wrap="truncate-end">Words per day: positive whole number; empty means no goal.</Text><CaretInputLine prefix="Daily goal: " value={goal} onChange={(value) => { setGoal(value); setMessage(""); }} focus={contentFocused} width={width} inputKey="settings-goal" /></Box> : null}
+    {section === "Daily Goal" ? <Box flexDirection="column"><CaretInputLine prefix="  Daily goal (Words per day): " value={goal} onChange={(value) => { setGoal(value); setMessage(""); }} focus={contentFocused} width={width} inputKey="settings-goal" /></Box> : null}
     {section === "Appearance" ? <Box flexDirection="column">{[{ label: "Tier colors", enabled: tierColors }, { label: "Workbook homepage progress", enabled: progress }].map((option, index) => <Text key={option.label} wrap="truncate-end" color={contentFocused && index === appearanceIndex ? selectedColor : option.enabled ? "green" : auxiliary}>{`${contentFocused && index === appearanceIndex ? ">" : " "} [${option.enabled ? "●" : " "}] ${option.label}`}</Text>)}</Box> : null}
     <Text>{" "}</Text><Text color={auxiliary} wrap="truncate-end">{navigationHints.join(" | ")}</Text>
     </Box>
