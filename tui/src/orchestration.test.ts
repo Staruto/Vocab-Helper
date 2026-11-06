@@ -7,10 +7,40 @@ const workbook: WorkbookRow = { id: 1, name: "Demo", wordCount: 0, createdAt: ""
 const entry = (id: number, vocabulary: string): EntryRow => ({ id, workbookId: 1, vocabulary, meaning: "meaning", meanings: ["meaning", ""], kanaText: null, attributes: {}, tags: [], createdAt: "", updatedAt: "", testCount: 0, errorCount: 0, tier: "gray", lastTested: null, nextTestDeadline: null });
 
 test("search resets page", () => {
-  const state = { ...createInitialState(workbook, [entry(1, "alpha")]), pageIndex: 4 };
+  const state = { ...createInitialState({ ...workbook, metadataAttributes: [{ key: "vocab", role: "vocabulary", label: "Vocabulary", languageCode: null, required: true, visible: true, displayOrder: 0 }] }, [entry(1, "alpha")]), pageIndex: 4 };
   const transition = update(state, { type: "searchChanged", query: "alp" });
   assert.equal(transition.state.activeSearchQuery, "alp");
   assert.equal(transition.state.pageIndex, 0);
+  assert.equal(transition.state.selectedEntryId, 1);
+});
+
+test("list navigation and resets use filtered entries and preserve command drafts", () => {
+  const entries = Array.from({ length: 50 }, (_, index) => entry(index + 1, index % 2 === 0 ? `match${index}` : `other${index}`));
+  const searchableWorkbook = { ...workbook, metadataAttributes: [{ key: "vocab", role: "vocabulary" as const, label: "Vocabulary", languageCode: null, required: true, visible: true, displayOrder: 0 }] };
+  let state = { ...createInitialState(searchableWorkbook, entries), commandBuffer: "draft" };
+  state = update(state, { type: "listFocusMoved", delta: -1 }).state;
+  assert.equal(state.inputFocus, "search");
+  assert.equal(state.commandBuffer, "draft");
+  state = update(state, { type: "searchChanged", query: "match" }).state;
+  assert.equal(state.selectedEntryId, 1);
+  state = update(state, { type: "listFocusMoved", delta: -1 }).state;
+  assert.equal(state.inputFocus, "table");
+  assert.equal(state.selectedEntryId, 39);
+  state = update(state, { type: "pageChanged", delta: 1 }).state;
+  assert.equal(state.pageIndex, 1);
+  assert.equal(state.selectedEntryId, 49);
+  assert.equal(update(state, { type: "pageChanged", delta: 1 }).state.pageIndex, 1);
+  state = update(state, { type: "searchChanged", query: "missing" }).state;
+  assert.equal(state.pageIndex, 0);
+  assert.equal(state.selectedEntryId, null);
+  assert.equal(state.inputFocus, "search");
+  state = update(state, { type: "searchChanged", query: "match" }).state;
+  state = update(state, { type: "listOrderSaved", workbook: { ...searchableWorkbook, listOrder: "add_desc" }, entries: [...entries].reverse() }).state;
+  assert.equal(state.pageIndex, 0);
+  assert.equal(state.selectedEntryId, 49);
+  state = update(state, { type: "entriesLoaded", entries: [] }).state;
+  assert.equal(state.selectedEntryId, null);
+  assert.equal(state.pageIndex, 0);
 });
 
 test("delete requires yes confirmation", () => {

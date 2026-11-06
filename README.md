@@ -35,6 +35,10 @@ npm run start
 
 ## Vocabulary list ordering
 
+Workbooks open with command input focused. Up moves from command input to search, then to the last vocabulary row on the current page. Up/Down navigates rows in screen order; Down after the last row returns to search and then command input. Navigation stops at the top and bottom, and empty lists skip row selection. The selected row uses inverse highlighting; Enter opens its details. Left/Right changes pages while preserving the selected row's position where possible. In a nonempty text input, Left/Right moves the caret instead.
+
+Returning from details restores your search, drafts, page, focus, and original row selection, even after browsing other entries in details. If editing moves that entry in the list order, its new page is shown; if it no longer matches the search, the first row on the saved page is selected (or the nearest remaining page). Reopening a workbook starts fresh. Search and list-order changes reset selection to the first result on the first page.
+
 Run `/list` to choose **Added: oldest first**, **Added: newest first**, **Error count: ascending**, or **Error count: descending** in the command palette area. Up/Down selects, Enter saves and refreshes, and Esc cancels. The current order is selected initially; confirming it refreshes the list too.
 
 Use `/list add asc`, `/list add desc`, `/list error asc`, or `/list error desc` to apply an order directly. Each workbook remembers its order across restarts; the default is oldest first, using vocabulary IDs. Unpracticed entries (Test Count 0) appear first for descending error count and last for ascending error count. Error-count ties use ascending ID. Ordering preserves the active search, resets to the first page, and also applies to Previous/Next navigation in details.

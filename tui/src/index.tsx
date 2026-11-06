@@ -12,6 +12,7 @@ import { createAddDetailEditor, createDetailEditor, detailExitChoices, detailEdi
 import { CaretInputLine } from "./text-input.js";
 import { filterEntriesForSearch } from "./search.js";
 import { LIST_ORDER_OPTIONS } from "./list-order.js";
+import { restoreListPosition, VOCABULARY_PAGE_SIZE, type VocabularyListContext } from "./list-navigation.js";
 import { localCalendarDay } from "./calendar.js";
 import { buildPracticeProfile } from "./profile-display.js";
 import { buildWorkbookMenuLines, buildWorkbookProgress, parseDailyGoalInput } from "./workbook-display.js";
@@ -34,20 +35,21 @@ type AppScreen =
   | { kind: "settings-appearance"; workbook: WorkbookRow }
   | { kind: "tags"; workbook: WorkbookRow; returnTo?: "vocab" | "settings" }
   | { kind: "add"; workbook: WorkbookRow }
-  | { kind: "view"; workbook: WorkbookRow; entryId: number; editing?: boolean }
+  | { kind: "view"; workbook: WorkbookRow; entryId: number; editing?: boolean; listContext?: VocabularyListContext }
   | { kind: "profile"; workbook: WorkbookRow }
   | { kind: "practice"; workbook: WorkbookRow; count: number }
-  | { kind: "vocab"; workbook: WorkbookRow };
+  | { kind: "vocab"; workbook: WorkbookRow; listContext?: VocabularyListContext };
 
 type VocabularyScreenProps = {
   workbook: WorkbookRow;
+  initialListContext?: VocabularyListContext;
   onBackToMenu: () => void;
   onQuit: () => void;
   onOpenSettings: () => void;
   onOpenTags: () => void;
   onOpenProfile: () => void;
   onAddEntry: () => void;
-  onViewEntry: (entryId: number, editing?: boolean) => void;
+  onViewEntry: (entryId: number, editing: boolean, listContext: VocabularyListContext) => void;
   onStartPractice: (count?: number) => void;
 };
 
@@ -60,7 +62,7 @@ type ParameterizedCommand = "edit" | "delete";
 
 type LanguagePreset = { code: string; label: string };
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = VOCABULARY_PAGE_SIZE;
 const TITLE = "VocabHelper 3.8.0";
 const AUXILIARY_TEXT_COLOR = "#8a8a8a"; // light gray
 const GRAY_TIER_COLOR = "#777777"; // medium gray
@@ -260,7 +262,7 @@ function buildTableLayout(entries: EntryRow[], pageIndex: number, width: number,
   return { border, header, columns, widths, entries: pageEntries };
 }
 
-function VocabularyTableCell({ entry, width, tagTypes }: { entry: EntryRow; width: number; tagTypes: TagType[] }): JSX.Element {
+function VocabularyTableCell({ entry, width, tagTypes, selected = false }: { entry: EntryRow; width: number; tagTypes: TagType[]; selected?: boolean }): JSX.Element {
   const tagNames = visibleAssignedTagGroups(entry, tagTypes).flatMap((group) => group.tagNames);
   const minimumVocabularyWidth = Math.min(width, 8);
   const badges = fitTagBadges(tagNames, Math.max(0, width - minimumVocabularyWidth - 1), displayWidth);
@@ -269,11 +271,11 @@ function VocabularyTableCell({ entry, width, tagTypes }: { entry: EntryRow; widt
   const vocabularyWidth = Math.max(1, width - badgeWidth - 1);
   const vocabulary = truncate(buildEntryLabel(entry), vocabularyWidth);
   const gap = Math.max(1, width - displayWidth(vocabulary) - badgeWidth);
-  return <><Text>{vocabulary}{" ".repeat(gap)}</Text>{badges.map((badge, index) => <React.Fragment key={`${index}-${badge}`}>{index > 0 ? " " : ""}<Text color={TAG_BADGE_COLOR}>{badge}</Text></React.Fragment>)}</>;
+  return <><Text>{vocabulary}{" ".repeat(gap)}</Text>{badges.map((badge, index) => <React.Fragment key={`${index}-${badge}`}>{index > 0 ? " " : ""}<Text color={selected ? undefined : TAG_BADGE_COLOR}>{badge}</Text></React.Fragment>)}</>;
 }
 
 function buildHelpText(): string {
-  return ["Commands:", ...COMMANDS.map((command) => `/${command.name}  ${command.hint}`), "/edit <id> opens detail editing; Ctrl+E edits while viewing.", "Esc cancels forms.", "←/→ to change pages."].join("\n");
+  return ["Commands:", ...COMMANDS.map((command) => `/${command.name}  ${command.hint}`), "/edit <id> opens detail editing; Ctrl+E edits while viewing.", "↑/↓ navigates rows, search, and command; Enter opens the selected entry.", "Esc cancels forms.", "←/→ to change pages."].join("\n");
 }
 
 function tierColor(tier: EntryRow["tier"]): string {
@@ -340,21 +342,21 @@ function buildSuggestionLines(suggestions: CommandSpec[], selectedIndex: number,
   }
   return rows;
 }
-function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOpenTags, onOpenProfile, onAddEntry, onViewEntry, onStartPractice }: VocabularyScreenProps): JSX.Element {
+function VocabularyScreen({ workbook, initialListContext, onBackToMenu, onQuit, onOpenSettings, onOpenTags, onOpenProfile, onAddEntry, onViewEntry, onStartPractice }: VocabularyScreenProps): JSX.Element {
   const { stdout } = useStdout();
   const [width, setWidth] = useState(() => stdout?.columns ?? 80);
   const [rows, setRows] = useState(() => stdout?.rows ?? 24);
-  const [orchestration, setOrchestration] = useState(() => createInitialState(backend.getWorkbook(workbook.id) ?? workbook, orchestrationCapabilities.reads.listEntries(workbook.id), orchestrationCapabilities.reads.listTagTypes(workbook.id)));
-  const [entries, setEntries] = useState<EntryRow[]>(() => orchestration.entries);
+  const [orchestration, setOrchestration] = useState(() => {
+    const initial = createInitialState(backend.getWorkbook(workbook.id) ?? workbook, orchestrationCapabilities.reads.listEntries(workbook.id), orchestrationCapabilities.reads.listTagTypes(workbook.id));
+    initial.statusLines = buildStatusLines("/ for commands, Esc to exit.");
+    if (!initialListContext) return initial;
+    const visible = filterEntriesForSearch(initial.entries, initial.workbook, initial.tagTypes, initialListContext.activeSearchQuery);
+    return { ...initial, activeSearchQuery: initialListContext.activeSearchQuery, commandBuffer: initialListContext.commandBuffer, ...restoreListPosition(visible, initialListContext) };
+  });
+  const { entries, pageIndex, mode, commandBuffer: buffer, activeSearchQuery, inputFocus, selectedEntryId, statusLines } = orchestration;
   const orchestrationRef = useRef(orchestration);
-  const [pageIndex, setPageIndex] = useState(0);
-  const [mode, setMode] = useState<UiMode>({ kind: "command" });
-  const [buffer, setBuffer] = useState("");
-  const [searchDraft, setSearchDraft] = useState("");
-  const [activeSearchQuery, setActiveSearchQuery] = useState("");
-  const [inputFocus, setInputFocus] = useState<"command" | "search">("command");
+  const [searchDraft, setSearchDraft] = useState(initialListContext?.searchDraft ?? "");
   const [suggestionIndex, setSuggestionIndex] = useState(0);
-  const [statusLines, setStatusLines] = useState<string[]>(() => buildStatusLines("/ for commands, Esc to exit."));
   const [tierColorsEnabled, setTierColorsEnabled] = useState(() => backend.getTierColorsEnabled());
   const [workbookProgressEnabled] = useState(() => backend.getWorkbookProgressEnabled());
   const [savedImportFilePath, setSavedImportFilePath] = useState(workbook.importFilePath);
@@ -382,13 +384,23 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   function syncOrchestration(next: ReturnType<typeof createInitialState>): void {
     orchestrationRef.current = next;
     setOrchestration(next);
-    setEntries(next.entries);
-    setPageIndex(next.pageIndex);
-    setMode(next.mode);
-    setBuffer(next.commandBuffer);
-    setActiveSearchQuery(next.activeSearchQuery);
-    setInputFocus(next.inputFocus);
-    setStatusLines(next.statusLines);
+  }
+
+  function setBuffer(value: string): void {
+    syncOrchestration({ ...orchestrationRef.current, commandBuffer: value });
+  }
+
+  function setStatusLines(lines: string[]): void {
+    syncOrchestration({ ...orchestrationRef.current, statusLines: lines });
+  }
+
+  function openEntry(entryId: number, editing = false, consumeCommand = false): void {
+    const current = orchestrationRef.current;
+    onViewEntry(entryId, editing, {
+      activeSearchQuery: current.activeSearchQuery, searchDraft,
+      commandBuffer: consumeCommand ? "" : current.commandBuffer,
+      pageIndex: current.pageIndex, selectedEntryId: current.selectedEntryId, inputFocus: current.inputFocus,
+    });
   }
 
   function dispatchIntent(intent: import("./orchestration.js").Intent): void {
@@ -401,10 +413,6 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       }
     });
   }
-
-  useEffect(() => {
-    setPageIndex((current) => clampPageIndex(current, visibleEntries.length));
-  }, [visibleEntries.length]);
 
   const commandSuggestions = useMemo(() => buildCommandSuggestions(buffer), [buffer]);
   const commandSuggestionIndex = commandSuggestions.length === 0 ? 0 : Math.min(suggestionIndex, commandSuggestions.length - 1);
@@ -502,7 +510,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       if (!args[0] || !Number.isInteger(entryId)) { setStatusLines(buildStatusLines("Usage: /view <id>")); return; }
       const entry = orchestrationRef.current.entries.find((item) => item.id === entryId) ?? null;
       if (!entry || entry.workbookId !== workbook.id) { setStatusLines(buildStatusLines(`Entry #${entryId} was not found.`)); return; }
-      onViewEntry(entry.id);
+      openEntry(entry.id, false, true);
       return;
     }
 
@@ -520,7 +528,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     if (lower === "search") {
       setBuffer("");
       if (args.length === 0) dispatchIntent({ type: "inputFocusChanged", focus: "search" });
-      else dispatchIntent({ type: "searchChanged", query: args.join(" ") });
+      else applySearch(args.join(" "));
       return;
     }
 
@@ -549,7 +557,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       if (!Number.isInteger(entryId)) { setStatusLines(buildStatusLines("Usage: /edit <id>")); return; }
       const entry = orchestrationRef.current.entries.find((item) => item.id === entryId);
       if (!entry || entry.workbookId !== workbook.id) { setStatusLines(buildStatusLines(`Entry #${entryId} was not found.`)); return; }
-      onViewEntry(entryId, true);
+      openEntry(entryId, true, true);
       return;
     }
 
@@ -649,7 +657,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
     if (mode.kind === "importLoading") return;
 
     if (mode.kind === "command" && (key.upArrow || key.downArrow) && !commandPaletteActive) {
-      dispatchIntent({ type: "inputFocusChanged", focus: inputFocus === "command" ? "search" : "command" });
+      dispatchIntent({ type: "listFocusMoved", delta: key.upArrow ? -1 : 1 });
       return;
     }
 
@@ -694,7 +702,9 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
 
     if (key.return) {
       const current = buffer;
-      if (mode.kind === "command" && inputFocus === "search") {
+      if (mode.kind === "command" && inputFocus === "table") {
+        if (selectedEntryId !== null) openEntry(selectedEntryId);
+      } else if (mode.kind === "command" && inputFocus === "search") {
         applySearch(searchDraft);
       } else if (commandPaletteActive && commandSuggestions.length > 0) {
         submitHighlightedCommand();
@@ -722,7 +732,7 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
   const searchBoxWidth = Math.min(34, Math.max(12, width - 56));
   const footerLeftWidth = Math.floor((width - searchBoxWidth) / 2);
   const footerRightWidth = Math.max(0, width - searchBoxWidth - footerLeftWidth);
-  const footerHint = activeSearchQuery ? "↑↓ focus | ←/→ pages | Esc clears" : "↑↓ focus | ←/→ pages | Esc menu";
+  const footerHint = inputFocus === "table" ? "↑↓ rows | Enter view | ←/→ pages" : activeSearchQuery ? "↑↓ rows/inputs | ←/→ pages | Esc clears" : "↑↓ rows/inputs | ←/→ pages | Esc menu";
 
   if (mode.kind === "importPending") {
     return <Text color={AUXILIARY_TEXT_COLOR}>{mode.phase === "checking" ? "Checking import updates..." : "Importing entries..."}</Text>;
@@ -808,11 +818,12 @@ function VocabularyScreen({ workbook, onBackToMenu, onQuit, onOpenSettings, onOp
       <Text>{tableLayout.border}</Text>
       <Text>{tableLayout.header}</Text>
       <Text>{tableLayout.border}</Text>
-      {tableLayout.entries.map((entry) => (
-        <Text key={entry.id} color={tierColorsEnabled ? tierColor(entry.tier) : undefined}>
-          |{tableLayout.columns.map((column, index) => <React.Fragment key={column.key}>{column.key === "vocab" ? <VocabularyTableCell entry={entry} width={tableLayout.widths[index]} tagTypes={tagTypes} /> : padLine(entryAttributeValue(entry, column), tableLayout.widths[index])}|</React.Fragment>)}
+      {tableLayout.entries.map((entry) => {
+        const selected = mode.kind === "command" && inputFocus === "table" && entry.id === selectedEntryId;
+        return <Text key={entry.id} inverse={selected} color={!selected && tierColorsEnabled ? tierColor(entry.tier) : undefined}>
+          |{tableLayout.columns.map((column, index) => <React.Fragment key={column.key}>{column.key === "vocab" ? <VocabularyTableCell entry={entry} width={tableLayout.widths[index]} tagTypes={tagTypes} selected={selected} /> : padLine(entryAttributeValue(entry, column), tableLayout.widths[index])}|</React.Fragment>)}
         </Text>
-      ))}
+      })}
       {activeSearchQuery && tableLayout.entries.length === 0 ? (
         <Text color={AUXILIARY_TEXT_COLOR}>|{padLine(`No vocabulary matches "${activeSearchQuery}".`, Math.max(1, tableLayout.border.length - 2))}|</Text>
       ) : null}
@@ -2088,7 +2099,7 @@ function App(): JSX.Element {
   }
 
   if (screen.kind === "vocab") {
-    return <VocabularyScreen workbook={screen.workbook} onBackToMenu={backToMenu} onQuit={quit} onOpenSettings={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onOpenTags={() => setScreen({ kind: "tags", workbook: refreshWorkbook(screen.workbook.id) })} onOpenProfile={() => setScreen({ kind: "profile", workbook: refreshWorkbook(screen.workbook.id) })} onAddEntry={() => setScreen({ kind: "add", workbook: screen.workbook })} onViewEntry={(entryId, editing) => setScreen({ kind: "view", workbook: screen.workbook, entryId, editing })} onStartPractice={(count) => { const n = count ?? 15; setScreen({ kind: "practice", workbook: refreshWorkbook(screen.workbook.id), count: Math.min(n, backend.countEntries(screen.workbook.id)) }); }} />;
+    return <VocabularyScreen workbook={screen.workbook} initialListContext={screen.listContext} onBackToMenu={backToMenu} onQuit={quit} onOpenSettings={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onOpenTags={() => setScreen({ kind: "tags", workbook: refreshWorkbook(screen.workbook.id) })} onOpenProfile={() => setScreen({ kind: "profile", workbook: refreshWorkbook(screen.workbook.id) })} onAddEntry={() => setScreen({ kind: "add", workbook: screen.workbook })} onViewEntry={(entryId, editing, listContext) => setScreen({ kind: "view", workbook: screen.workbook, entryId, editing, listContext })} onStartPractice={(count) => { const n = count ?? 15; setScreen({ kind: "practice", workbook: refreshWorkbook(screen.workbook.id), count: Math.min(n, backend.countEntries(screen.workbook.id)) }); }} />;
   }
 
   if (screen.kind === "profile") return <PracticeProfileScreen workbook={screen.workbook} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
@@ -2101,7 +2112,7 @@ function App(): JSX.Element {
   if (screen.kind === "settings-import") return <ImportSettingsScreen workbook={screen.workbook} onSave={(updated) => setScreen({ kind: "settings", workbook: updated })} onCancel={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
   if (screen.kind === "settings-appearance") return <AppearanceSettingsScreen onCancel={() => setScreen({ kind: "settings", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
   if (screen.kind === "tags") return <TagSettingsScreen workbook={screen.workbook} onSave={(draft, confirmDataLoss) => { backend.updateWorkbookTags(screen.workbook.id, draft, confirmDataLoss); setScreen(screen.returnTo === "settings" ? { kind: "settings", workbook: refreshWorkbook(screen.workbook.id) } : { kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) }); }} onCancel={() => setScreen(screen.returnTo === "settings" ? { kind: "settings", workbook: refreshWorkbook(screen.workbook.id) } : { kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
-  if (screen.kind === "view" || screen.kind === "add") return <EntryViewScreen key={screen.kind === "add" ? "new" : screen.entryId} workbook={screen.workbook} entryId={screen.kind === "add" ? null : screen.entryId} editing={screen.kind === "view" && screen.editing} onCreated={(entryId) => setScreen({ kind: "view", workbook: screen.workbook, entryId })} onNavigate={(entryId) => setScreen({ kind: "view", workbook: screen.workbook, entryId, editing: false })} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id) })} onQuit={quit} />;
+  if (screen.kind === "view" || screen.kind === "add") return <EntryViewScreen key={screen.kind === "add" ? "new" : screen.entryId} workbook={screen.workbook} entryId={screen.kind === "add" ? null : screen.entryId} editing={screen.kind === "view" && screen.editing} onCreated={(entryId) => setScreen({ kind: "view", workbook: screen.workbook, entryId })} onNavigate={(entryId) => setScreen({ kind: "view", workbook: screen.workbook, entryId, editing: false, listContext: screen.kind === "view" ? screen.listContext : undefined })} onCancel={() => setScreen({ kind: "vocab", workbook: refreshWorkbook(screen.workbook.id), listContext: screen.kind === "view" ? screen.listContext : undefined })} onQuit={quit} />;
 
   if (screen.kind === "create-workbook") {
     return <WorkbookWizard onSave={(input) => handleCreateWorkbook(input)} onCancel={backToMenu} onQuit={quit} />;

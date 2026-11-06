@@ -3,6 +3,8 @@ import type { PracticeSessionResult, EntryRow, EntryUpdateOptions, ImportEntryIn
 import type { ImportPreview, ImportPreviewFilter, ImportDiagnostic } from "./import.js";
 import { IMPORT_EXIT_CHOICES } from "./import.js";
 import { LIST_ORDER_OPTIONS, LIST_ORDER_USAGE, parseListOrder, type ListOrder } from "./list-order.js";
+import { filterEntriesForSearch } from "./search.js";
+import { changeListPage, moveListFocus, restoreListPosition, type VocabularyListFocus } from "./list-navigation.js";
 
 export type { ImportPreview, ImportPreviewFilter, ImportDiagnostic };
 export type ImportPreviewFocus = "path" | "filters" | "records";
@@ -46,8 +48,9 @@ export type OrchestrationState = {
   tagTypes: TagType[];
   activeSearchQuery: string;
   pageIndex: number;
+  selectedEntryId: number | null;
   commandBuffer: string;
-  inputFocus: "command" | "search";
+  inputFocus: VocabularyListFocus;
   statusLines: string[];
   mode: UiMode;
   importRequestId: number;
@@ -69,7 +72,8 @@ export type Intent =
   | { type: "listOrderSaved"; workbook: WorkbookRow; entries: EntryRow[] }
   | { type: "listOrderFailed"; error: string }
   | { type: "modeCancelled"; message?: string }
-  | { type: "inputFocusChanged"; focus: "command" | "search" }
+  | { type: "inputFocusChanged"; focus: VocabularyListFocus }
+  | { type: "listFocusMoved"; delta: -1 | 1 }
   | { type: "commandSubmitted"; raw: string }
   | { type: "searchChanged"; query: string }
   | { type: "pageChanged"; delta: number }
@@ -122,13 +126,15 @@ export type Effect =
 export type Transition = { state: OrchestrationState; effects: Effect[] };
 
 const status = (message: string, count = 5): string[] => [...message.split("\n").slice(-count), ...Array(Math.max(0, count - message.split("\n").length)).fill("")];
-const pageCount = (count: number, size = 20): number => Math.max(1, Math.ceil(count / size));
-const clampPage = (page: number, count: number): number => Math.max(0, Math.min(page, pageCount(count) - 1));
 const normalize = (raw: string): string[] => raw.trim().replace(/^\/+/, "").split(/\s+/).filter(Boolean);
 const entryLabel = (entry: EntryRow) => `#${entry.id} ${entry.vocabulary}`;
 
 export function createInitialState(workbook: WorkbookRow, entries: EntryRow[] = [], tagTypes: TagType[] = []): OrchestrationState {
-  return { workbook, entries, tagTypes, activeSearchQuery: "", pageIndex: 0, commandBuffer: "", inputFocus: "command", statusLines: status("Ready."), mode: { kind: "command" }, importRequestId: 0, practice: { phase: "empty", candidates: [], index: 0, retryRound: [], nextRetryRound: [], retryNumber: 1, currentEntry: null, meaningIndex: 0, detailSourcePhase: "initial", score: 0, feedback: null, requestId: 0, results: [], completedDay: null, error: null } };
+  return { workbook, entries, tagTypes, activeSearchQuery: "", pageIndex: 0, selectedEntryId: entries[0]?.id ?? null, commandBuffer: "", inputFocus: "command", statusLines: status("Ready."), mode: { kind: "command" }, importRequestId: 0, practice: { phase: "empty", candidates: [], index: 0, retryRound: [], nextRetryRound: [], retryNumber: 1, currentEntry: null, meaningIndex: 0, detailSourcePhase: "initial", score: 0, feedback: null, requestId: 0, results: [], completedDay: null, error: null } };
+}
+
+function visibleListEntries(state: OrchestrationState): EntryRow[] {
+  return filterEntriesForSearch(state.entries, state.workbook, state.tagTypes, state.activeSearchQuery);
 }
 
 function savePracticeSession(state: OrchestrationState): Transition {
@@ -160,11 +166,18 @@ export function update(state: OrchestrationState, intent: Intent): Transition {
     if (state.mode.kind !== "listOrder") return { state, effects: [] };
     return { state: { ...state, mode: { ...state.mode, saving: true, error: undefined } }, effects: [{ type: "saveListOrder", workbookId: state.workbook.id, order: LIST_ORDER_OPTIONS[state.mode.choice].value }] };
   }
-  if (intent.type === "listOrderSaved") return { state: { ...state, workbook: intent.workbook, entries: intent.entries, mode: { kind: "command" }, pageIndex: 0, commandBuffer: "", inputFocus: "command", statusLines: status(`List order saved: ${LIST_ORDER_OPTIONS.find((option) => option.value === intent.workbook.listOrder)!.label}. Loaded ${intent.entries.length} entries.`) }, effects: [] };
+  if (intent.type === "listOrderSaved") {
+    const refreshed = { ...state, workbook: intent.workbook, entries: intent.entries };
+    const position = restoreListPosition(visibleListEntries(refreshed), { pageIndex: 0, selectedEntryId: null, inputFocus: "command" });
+    return { state: { ...refreshed, ...position, mode: { kind: "command" }, commandBuffer: "", statusLines: status(`List order saved: ${LIST_ORDER_OPTIONS.find((option) => option.value === intent.workbook.listOrder)!.label}. Loaded ${intent.entries.length} entries.`) }, effects: [] };
+  }
   if (intent.type === "listOrderFailed") return { state: { ...state, mode: state.mode.kind === "listOrder" ? { ...state.mode, saving: false, error: intent.error } : state.mode, statusLines: status(intent.error) }, effects: [] };
   if (state.mode.kind === "importPending" && !["importUpdatesChecked", "importCommitFailed", "importCommitted"].includes(intent.type)) return { state, effects: [] };
   if (intent.type === "modeCancelled") return { state: { ...state, importRequestId: state.importRequestId + 1, mode: { kind: "command" }, commandBuffer: "", statusLines: status(intent.message ?? "Cancelled.") }, effects: [] };
   if (intent.type === "inputFocusChanged") return { state: { ...state, inputFocus: intent.focus }, effects: [] };
+  if (intent.type === "listFocusMoved") return state.mode.kind === "command"
+    ? { state: { ...state, ...moveListFocus(visibleListEntries(state), state, intent.delta) }, effects: [] }
+    : { state, effects: [] };
   if (intent.type === "practiceCandidatesRequested") {
     const requestId = state.practice.requestId + 1;
     return {
@@ -172,9 +185,15 @@ export function update(state: OrchestrationState, intent: Intent): Transition {
       effects: [{ type: "loadPracticeCandidates", workbookId: intent.workbookId, count: intent.count, requestId }],
     };
   }
-  if (intent.type === "entriesLoaded") return { state: { ...state, entries: intent.entries, pageIndex: clampPage(state.pageIndex, intent.entries.length), statusLines: status(intent.message ?? `Loaded ${intent.entries.length} entr${intent.entries.length === 1 ? "y" : "ies"}.`) }, effects: [] };
-  if (intent.type === "searchChanged") return { state: { ...state, commandBuffer: "", activeSearchQuery: intent.query.trim(), pageIndex: 0, statusLines: status(intent.query.trim() ? "Search updated." : "Search cleared.") }, effects: [] };
-  if (intent.type === "pageChanged") return { state: { ...state, pageIndex: clampPage(state.pageIndex + intent.delta, state.entries.length) }, effects: [] };
+  if (intent.type === "entriesLoaded") {
+    const refreshed = { ...state, entries: intent.entries };
+    return { state: { ...refreshed, ...restoreListPosition(visibleListEntries(refreshed), state), statusLines: status(intent.message ?? `Loaded ${intent.entries.length} entr${intent.entries.length === 1 ? "y" : "ies"}.`) }, effects: [] };
+  }
+  if (intent.type === "searchChanged") {
+    const searched = { ...state, commandBuffer: "", activeSearchQuery: intent.query.trim() };
+    return { state: { ...searched, ...restoreListPosition(visibleListEntries(searched), { ...state, pageIndex: 0, selectedEntryId: null }), statusLines: status(intent.query.trim() ? "Search updated." : "Search cleared.") }, effects: [] };
+  }
+  if (intent.type === "pageChanged") return { state: { ...state, ...changeListPage(visibleListEntries(state), state, intent.delta) }, effects: [] };
   if (intent.type === "commandSubmitted") {
     const [command, ...args] = normalize(intent.raw); const lower = command?.toLowerCase();
     if (lower === "list") {
